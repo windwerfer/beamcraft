@@ -39,6 +39,37 @@ pub fn should_drop_for_backlog(keyframe: bool, frame_len: usize, free_space: usi
     !keyframe && free_space < frame_len + frame_len / 16 + 4096
 }
 
+/// Limits how often a viewer's keyframe requests force an IDR. While a
+/// viewer waits for a keyframe it asks every ~100 ms; on Wi-Fi with a
+/// 250 ms stall, honouring each one sent 4–8 IDRs a second into the
+/// congested link (33 % loss, 40–50 frames lost per stall on the MTK
+/// tablet, 2026-11-15). After a forced keyframe, requests are ignored until
+/// it could have arrived: 2× the RTT, at least 500 ms, at most 2 s. The
+/// viewer keeps asking, so a lost keyframe is still replaced.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct KeyframeGate {
+    last_us: Option<u64>,
+    pub suppressed: u64,
+}
+
+impl KeyframeGate {
+    pub const MIN_GAP_US: u64 = 500_000;
+    pub const MAX_GAP_US: u64 = 2_000_000;
+
+    /// Whether a request at `now_us` should force a keyframe.
+    pub fn allow(&mut self, now_us: u64, rtt: Duration) -> bool {
+        let gap = (rtt.as_micros().min(u64::MAX as u128) as u64)
+            .saturating_mul(2)
+            .clamp(Self::MIN_GAP_US, Self::MAX_GAP_US);
+        if self.last_us.is_some_and(|t| now_us.saturating_sub(t) < gap) {
+            self.suppressed += 1;
+            return false;
+        }
+        self.last_us = Some(now_us);
+        true
+    }
+}
+
 /// Ceiling for [`FecState::boost_pct`].
 const MAX_FEC_BOOST: f32 = 15.0;
 
@@ -535,6 +566,10 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
         }
     });
 
+    // Not armed by the keyframe forced at connect: if the viewer missed that
+    // one, its first request is answered at once (a pre-armed gate cost
+    // ~0.5 s of black at startup in the loopback).
+    let mut keyframe_gate = KeyframeGate::default();
     let result = async {
         loop {
             let msg = match read_msg(&mut recv).await {
@@ -547,8 +582,15 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
                     let _ = out_tx.send(Control::Pong { t_viewer_us, t_presenter_us: now_us() });
                 }
                 Control::RequestKeyframe { reason } => {
-                    tracing::debug!("keyframe requested: {reason}");
-                    (shared.on_keyframe_request)();
+                    if keyframe_gate.allow(now_us(), conn.rtt()) {
+                        tracing::debug!("keyframe requested: {reason}");
+                        (shared.on_keyframe_request)();
+                    } else {
+                        tracing::debug!(
+                            "keyframe request ignored ({reason}): one is on its way ({} ignored so far)",
+                            keyframe_gate.suppressed
+                        );
+                    }
                 }
                 Control::LinkReport { loss_permille, packets, recovered, unrecoverable } => {
                     tracing::debug!(
@@ -1335,6 +1377,29 @@ mod tests {
         viewer.close();
         presenter.close();
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn keyframe_requests_are_limited_while_one_is_on_its_way() {
+        let mut g = KeyframeGate::default();
+        let lan = Duration::from_millis(5);
+        assert!(g.allow(0, lan), "first request");
+        // The viewer re-asks every 100 ms: ignored for the 500 ms minimum.
+        for t in (100_000..500_000).step_by(100_000) {
+            assert!(!g.allow(t, lan), "{t}");
+        }
+        assert!(g.allow(500_000, lan), "a lost keyframe is replaced");
+        assert_eq!(g.suppressed, 4);
+        // A Wi-Fi stall (RTT 400 ms): wait 2 RTTs.
+        let stall = Duration::from_millis(400);
+        assert!(!g.allow(1_200_000, stall));
+        assert!(g.allow(1_300_000, stall));
+        // Capped at 2 s, and a garbage RTT can't block forever.
+        let huge = Duration::from_secs(3_600);
+        assert!(!g.allow(3_299_999, huge));
+        assert!(g.allow(3_300_000, huge));
+        // A clock step back counts as "just sent", not a panic.
+        assert!(!g.allow(0, lan));
     }
 
     #[test]
