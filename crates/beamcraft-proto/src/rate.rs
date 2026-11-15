@@ -536,4 +536,172 @@ mod tests {
         );
         assert_eq!(encoder_kbps(0, None), 100);
     }
+
+    /// Closed-loop simulation without QUIC: encoder model -> FEC parity ->
+    /// random loss -> bottleneck -> viewer report every 500 ms -> controller.
+    struct Link {
+        /// Bitrate the content needs (x264 sends less than the target on
+        /// easy content, since there is no HRD filler).
+        demand_kbps: u32,
+        loss: f64,
+        burst: f64,
+        bottleneck_kbps: u32,
+        rtt_ms: f32,
+    }
+
+    struct SimResult {
+        cuts: Vec<Cut>,
+        /// Budget at the end, and the lowest after the first 10 s.
+        final_kbps: u32,
+        min_kbps: u32,
+        /// Video bytes that arrived (data packets), as kbit/s over the last 20 s.
+        delivered_kbps: f32,
+    }
+
+    fn simulate(link: Link, ceiling_kbps: u32, secs: u64) -> SimResult {
+        use crate::fec::{BandwidthSim, FecMode, LossSim};
+        const PKT: usize = 1200;
+        let mut c = AdaptiveBitrate::new(ceiling_kbps);
+        let mut lossy = LossSim::new(link.loss, link.burst, 0x5eed);
+        let mut bw = BandwidthSim::new(link.bottleneck_kbps, 150);
+        let (mut smoothed_loss, mut reports) = (0.0f32, 0u32);
+        let (mut expected, mut received) = (0u64, 0u64);
+        let (mut cuts, mut min_kbps, mut late_bytes) = (Vec::new(), u32::MAX, 0usize);
+        let frame_us = 1_000_000 / 60;
+        for frame in 0..secs * 60 {
+            let t_us = frame * frame_us;
+            let overhead = FecMode::Auto
+                .overhead(smoothed_loss, 0.0, false)
+                .unwrap_or(0.0);
+            let target = encoder_kbps(c.budget_kbps(), Some(overhead)).min(link.demand_kbps);
+            let data = (target as usize * 1000 / 8 / 60).div_ceil(PKT).max(1);
+            let parity = (data as f32 * overhead).ceil() as usize;
+            for k in 0..data + parity {
+                // Paced at 500 Mbit/s: 1200 bytes every ~19 us.
+                let at = t_us + k as u64 * 19;
+                expected += 1;
+                if lossy.drop_next() || bw.as_mut().is_some_and(|b| !b.admit(PKT, at)) {
+                    continue;
+                }
+                received += 1;
+                if k < data && t_us >= (secs - 20) * 1_000_000 {
+                    late_bytes += PKT;
+                }
+            }
+            if (frame + 1) % 30 == 0 {
+                let l = 100.0 * (expected - received) as f32 / expected.max(1) as f32;
+                let w = if l > smoothed_loss { 0.5 } else { 0.15 };
+                smoothed_loss = if reports == 0 {
+                    l
+                } else {
+                    smoothed_loss + w * (l - smoothed_loss)
+                };
+                reports += 1;
+                let now_ms = (t_us + frame_us) / 1000;
+                c.on_sample(
+                    Sample {
+                        loss_pct: Some(l),
+                        rtt_ms: Some(link.rtt_ms),
+                        backlog_drops: 0,
+                    },
+                    now_ms,
+                );
+                cuts.extend(c.cut_by_last_sample());
+                if now_ms >= 10_000 {
+                    min_kbps = min_kbps.min(c.budget_kbps());
+                }
+                (expected, received) = (0, 0);
+            }
+        }
+        SimResult {
+            cuts,
+            final_kbps: c.budget_kbps(),
+            min_kbps,
+            delivered_kbps: late_bytes as f32 * 8.0 / 1000.0 / 20.0,
+        }
+    }
+
+    fn print(name: &str, r: &SimResult) {
+        eprintln!(
+            "{name}: {} cuts, final {} kbit/s, min after 10 s {}, delivered video {:.0} kbit/s",
+            r.cuts.len(),
+            r.final_kbps,
+            r.min_kbps,
+            r.delivered_kbps
+        );
+        for cut in r.cuts.iter().take(8) {
+            eprintln!("  {:>6} ms {cut}", cut.at_ms);
+        }
+    }
+
+    const LAN: Link = Link {
+        demand_kbps: 60_000,
+        loss: 0.0,
+        burst: 1.0,
+        bottleneck_kbps: 0,
+        rtt_ms: 3.0,
+    };
+
+    #[test]
+    fn sim_random_loss_without_a_bottleneck_keeps_the_ceiling() {
+        // 2 % is below the 3-point excess rule: never a cut. 5 % cuts until
+        // the probe has learned it as background loss (today 3 cuts in the
+        // first 3 s, since cuts go on while the probe watches), then climbs back.
+        for (loss, max_cuts) in [(0.0, 0), (0.02, 0), (0.05, 3)] {
+            let r = simulate(Link { loss, ..LAN }, 40_000, 60);
+            print(&format!("no limit, {:.0} % random", loss * 100.0), &r);
+            assert!(r.cuts.len() <= max_cuts, "random loss kept cutting");
+            assert!(r.cuts.iter().all(|c| c.at_ms < 5_000), "cut after learning");
+            assert!(r.final_kbps >= 36_000, "{}", r.final_kbps);
+        }
+    }
+
+    #[test]
+    fn sim_easy_content_is_not_mistaken_for_a_cut() {
+        // The encoder sends 15 of 40 Mbit/s (test pattern): no cut, full budget.
+        let r = simulate(
+            Link {
+                demand_kbps: 15_000,
+                loss: 0.02,
+                ..LAN
+            },
+            40_000,
+            60,
+        );
+        print("easy content, 2 % random", &r);
+        assert!(r.cuts.is_empty());
+        assert_eq!(r.final_kbps, 40_000);
+    }
+
+    #[test]
+    fn sim_bottleneck_converges_below_the_capacity() {
+        for (cap, loss) in [(20_000, 0.0), (20_000, 0.02), (8_000, 0.02)] {
+            let r = simulate(
+                Link {
+                    bottleneck_kbps: cap,
+                    loss,
+                    ..LAN
+                },
+                40_000,
+                90,
+            );
+            print(
+                &format!(
+                    "{} Mbit/s bottleneck, {:.0} % random",
+                    cap / 1000,
+                    loss * 100.0
+                ),
+                &r,
+            );
+            assert!(!r.cuts.is_empty());
+            assert!(r.cuts.iter().all(|c| !matches!(c.trigger, CutTrigger::Rtt)));
+            // Settles under the capacity and uses a fair share of it.
+            assert!(r.final_kbps <= cap * 11 / 10, "{} over {cap}", r.final_kbps);
+            assert!(
+                r.delivered_kbps >= cap as f32 * 0.4,
+                "{} of {cap}",
+                r.delivered_kbps
+            );
+        }
+    }
 }
