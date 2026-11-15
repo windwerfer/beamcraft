@@ -12,8 +12,18 @@
 //!   above the lowest seen), or the presenter dropping frames for backlog.
 //!   Then the budget is cut multiplicatively (×0.85, ×0.75 heavy, ×0.6
 //!   severe), at most once per second, never below the floor.
+//! * Start: the budget begins at [`START_KBPS`] (or the ceiling if lower)
+//!   and grows ×1.25 per second until the first cut (slow start), so a
+//!   new viewer on weak Wi-Fi is not hit with the full ceiling at once
+//!   (measured 2026-11-15 on the MTK tablet: starting at 40 Mbit/s on a
+//!   ~20–25 Mbit/s link lost 50–100 frames in the first 3 s).
 //! * Clean (little loss, no queue): the budget climbs additively by 4 % of
 //!   the ceiling per second, starting 4 s after the last cut.
+//! * Only while it is used: the budget does not grow while the presenter
+//!   sends less than 80 % of it (static or simple content). Otherwise it
+//!   drifts far above what was ever proven to fit, and the next busy frame
+//!   overruns the link (budget 26 at 12 Mbit/s sent, then 24 Mbit/s into a
+//!   ~20 Mbit/s link: 15–50 frames lost per episode on the tablet).
 //! * Loss that does not go away when the rate is cut is learned as the
 //!   link's random loss (Wi-Fi retries, interference); FEC handles it, and
 //!   it does not keep pushing the rate down.
@@ -22,6 +32,12 @@
 
 /// Lowest budget the controller goes to (kbit/s), or the ceiling if lower.
 pub const FLOOR_KBPS: u32 = 3_000;
+/// Budget a new viewer starts with (kbit/s), or the ceiling if lower.
+pub const START_KBPS: u32 = 10_000;
+/// Slow-start growth per second until the first cut.
+const SLOW_START_PER_S: f32 = 1.25;
+/// The budget only grows while at least this share of it is sent.
+const USED_SHARE: f32 = 0.8;
 /// Smallest additive step per second (kbit/s).
 const MIN_STEP_KBPS: f32 = 250.0;
 const MIN_DECREASE_GAP_MS: u64 = 1_000;
@@ -38,6 +54,9 @@ pub struct Sample {
     pub rtt_ms: Option<f32>,
     /// Delta frames the presenter dropped because the send queue was full.
     pub backlog_drops: u32,
+    /// What the presenter actually sent (video + parity, kbit/s) over the
+    /// last window; `None` when unknown (then the budget counts as used).
+    pub sent_kbps: Option<f32>,
 }
 
 /// What triggered a cut (the first that applies, in this order).
@@ -116,6 +135,8 @@ pub struct AdaptiveBitrate {
     random_loss_pct: f32,
     /// Loss when the last cut happened, and the samples since (probe).
     probe: Option<Probe>,
+    /// Growing multiplicatively until the first cut.
+    slow_start: bool,
     /// The most recent cut, kept until the next one.
     last_cut: Option<Cut>,
     /// Set by `on_sample` when that sample cut the budget.
@@ -131,11 +152,18 @@ struct Probe {
 }
 
 impl AdaptiveBitrate {
+    /// Starts at [`START_KBPS`] (or the ceiling if lower), in slow start.
     pub fn new(ceiling_kbps: u32) -> Self {
+        Self::with_start(ceiling_kbps, START_KBPS)
+    }
+
+    /// Like [`Self::new`] with another start budget (clamped to floor..ceiling).
+    pub fn with_start(ceiling_kbps: u32, start_kbps: u32) -> Self {
         let ceiling_kbps = ceiling_kbps.max(1);
+        let floor = FLOOR_KBPS.min(ceiling_kbps);
         Self {
             ceiling_kbps,
-            budget_kbps: ceiling_kbps as f32,
+            budget_kbps: start_kbps.clamp(floor, ceiling_kbps) as f32,
             min_rtt_ms: None,
             last_sample_ms: None,
             last_cut_ms: None,
@@ -143,6 +171,7 @@ impl AdaptiveBitrate {
             congested: false,
             random_loss_pct: 0.0,
             probe: None,
+            slow_start: true,
             last_cut: None,
             cut_now: false,
         }
@@ -193,9 +222,14 @@ impl AdaptiveBitrate {
             .max(self.floor_kbps() as f32);
     }
 
-    /// A new viewer: start again from the ceiling with nothing learned.
+    /// A new viewer: start again (slow start) with nothing learned.
     pub fn reset(&mut self) {
         *self = Self::new(self.ceiling_kbps);
+    }
+
+    /// Still in slow start (no cut yet).
+    pub fn in_slow_start(&self) -> bool {
+        self.slow_start
     }
 
     /// Feed one sample; returns the new budget (kbit/s).
@@ -257,6 +291,7 @@ impl AdaptiveBitrate {
                 let from_kbps = self.budget_kbps();
                 self.budget_kbps = (self.budget_kbps * factor).max(floor);
                 self.last_cut_ms = Some(now_ms);
+                self.slow_start = false;
                 let trigger = if s.backlog_drops > 0 {
                     CutTrigger::Backlog {
                         drops: s.backlog_drops,
@@ -288,13 +323,24 @@ impl AdaptiveBitrate {
                     });
                 }
             }
-        } else if excess < 1.5 && !queue_growing {
+        } else if (excess < 1.5 || (self.slow_start && !lossy)) && !queue_growing {
+            // Slow start keeps growing through loss below the cut threshold
+            // (FEC covers it); background loss is only learned after a cut.
             let rested = self
                 .last_cut_ms
                 .is_none_or(|t| now_ms.saturating_sub(t) >= INCREASE_AFTER_CUT_MS);
-            if rested {
-                let step = (ceiling * 0.04).max(MIN_STEP_KBPS) * dt_ms as f32 / 1000.0;
-                self.budget_kbps = (self.budget_kbps + step).min(ceiling);
+            let used = s
+                .sent_kbps
+                .filter(|k| k.is_finite())
+                .is_none_or(|k| k >= USED_SHARE * self.budget_kbps);
+            if rested && used {
+                let secs = dt_ms as f32 / 1000.0;
+                self.budget_kbps = if self.slow_start {
+                    self.budget_kbps * SLOW_START_PER_S.powf(secs)
+                } else {
+                    self.budget_kbps + (ceiling * 0.04).max(MIN_STEP_KBPS) * secs
+                }
+                .min(ceiling);
             }
         }
         self.budget_kbps = self.budget_kbps.clamp(floor, ceiling);
@@ -338,11 +384,17 @@ pub fn encoder_kbps(budget_kbps: u32, fec_overhead: Option<f32>) -> u32 {
 mod tests {
     use super::*;
 
+    /// The old behaviour: start at the ceiling (tests of the cut logic).
+    fn at_ceiling(ceiling: u32) -> AdaptiveBitrate {
+        AdaptiveBitrate::with_start(ceiling, ceiling)
+    }
+
     fn loss(l: f32) -> Sample {
         Sample {
             loss_pct: Some(l),
             rtt_ms: Some(5.0),
             backlog_drops: 0,
+            sent_kbps: None,
         }
     }
 
@@ -358,7 +410,7 @@ mod tests {
 
     #[test]
     fn clean_link_stays_at_the_ceiling() {
-        let mut c = AdaptiveBitrate::new(40_000);
+        let mut c = at_ceiling(40_000);
         let mut t = 0;
         assert_eq!(feed(&mut c, loss(0.0), 20, &mut t), 40_000);
         assert!(!c.congested());
@@ -366,7 +418,7 @@ mod tests {
 
     #[test]
     fn sustained_loss_cuts_multiplicatively_once_per_second() {
-        let mut c = AdaptiveBitrate::new(40_000);
+        let mut c = at_ceiling(40_000);
         let mut t = 0;
         // One moderate report is not yet congestion.
         assert_eq!(feed(&mut c, loss(5.0), 1, &mut t), 40_000);
@@ -376,17 +428,17 @@ mod tests {
         assert_eq!(feed(&mut c, loss(5.0), 1, &mut t), 34_000);
         assert_eq!(feed(&mut c, loss(5.0), 1, &mut t), 28_900);
         // Heavy loss cuts at once and harder.
-        let mut h = AdaptiveBitrate::new(40_000);
+        let mut h = at_ceiling(40_000);
         let mut t = 0;
         assert_eq!(feed(&mut h, loss(12.0), 1, &mut t), 30_000);
-        let mut severe = AdaptiveBitrate::new(40_000);
+        let mut severe = at_ceiling(40_000);
         let mut t = 0;
         assert_eq!(feed(&mut severe, loss(24.0), 1, &mut t), 24_000);
     }
 
     #[test]
     fn each_cut_records_its_trigger() {
-        let mut c = AdaptiveBitrate::new(40_000);
+        let mut c = at_ceiling(40_000);
         let mut t = 0;
         feed(&mut c, loss(0.0), 2, &mut t);
         assert_eq!(c.last_cut(), None);
@@ -404,11 +456,12 @@ mod tests {
         assert!(c.cut_by_last_sample().is_none());
         assert_eq!(c.last_cut(), Some(cut));
 
-        let mut r = AdaptiveBitrate::new(20_000);
+        let mut r = at_ceiling(20_000);
         let rtt = |ms| Sample {
             loss_pct: Some(0.0),
             rtt_ms: Some(ms),
             backlog_drops: 0,
+            sent_kbps: None,
         };
         feed(&mut r, rtt(4.0), 4, &mut t);
         feed(&mut r, rtt(80.0), 2, &mut t);
@@ -420,11 +473,12 @@ mod tests {
             cut.reason()
         );
 
-        let mut b = AdaptiveBitrate::new(20_000);
+        let mut b = at_ceiling(20_000);
         let drop = Sample {
             loss_pct: None,
             rtt_ms: None,
             backlog_drops: 3,
+            sent_kbps: None,
         };
         feed(&mut b, drop, 1, &mut t);
         assert_eq!(
@@ -432,18 +486,79 @@ mod tests {
             Some(CutTrigger::Backlog { drops: 3 })
         );
 
-        let mut h = AdaptiveBitrate::new(40_000);
+        let mut h = at_ceiling(40_000);
         feed(&mut h, loss(12.0), 1, &mut t);
         assert_eq!(h.last_cut().map(|c| c.trigger), Some(CutTrigger::HeavyLoss));
     }
 
     #[test]
-    fn floor_and_ceiling_hold() {
+    fn slow_start_from_10_mbit_until_the_first_cut() {
         let mut c = AdaptiveBitrate::new(40_000);
+        assert_eq!(c.budget_kbps(), START_KBPS);
+        assert!(c.in_slow_start());
+        let mut t = 0;
+        // ×1.25 per second: 10 -> 15.6 Mbit/s after 2 s, the ceiling in ~6 s.
+        assert_eq!(feed(&mut c, loss(0.0), 4, &mut t), 15_625);
+        assert_eq!(feed(&mut c, loss(0.0), 8, &mut t), 38_147);
+        assert_eq!(feed(&mut c, loss(0.0), 2, &mut t), 40_000);
+        // A low ceiling is the start; the floor still holds.
+        assert_eq!(AdaptiveBitrate::new(6_000).budget_kbps(), 6_000);
+        assert_eq!(
+            AdaptiveBitrate::with_start(40_000, 0).budget_kbps(),
+            FLOOR_KBPS
+        );
+        // The first cut ends slow start: from then on additive.
+        let mut s = AdaptiveBitrate::new(40_000);
+        feed(&mut s, loss(12.0), 1, &mut t);
+        assert!(!s.in_slow_start());
+        assert_eq!(s.budget_kbps(), 7_500);
+        assert_eq!(feed(&mut s, loss(0.0), 7, &mut t), 7_500, "4 s rest");
+        assert_eq!(
+            feed(&mut s, loss(0.0), 3, &mut t),
+            9_900,
+            "then +1.6 Mbit/s per s"
+        );
+        s.reset();
+        assert!(s.in_slow_start());
+        assert_eq!(s.budget_kbps(), START_KBPS);
+    }
+
+    #[test]
+    fn budget_does_not_grow_while_unused() {
+        let sent = |k: f32| Sample {
+            loss_pct: Some(0.0),
+            rtt_ms: Some(5.0),
+            backlog_drops: 0,
+            sent_kbps: Some(k),
+        };
+        let mut t = 0;
+        // Slow start: 10 Mbit/s budget, a static screen sends 2: no growth.
+        let mut c = AdaptiveBitrate::new(40_000);
+        assert_eq!(feed(&mut c, sent(2_000.0), 10, &mut t), START_KBPS);
+        // Busy content fills it: growth resumes.
+        assert!(feed(&mut c, sent(9_500.0), 2, &mut t) > START_KBPS);
+        // After a cut, the additive climb also waits for use.
+        let mut a = at_ceiling(40_000);
+        feed(&mut a, loss(12.0), 1, &mut t);
+        let cut = a.budget_kbps();
+        assert_eq!(
+            feed(&mut a, sent(12_000.0), 20, &mut t),
+            cut,
+            "12 of 30 Mbit/s used"
+        );
+        assert!(feed(&mut a, sent(28_000.0), 2, &mut t) > cut);
+        // Garbage is "unknown", i.e. counts as used, not a panic.
+        let mut g = AdaptiveBitrate::new(40_000);
+        assert!(feed(&mut g, sent(f32::NAN), 2, &mut t) > START_KBPS);
+    }
+
+    #[test]
+    fn floor_and_ceiling_hold() {
+        let mut c = at_ceiling(40_000);
         let mut t = 0;
         assert_eq!(feed(&mut c, loss(30.0), 40, &mut t), FLOOR_KBPS);
         // A ceiling below the floor wins.
-        let mut low = AdaptiveBitrate::new(2_000);
+        let mut low = at_ceiling(2_000);
         assert_eq!(feed(&mut low, loss(30.0), 10, &mut t), 2_000);
         c.set_ceiling(2_500);
         assert_eq!(c.budget_kbps(), 2_500);
@@ -457,7 +572,7 @@ mod tests {
 
     #[test]
     fn recovers_additively_after_a_pause() {
-        let mut c = AdaptiveBitrate::new(40_000);
+        let mut c = at_ceiling(40_000);
         let mut t = 0;
         let cut = feed(&mut c, loss(12.0), 1, &mut t);
         assert_eq!(cut, 30_000);
@@ -472,21 +587,23 @@ mod tests {
 
     #[test]
     fn queue_growth_and_backlog_count_as_congestion() {
-        let mut c = AdaptiveBitrate::new(20_000);
+        let mut c = at_ceiling(20_000);
         let mut t = 0;
         let rtt = |ms| Sample {
             loss_pct: Some(0.0),
             rtt_ms: Some(ms),
             backlog_drops: 0,
+            sent_kbps: None,
         };
         feed(&mut c, rtt(4.0), 4, &mut t);
         assert_eq!(c.budget_kbps(), 20_000);
         assert_eq!(feed(&mut c, rtt(80.0), 2, &mut t), 17_000);
-        let mut b = AdaptiveBitrate::new(20_000);
+        let mut b = at_ceiling(20_000);
         let drop = Sample {
             loss_pct: None,
             rtt_ms: None,
             backlog_drops: 2,
+            sent_kbps: None,
         };
         assert_eq!(feed(&mut b, drop, 1, &mut t), 17_000);
         // Garbage input is ignored, not a panic.
@@ -494,13 +611,14 @@ mod tests {
             loss_pct: Some(f32::NAN),
             rtt_ms: Some(f32::INFINITY),
             backlog_drops: 0,
+            sent_kbps: None,
         };
         feed(&mut b, junk, 3, &mut t);
     }
 
     #[test]
     fn loss_that_ignores_the_rate_is_learned_as_random() {
-        let mut c = AdaptiveBitrate::new(40_000);
+        let mut c = at_ceiling(40_000);
         let mut t = 0;
         // 6 % loss that never changes, whatever the rate (bad Wi-Fi, no congestion).
         let first = feed(&mut c, loss(6.0), 2, &mut t);
@@ -521,11 +639,11 @@ mod tests {
 
     #[test]
     fn reset_and_encoder_share() {
-        let mut c = AdaptiveBitrate::new(40_000);
+        let mut c = at_ceiling(40_000);
         let mut t = 0;
         feed(&mut c, loss(30.0), 10, &mut t);
         c.reset();
-        assert_eq!(c.budget_kbps(), 40_000);
+        assert_eq!(c.budget_kbps(), START_KBPS, "slow start again");
         assert_eq!(encoder_kbps(20_000, None), 20_000);
         assert_eq!(encoder_kbps(20_000, Some(0.25)), 16_000);
         assert_eq!(encoder_kbps(20_000, Some(f32::NAN)), 20_000);
@@ -547,6 +665,10 @@ mod tests {
         burst: f64,
         bottleneck_kbps: u32,
         rtt_ms: f32,
+        /// Every `busy_every_s` seconds the content needs `busy_kbps` for 2 s
+        /// (a scene change after a quiet screen); 0 = never.
+        busy_every_s: u64,
+        busy_kbps: u32,
     }
 
     struct SimResult {
@@ -556,6 +678,8 @@ mod tests {
         min_kbps: u32,
         /// Video bytes that arrived (data packets), as kbit/s over the last 20 s.
         delivered_kbps: f32,
+        /// Packets lost over the whole run (percent of those sent).
+        lost_pct: f32,
     }
 
     fn simulate(link: Link, ceiling_kbps: u32, secs: u64) -> SimResult {
@@ -567,19 +691,28 @@ mod tests {
         let (mut smoothed_loss, mut reports) = (0.0f32, 0u32);
         let (mut expected, mut received) = (0u64, 0u64);
         let (mut cuts, mut min_kbps, mut late_bytes) = (Vec::new(), u32::MAX, 0usize);
+        let (mut total_sent, mut total_lost, mut window_sent) = (0u64, 0u64, 0u64);
         let frame_us = 1_000_000 / 60;
         for frame in 0..secs * 60 {
             let t_us = frame * frame_us;
             let overhead = FecMode::Auto
                 .overhead(smoothed_loss, 0.0, false)
                 .unwrap_or(0.0);
-            let target = encoder_kbps(c.budget_kbps(), Some(overhead)).min(link.demand_kbps);
+            let sec = t_us / 1_000_000;
+            let busy = link.busy_every_s > 0 && sec % link.busy_every_s >= link.busy_every_s - 2;
+            let demand = if busy {
+                link.busy_kbps
+            } else {
+                link.demand_kbps
+            };
+            let target = encoder_kbps(c.budget_kbps(), Some(overhead)).min(demand);
             let data = (target as usize * 1000 / 8 / 60).div_ceil(PKT).max(1);
             let parity = (data as f32 * overhead).ceil() as usize;
             for k in 0..data + parity {
                 // Paced at 500 Mbit/s: 1200 bytes every ~19 us.
                 let at = t_us + k as u64 * 19;
                 expected += 1;
+                (total_sent, window_sent) = (total_sent + 1, window_sent + 1);
                 if lossy.drop_next() || bw.as_mut().is_some_and(|b| !b.admit(PKT, at)) {
                     continue;
                 }
@@ -589,7 +722,11 @@ mod tests {
                 }
             }
             if (frame + 1) % 30 == 0 {
+                total_lost += expected - received;
                 let l = 100.0 * (expected - received) as f32 / expected.max(1) as f32;
+                // 30 frames = 0.5 s.
+                let sent_kbps = (window_sent * PKT as u64 * 8) as f32 / 1000.0 / 0.5;
+                window_sent = 0;
                 let w = if l > smoothed_loss { 0.5 } else { 0.15 };
                 smoothed_loss = if reports == 0 {
                     l
@@ -603,6 +740,7 @@ mod tests {
                         loss_pct: Some(l),
                         rtt_ms: Some(link.rtt_ms),
                         backlog_drops: 0,
+                        sent_kbps: Some(sent_kbps),
                     },
                     now_ms,
                 );
@@ -618,16 +756,18 @@ mod tests {
             final_kbps: c.budget_kbps(),
             min_kbps,
             delivered_kbps: late_bytes as f32 * 8.0 / 1000.0 / 20.0,
+            lost_pct: 100.0 * total_lost as f32 / total_sent.max(1) as f32,
         }
     }
 
     fn print(name: &str, r: &SimResult) {
         eprintln!(
-            "{name}: {} cuts, final {} kbit/s, min after 10 s {}, delivered video {:.0} kbit/s",
+            "{name}: {} cuts, final {} kbit/s, min after 10 s {}, delivered video {:.0} kbit/s, lost {:.2} %",
             r.cuts.len(),
             r.final_kbps,
             r.min_kbps,
-            r.delivered_kbps
+            r.delivered_kbps,
+            r.lost_pct
         );
         for cut in r.cuts.iter().take(8) {
             eprintln!("  {:>6} ms {cut}", cut.at_ms);
@@ -640,6 +780,8 @@ mod tests {
         burst: 1.0,
         bottleneck_kbps: 0,
         rtt_ms: 3.0,
+        busy_every_s: 0,
+        busy_kbps: 0,
     };
 
     #[test]
@@ -658,7 +800,9 @@ mod tests {
 
     #[test]
     fn sim_easy_content_is_not_mistaken_for_a_cut() {
-        // The encoder sends 15 of 40 Mbit/s (test pattern): no cut, full budget.
+        // The encoder sends 15 of 40 Mbit/s (test pattern): no cut, and
+        // the budget stops ~1.25x above what is used (wire rate with parity)
+        // instead of climbing to the ceiling.
         let r = simulate(
             Link {
                 demand_kbps: 15_000,
@@ -670,7 +814,37 @@ mod tests {
         );
         print("easy content, 2 % random", &r);
         assert!(r.cuts.is_empty());
-        assert_eq!(r.final_kbps, 40_000);
+        assert!(
+            (20_000..=28_000).contains(&r.final_kbps),
+            "{}",
+            r.final_kbps
+        );
+        assert!(
+            r.delivered_kbps > 14_500.0,
+            "content fully sent: {}",
+            r.delivered_kbps
+        );
+    }
+
+    #[test]
+    fn sim_quiet_screen_with_bursts_does_not_overrun_the_link() {
+        // The tablet case (2026-11-15): ~12 Mbit/s content, 2 s bursts of
+        // 24 Mbit/s every 10 s, a ~20 Mbit/s Wi-Fi link.
+        let link = Link {
+            demand_kbps: 12_000,
+            busy_every_s: 10,
+            busy_kbps: 24_000,
+            bottleneck_kbps: 20_000,
+            ..LAN
+        };
+        let r = simulate(link, 40_000, 90);
+        print("12 Mbit/s content, 24 Mbit/s bursts, 20 Mbit/s link", &r);
+        // The budget stays near what is used, so most bursts are capped by
+        // the encoder instead of overrunning the link. Measured: 4 cuts and
+        // 0.74 % packets lost; the old controller (start at the ceiling,
+        // growing while unused) made 10 cuts and lost 2.40 %.
+        assert!(r.cuts.len() <= 4, "{} cuts", r.cuts.len());
+        assert!(r.lost_pct < 1.0, "{:.2} % lost", r.lost_pct);
     }
 
     #[test]
@@ -695,8 +869,19 @@ mod tests {
             );
             assert!(!r.cuts.is_empty());
             assert!(r.cuts.iter().all(|c| !matches!(c.trigger, CutTrigger::Rtt)));
-            // Settles under the capacity and uses a fair share of it.
-            assert!(r.final_kbps <= cap * 11 / 10, "{} over {cap}", r.final_kbps);
+            // The sawtooth peaks only a little over the capacity: at most
+            // 15 %, or one second of the additive step (1.6 Mbit/s here).
+            let peak = r
+                .cuts
+                .iter()
+                .skip(1)
+                .map(|c| c.from_kbps)
+                .max()
+                .unwrap_or(0);
+            assert!(
+                peak <= (cap * 115 / 100).max(cap + 1_600),
+                "peak {peak} over {cap}"
+            );
             assert!(
                 r.delivered_kbps >= cap as f32 * 0.4,
                 "{} of {cap}",

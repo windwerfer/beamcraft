@@ -218,7 +218,9 @@ unrecoverable frames …`; the viewer overlay shows `fec +N%  rebuilt N/s  loss 
 a checkbox in the Quality panel, saved in `settings.json`). The bitrate setting is the maximum.
 When the viewer reports loss above what the link always loses, or the round-trip time grows (a
 queue is building), the presenter lowers the rate (down to 3 Mbit/s); on a clean link it raises
-it again slowly. FEC parity is counted inside that budget, so more parity never pushes the
+it again slowly. A new viewer starts at 10 Mbit/s and the rate grows quickly (×1.25 per second)
+until the link pushes back, and it only grows while the stream actually uses it, so a quiet
+screen does not leave a budget the link can't carry. FEC parity is counted inside that budget, so more parity never pushes the
 stream above what the link can carry. x264 changes rate without a keyframe; VAAPI has to be
 reopened (one keyframe), at most every 5 s. The presenter window shows
 `Bitrate: target X of max Y Mbit/s (adaptive)`. After a cut it adds why, e.g.

@@ -145,7 +145,10 @@ controller. Its ceiling is the bitrate setting, its floor 3 Mbit/s. Congestion (
 above the learned background loss in two reports in a row, ≥ 10 points once, RTT > 1.5 × min
 + 25 ms twice, or a backlog drop) cuts the budget ×0.85 (×0.75 at ≥ 10 points, ×0.6 at ≥ 20),
 at most once per second; a clean link (< 1.5 points excess, no queue) adds 4 % of the ceiling
-per second from 4 s after the last cut. Loss that stays at ≥ 70 % of its level for 3 s after a
+per second from 4 s after the last cut. A new viewer starts at 10 Mbit/s (or the ceiling if
+lower) in slow start: ×1.25 per second until the first cut, through loss below the cut
+threshold. The budget only grows while the presenter sends ≥ 80 % of it (wire rate, video +
+parity, per 1 s send window), so it stays near what has actually been sent. Loss that stays at ≥ 70 % of its level for 3 s after a
 cut is learned as background loss (random Wi-Fi loss that FEC covers). x264 takes the new rate
 live (no keyframe); VAAPI/FilmCraft reopen (keyframe), at most every 5 s and only for ≥ 15 %.
 

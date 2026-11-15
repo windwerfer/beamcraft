@@ -106,6 +106,9 @@ pub struct FecState {
     pub rate: AdaptiveBitrate,
     /// Latest QUIC RTT estimate (ms).
     pub rtt_ms: f32,
+    /// What the presenter sent on the wire (video + parity, kbit/s) in the
+    /// last send window; the budget only grows while it is used.
+    pub sent_kbps: Option<f32>,
 }
 
 impl Default for FecState {
@@ -122,6 +125,7 @@ impl Default for FecState {
             adaptive: true,
             rate: AdaptiveBitrate::new(40_000),
             rtt_ms: 0.0,
+            sent_kbps: None,
         }
     }
 }
@@ -253,7 +257,8 @@ impl FecControl {
         }
         // The controller runs even when adaptive is off, so switching it on
         // starts from what it learned; it only decides the budget when on.
-        s.rate.on_sample(Sample { loss_pct: Some(loss), rtt_ms, backlog_drops: 0 }, now_ms);
+        let sent_kbps = s.sent_kbps;
+        s.rate.on_sample(Sample { loss_pct: Some(loss), rtt_ms, backlog_drops: 0, sent_kbps }, now_ms);
         log_cut(&s);
         s.boost_pct = if unrecoverable > 0 && !s.rate.congested() {
             (s.boost_pct + 5.0 * unrecoverable.min(3) as f32).min(MAX_FEC_BOOST)
@@ -265,16 +270,17 @@ impl FecControl {
     }
 
     /// The presenter's own view, once per send window: frames dropped for
-    /// backlog, and the RTT (for viewers that send no reports).
-    fn on_send_window(&self, backlog_drops: u32, rtt: Option<Duration>) {
+    /// backlog, the wire rate, and the RTT (for viewers that send no reports).
+    fn on_send_window(&self, backlog_drops: u32, sent_kbps: f32, rtt: Option<Duration>) {
         let now_ms = self.now_ms();
         let mut s = self.lock();
+        s.sent_kbps = Some(sent_kbps);
         let rtt_ms = rtt.map(|r| r.as_secs_f32() * 1000.0);
         if let Some(r) = rtt_ms {
             s.rtt_ms = r;
         }
         if backlog_drops > 0 || s.reports == 0 {
-            s.rate.on_sample(Sample { loss_pct: None, rtt_ms, backlog_drops }, now_ms);
+            s.rate.on_sample(Sample { loss_pct: None, rtt_ms, backlog_drops, sent_kbps: Some(sent_kbps) }, now_ms);
             log_cut(&s);
         }
     }
@@ -703,6 +709,8 @@ async fn send_loop(
     let (mut window_frames, mut window_bytes, mut window_keyframes) = (0u32, 0usize, 0u32);
     let mut backlog_drops = 0u32;
     let (mut window_parity, mut window_packets) = (0usize, 0usize);
+    // Bytes handed to QUIC this window (video + parity + headers).
+    let mut window_wire = 0usize;
     // QUIC's own packet counters at the last window: (connection, sent, lost).
     let mut quic_prev = (0usize, 0u64, 0u64);
 
@@ -736,6 +744,7 @@ async fn send_loop(
         // one packet at a time.
         let mut send_err = false;
         window_packets += packets.len();
+        window_wire += wire_len;
         if overhead.is_some() {
             window_parity += packets
                 .first()
@@ -795,8 +804,9 @@ async fn send_loop(
                 fec_summary(&fec.snapshot(), window_parity, window_packets),
                 stats.report()
             );
-            fec.on_send_window(backlog_drops, Some(conn.rtt()));
+            fec.on_send_window(backlog_drops, (window_wire as f64 * 8.0 / secs / 1000.0) as f32, Some(conn.rtt()));
             backlog_drops = 0;
+            window_wire = 0;
             (window_parity, window_packets) = (0, 0);
             stats.clear();
             window_start = Instant::now();
