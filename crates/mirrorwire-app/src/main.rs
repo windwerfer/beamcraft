@@ -83,12 +83,13 @@ pub struct ViewArgs {
     /// Stop after this many seconds (headless mode).
     #[arg(long)]
     pub duration: Option<f64>,
-    /// Use hardware decoding (VideoToolbox on macOS, VAAPI on Linux).
-    /// Defaults to on on macOS; falls back to software if the GPU cannot
-    /// decode H.264 (a 2011 HD 6770M on OCLP often cannot).
-    #[arg(long, default_value_t = cfg!(target_os = "macos"))]
+    /// Use hardware decoding (VideoToolbox on macOS, VAAPI on Linux). On by
+    /// default everywhere (owner, 2026-11-15); falls back to software if the GPU
+    /// cannot decode H.264 (a 2011 HD 6770M on OCLP often cannot). Kept so old
+    /// command lines still parse.
+    #[arg(long, default_value_t = true)]
     pub hwdec: bool,
-    /// Force the software H.264 decoder.
+    /// Force the software H.264 decoder (hardware decoding is the default).
     #[arg(long, overrides_with = "hwdec")]
     pub software_decode: bool,
     /// Software H.264 decoder: FilmCraft (pure Rust; default on Linux and Windows) or
@@ -120,7 +121,7 @@ impl Default for ViewArgs {
             uri: None,
             headless: false,
             duration: None,
-            hwdec: cfg!(target_os = "macos"),
+            hwdec: true,
             software_decode: false,
             software_decoder: None,
             rgba: false,

@@ -40,6 +40,10 @@ without new information.
 
 Newest first. Add an entry when the owner decides something non-obvious.
 
+- **2026-11-15 (Hardware decode by default):** the owner wants hardware decoding wherever it
+  exists; software is only the fallback. The desktop viewer's `--hwdec` now defaults to on on
+  Linux and Windows too (it was macOS only); `--software-decode` or the View checkbox turns it
+  off. Android already tries hardware MediaCodec first.
 - **2026-11-15 (FilmCraft decoder as the software fallback):** the owner wants FilmCraft's
   pure-Rust H.264 decoder (`craft-video`, feature `h264-decode`, same pinned craft-libs commit
   as the encoder) as the automatic software decoder everywhere except macOS, which keeps

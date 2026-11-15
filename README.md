@@ -134,9 +134,9 @@ except on macOS x86_64, where it uses OpenGL (`glow`) because older Intel Macs h
 no Metal. If wgpu fails to start, the app retries with OpenGL. Override with
 `--renderer gl|wgpu|auto` or `MIRRORWIRE_RENDERER`. Video is converted YUV→RGBA on
 the CPU (swscale) before it is uploaded as an egui texture, so the OpenGL path does
-not need a wgpu shader. Hardware H.264 decode (`--hwdec` or the View checkbox) uses
-VideoToolbox or VAAPI when present, and falls back to software with a log line if
-the device is missing or later fails. The software decoder is FilmCraft's pure-Rust
+not need a wgpu shader. Hardware H.264 decode (on by default; the View checkbox or
+`--software-decode` turns it off) uses VideoToolbox or VAAPI when present, and falls back
+to software with a log line if the device is missing or later fails. The software decoder is FilmCraft's pure-Rust
 decoder on Linux and Windows and FFmpeg on macOS; `--software-decoder ffmpeg|filmcraft`
 overrides it (on a fast desktop FFmpeg's is ~3× quicker, FilmCraft has no SIMD yet).
 
@@ -234,8 +234,8 @@ cargo build --release -p mirrorwire-app --no-default-features --features gui
 ./target/release/mirrorwire view 'mirrorwire://192.168.1.20:47800?fp=…&code=…'
 ```
 
-On macOS the viewer defaults to VideoToolbox decode and falls back to a
-tuned software decoder (`--software-decode` forces it). A 2011 HD 6770M on
+The viewer defaults to hardware decode (VideoToolbox on macOS, VAAPI on Linux) and falls
+back to software (`--software-decode` forces it). A 2011 HD 6770M on
 OCLP may not expose VT H.264. The OpenGL (glow) path converts YUV→RGB in a
 shader instead of CPU swscale. On an old Intel Mac without Metal, the viewer defaults to OpenGL;
 `--renderer wgpu` tries Metal first.

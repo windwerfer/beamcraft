@@ -66,8 +66,9 @@ xdg-desktop-portal ScreenCast  (one-time dialog, restore token)
        (FEC viewers: 44-byte v2 header, Reed-Solomon             (FEC: rebuild a block from any
         parity per block, overhead from LinkReport)               k of n packets, report loss)
        control stream: Hello/StreamInfo/Ping/Pong/   <------>    over control stream
-       RequestKeyframe/LinkReport/Rejected/Bye                             -> Decoder (FFmpeg; VideoToolbox/VAAPI
-                                                                    with --hwdec, else software)
+       RequestKeyframe/LinkReport/Rejected/Bye                             -> VideoDecoder (FFmpeg VideoToolbox/VAAPI
+                                                                    by default, else FilmCraft or
+                                                                    FFmpeg software, see D-log)
                                                                 -> RgbaConverter (swscale, CPU)
                                                                 -> egui texture, drawn by
                                                                    wgpu (Metal/Vulkan/GL) or glow (OpenGL)
