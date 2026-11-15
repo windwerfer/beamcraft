@@ -74,7 +74,11 @@ FFI, no FFmpeg in the viewer. Steps:
 
 1. Upstream (owner): move the hardware decoders (VA-API, VideoToolbox, Media Foundation, NVDEC)
    out of `filmcraft-platform` into a small crate without the editor dependencies, e.g.
-   `craft-video` features or a `craft-hwdec` crate in craft-libs.
+   `craft-video` features or a `craft-hwdec` crate in craft-libs. Tracked upstream in
+   [filmcraft #2759](https://github.com/storytold/filmcraft/issues/2759) (split
+   `filmcraft-platform`; the owner commented with our VA-API numbers) and a craft-libs
+   feature request for a hardware-decoder crate (owner opened it 2026-11-15). Check both
+   before starting; until one lands there is no light crate to pull.
 2. Here: add it to `mirrorwire-film` as `HwDecoder` with the same `Planes` output (later a GPU
    surface to skip the read-back), plus a `VideoDecoder` impl in `mirrorwire-media`.
    `decode::open_decoder` already picks hardware first and falls back to FilmCraft software,
