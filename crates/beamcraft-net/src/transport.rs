@@ -132,6 +132,9 @@ impl FecState {
         if self.adaptive && self.rate.congested() {
             line += "  ·  lowered: the link is congested";
         }
+        if let Some(cut) = self.rate.last_cut().filter(|_| self.adaptive) {
+            line += &format!("  ·  last cut: {}", cut.reason());
+        }
         line
     }
 
@@ -220,6 +223,7 @@ impl FecControl {
         // The controller runs even when adaptive is off, so switching it on
         // starts from what it learned; it only decides the budget when on.
         s.rate.on_sample(Sample { loss_pct: Some(loss), rtt_ms, backlog_drops: 0 }, now_ms);
+        log_cut(&s);
         s.boost_pct = if unrecoverable > 0 && !s.rate.congested() {
             (s.boost_pct + 5.0 * unrecoverable.min(3) as f32).min(MAX_FEC_BOOST)
         } else {
@@ -240,7 +244,16 @@ impl FecControl {
         }
         if backlog_drops > 0 || s.reports == 0 {
             s.rate.on_sample(Sample { loss_pct: None, rtt_ms, backlog_drops }, now_ms);
+            log_cut(&s);
         }
+    }
+}
+
+/// Log the cut the latest sample made (only when adaptive bitrate is on,
+/// since otherwise the budget does not follow the controller).
+fn log_cut(s: &FecState) {
+    if let Some(cut) = s.rate.cut_by_last_sample().filter(|_| s.adaptive) {
+        tracing::info!("adaptive bitrate: {cut}");
     }
 }
 
@@ -1281,6 +1294,7 @@ mod tests {
         let line = fec.bitrate_line();
         assert!(line.starts_with("Bitrate: target ") && line.contains("of max 40.0 Mbit/s (adaptive)"), "{line}");
         assert!(line.contains("FEC parity") && line.contains("congested"), "{line}");
+        assert!(line.contains("last cut: heavy loss 20.0 % (background 0.0 %)"), "{line}");
         presenter.fec.set_adaptive(false);
         assert_eq!(presenter.fec.snapshot().budget_kbps(), 40_000);
         assert!(presenter.fec.snapshot().bitrate_line().contains("target 40.0 of max 40.0 Mbit/s (fixed)"));

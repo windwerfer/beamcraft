@@ -221,7 +221,9 @@ queue is building), the presenter lowers the rate (down to 3 Mbit/s); on a clean
 it again slowly. FEC parity is counted inside that budget, so more parity never pushes the
 stream above what the link can carry. x264 changes rate without a keyframe; VAAPI has to be
 reopened (one keyframe), at most every 5 s. The presenter window shows
-`Bitrate: target X of max Y Mbit/s (adaptive)`. x264 no longer pads frames to the bitrate
+`Bitrate: target X of max Y Mbit/s (adaptive)`. After a cut it adds why, e.g.
+`last cut: loss 5.2 % (background 1.8 %)` or `rtt 48 ms (min 3 ms)`, and the log has one
+`adaptive bitrate: cut …` line per cut. x264 no longer pads frames to the bitrate
 (`nal-hrd=cbr` filler is gone), so a simple screen sends less than the setting.
 
 ## Build and run: viewer on macOS

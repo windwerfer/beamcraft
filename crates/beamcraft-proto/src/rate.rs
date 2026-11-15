@@ -40,6 +40,69 @@ pub struct Sample {
     pub backlog_drops: u32,
 }
 
+/// What triggered a cut (the first that applies, in this order).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum CutTrigger {
+    /// The presenter dropped delta frames because its send queue was full.
+    Backlog { drops: u32 },
+    /// Loss far above the link's background loss (one report is enough).
+    HeavyLoss,
+    /// Loss above the background loss for two reports in a row.
+    Loss,
+    /// RTT well above the lowest seen (a queue is building up).
+    Rtt,
+}
+
+/// One budget cut and the values that caused it, for logs and the GUI.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Cut {
+    pub at_ms: u64,
+    pub trigger: CutTrigger,
+    pub from_kbps: u32,
+    pub to_kbps: u32,
+    /// Reported loss (percent), if the sample had one.
+    pub loss_pct: Option<f32>,
+    /// Loss treated as background at the time (percent).
+    pub random_loss_pct: f32,
+    pub rtt_ms: Option<f32>,
+    pub min_rtt_ms: Option<f32>,
+}
+
+impl Cut {
+    /// Short reason, e.g. `loss 5.2 % (background 1.8 %)` or `rtt 48 ms (min 3 ms)`.
+    pub fn reason(&self) -> String {
+        let loss = || {
+            format!(
+                "loss {:.1} % (background {:.1} %)",
+                self.loss_pct.unwrap_or(0.0),
+                self.random_loss_pct
+            )
+        };
+        match self.trigger {
+            CutTrigger::Backlog { drops } => format!("send queue full, {drops} frames dropped"),
+            CutTrigger::HeavyLoss => format!("heavy {}", loss()),
+            CutTrigger::Loss => loss(),
+            CutTrigger::Rtt => format!(
+                "rtt {:.0} ms (min {:.0} ms)",
+                self.rtt_ms.unwrap_or(0.0),
+                self.min_rtt_ms.unwrap_or(0.0)
+            ),
+        }
+    }
+}
+
+impl std::fmt::Display for Cut {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "cut {:.1} -> {:.1} Mbit/s: {}",
+            self.from_kbps as f32 / 1000.0,
+            self.to_kbps as f32 / 1000.0,
+            self.reason()
+        )
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AdaptiveBitrate {
     ceiling_kbps: u32,
@@ -53,6 +116,10 @@ pub struct AdaptiveBitrate {
     random_loss_pct: f32,
     /// Loss when the last cut happened, and the samples since (probe).
     probe: Option<Probe>,
+    /// The most recent cut, kept until the next one.
+    last_cut: Option<Cut>,
+    /// Set by `on_sample` when that sample cut the budget.
+    cut_now: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -76,7 +143,19 @@ impl AdaptiveBitrate {
             congested: false,
             random_loss_pct: 0.0,
             probe: None,
+            last_cut: None,
+            cut_now: false,
         }
+    }
+
+    /// The most recent cut and why it happened.
+    pub fn last_cut(&self) -> Option<Cut> {
+        self.last_cut
+    }
+
+    /// The cut made by the latest `on_sample`, if it made one.
+    pub fn cut_by_last_sample(&self) -> Option<Cut> {
+        self.last_cut.filter(|_| self.cut_now)
     }
 
     pub fn ceiling_kbps(&self) -> u32 {
@@ -127,8 +206,10 @@ impl AdaptiveBitrate {
             .unwrap_or(500)
             .min(1_000);
         self.last_sample_ms = Some(now_ms);
+        self.cut_now = false;
+        let rtt_in = s.rtt_ms.filter(|r| r.is_finite() && *r > 0.0);
 
-        let queue_growing = match s.rtt_ms.filter(|r| r.is_finite() && *r > 0.0) {
+        let queue_growing = match rtt_in {
             Some(rtt) => {
                 let min = self.min_rtt_ms.get_or_insert(rtt);
                 // Follow route changes slowly upwards, instantly downwards.
@@ -173,8 +254,31 @@ impl AdaptiveBitrate {
                 } else {
                     0.85
                 };
+                let from_kbps = self.budget_kbps();
                 self.budget_kbps = (self.budget_kbps * factor).max(floor);
                 self.last_cut_ms = Some(now_ms);
+                let trigger = if s.backlog_drops > 0 {
+                    CutTrigger::Backlog {
+                        drops: s.backlog_drops,
+                    }
+                } else if heavy {
+                    CutTrigger::HeavyLoss
+                } else if excess >= 3.0 {
+                    CutTrigger::Loss
+                } else {
+                    CutTrigger::Rtt
+                };
+                self.last_cut = Some(Cut {
+                    at_ms: now_ms,
+                    trigger,
+                    from_kbps,
+                    to_kbps: self.budget_kbps(),
+                    loss_pct: loss,
+                    random_loss_pct: self.random_loss_pct,
+                    rtt_ms: rtt_in,
+                    min_rtt_ms: self.min_rtt_ms,
+                });
+                self.cut_now = true;
                 if loss.is_some() && self.probe.is_none() {
                     self.probe = Some(Probe {
                         loss_before: raw,
@@ -278,6 +382,59 @@ mod tests {
         let mut severe = AdaptiveBitrate::new(40_000);
         let mut t = 0;
         assert_eq!(feed(&mut severe, loss(24.0), 1, &mut t), 24_000);
+    }
+
+    #[test]
+    fn each_cut_records_its_trigger() {
+        let mut c = AdaptiveBitrate::new(40_000);
+        let mut t = 0;
+        feed(&mut c, loss(0.0), 2, &mut t);
+        assert_eq!(c.last_cut(), None);
+        feed(&mut c, loss(5.0), 2, &mut t);
+        let cut = c.cut_by_last_sample().expect("loss cut");
+        assert_eq!(cut.trigger, CutTrigger::Loss);
+        assert_eq!((cut.from_kbps, cut.to_kbps), (40_000, 34_000));
+        assert_eq!(cut.reason(), "loss 5.0 % (background 0.0 %)");
+        assert_eq!(
+            cut.to_string(),
+            "cut 40.0 -> 34.0 Mbit/s: loss 5.0 % (background 0.0 %)"
+        );
+        // The next sample (no cut, gap < 1 s) keeps last_cut but clears the "now" flag.
+        feed(&mut c, loss(5.0), 1, &mut t);
+        assert!(c.cut_by_last_sample().is_none());
+        assert_eq!(c.last_cut(), Some(cut));
+
+        let mut r = AdaptiveBitrate::new(20_000);
+        let rtt = |ms| Sample {
+            loss_pct: Some(0.0),
+            rtt_ms: Some(ms),
+            backlog_drops: 0,
+        };
+        feed(&mut r, rtt(4.0), 4, &mut t);
+        feed(&mut r, rtt(80.0), 2, &mut t);
+        let cut = r.last_cut().expect("rtt cut");
+        assert_eq!(cut.trigger, CutTrigger::Rtt);
+        assert!(
+            cut.reason().starts_with("rtt 80 ms (min "),
+            "{}",
+            cut.reason()
+        );
+
+        let mut b = AdaptiveBitrate::new(20_000);
+        let drop = Sample {
+            loss_pct: None,
+            rtt_ms: None,
+            backlog_drops: 3,
+        };
+        feed(&mut b, drop, 1, &mut t);
+        assert_eq!(
+            b.last_cut().map(|c| c.trigger),
+            Some(CutTrigger::Backlog { drops: 3 })
+        );
+
+        let mut h = AdaptiveBitrate::new(40_000);
+        feed(&mut h, loss(12.0), 1, &mut t);
+        assert_eq!(h.last_cut().map(|c| c.trigger), Some(CutTrigger::HeavyLoss));
     }
 
     #[test]
