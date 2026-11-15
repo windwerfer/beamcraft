@@ -93,11 +93,13 @@ target), **planned**, **idea**. Update this file when an item moves.
 
 0. **TOP PRIORITY: reliable, likable transport (owner, 2026-11-14).** The prototype only
    continues if streaming over real Wi-Fi is stable and pleasant. Do these first, in order:
-   1. **Explain the adaptive-bitrate cuts:** log the reason for each cut (loss / RTT / backlog plus
-      the values) and add a closed-loop simulation test (rate controller + `LossSim`/`BandwidthSim`
-      + encoder model, no QUIC). Find out why "no limit + 2 % random loss" holds only ~17 of
-      40 Mbit (testing.md §3); the 3-point excess-loss rule means 2 % alone cannot cut, so the
-      trigger is RTT, backlog drops or window edge effects. Fix the doc explanation. ~½ day.
+   1. **Explain the adaptive-bitrate cuts: done (2026-11-15).** Every cut is logged with its
+      trigger and values, and the presenter status shows `last cut: <reason>`. The closed-loop
+      simulation is in `rate.rs` (testing.md §3.3). The "~17 of 40 Mbit" was never a cut: the
+      adaptive commit also removed x264's HRD filler, so x264 sends what the test pattern needs
+      (~15 Mbit/s, the same with adaptive off). Re-measured with 0 cuts (testing.md §3.2).
+      Found along the way: 5 % random loss costs three cuts before the probe learns it (cuts
+      continue during the probe); a bottleneck is found only by overrunning it every ~8 s.
    2. **Delay-gradient signal** (GCC-style trendline): one-way delay trend from `capture_us` /
       arrival time reported in the `LinkReport` (protocol bump). Cut only on loss plus rising delay;
       loss with flat delay counts as random. ~250–400 LOC, 1–1.5 days.

@@ -154,10 +154,46 @@ simulator added; "after" is the adaptive-bitrate commit (adaptive on, FEC auto).
 
 Before, the encoder kept sending 40 Mbit/s plus up to 59 % parity into the bottleneck, so
 almost nothing got through. After, the controller backs off to what fits and the stream stays
-watchable; the mean capture→decoded latency stayed at 8–9 ms. Known gap (last row): with pure
-random loss and no bottleneck the controller still oscillates between ~10 and ~27 Mbit/s instead
-of staying at the ceiling, because 2 % loss with no RTT signal on localhost looks like
-congestion until the random-loss baseline is learned; tune on real Wi-Fi (roadmap).
+watchable; the mean capture→decoded latency stayed at 8–9 ms.
+
+**Correction (2026-11-15): the last row is not a controller cut.** The same commit removed
+x264's `nal-hrd=cbr` filler. Before, every frame was padded to the target, hence "40.0 Mbit/s".
+Since then x264 sends only what the test pattern needs. Re-measured on the box (current
+`main`, 30 s, x264 1920×1080, 40 Mbit/s setting; ~45–52 fps, since the VM was slow that day),
+with every cut logged (`adaptive bitrate: cut … : <reason>` in the presenter log; the presenter
+status shows `last cut: <reason>`):
+
+| Run | Cuts | Budget | Sent (mean of 1 s windows) |
+|---|---|---|---|
+| adaptive on, 2 % random | 0 | 40.0 throughout | 15.4 Mbit/s (7–27 per window) |
+| adaptive on, 0 % | 0 | 40.0 | 15.0 Mbit/s |
+| adaptive off, 0 % | 0 | 40.0 (fixed) | 13.1 Mbit/s |
+| adaptive off, 2 % random | 0 | 40.0 (fixed) | 15.0 Mbit/s |
+
+So the ~15–17 Mbit/s is the content, not the rate control. 2 % random loss can't trigger a cut
+on its own: the excess-loss rule needs 3 points above the background loss.
+
+### 3.3 Adaptive bitrate, closed-loop simulation (unit test)
+
+`cargo test -p beamcraft-proto sim_ -- --nocapture` runs the controller against an encoder
+model (60 fps, sends min(target, content demand)), auto FEC parity, `LossSim` and
+`BandwidthSim` (150 ms bucket), with a 500 ms report and a constant 3 ms RTT. There is no QUIC
+and no queueing delay, so the RTT and backlog triggers are not exercised. Results (40 Mbit/s
+ceiling, 60–90 s):
+
+| Link | Cuts (triggers) | Budget at end | Video delivered |
+|---|---|---|---|
+| no limit, 0 % / 2 % random | 0 | 40.0 | 36.8 / 33.8 Mbit/s |
+| no limit, 5 % random | 3 in the first 3 s (loss), then learned as background | 40.0 (min 31.0) | 30.5 Mbit/s |
+| content needs 15 Mbit/s, 2 % random | 0 | 40.0 | 15.2 Mbit/s |
+| 20 Mbit/s bottleneck, 0 % | 13 (heavy loss), sawtooth 16.5 ↔ 22 every ~8 s | 16.8 | 15.8 Mbit/s |
+| 20 Mbit/s bottleneck, 2 % | 5 (heavy loss, loss) | 19.1 | 16.0 Mbit/s |
+| 8 Mbit/s bottleneck, 2 % | 13 (heavy loss, loss) | 7.0 (min 5.6) | 5.8 Mbit/s |
+
+Weak spots this shows (roadmap item 0): cuts keep firing while the random-loss probe is still
+watching, so 5 % random loss costs three cuts before it is learned; and on a bottleneck the
+controller only finds the limit by overrunning it (10–13 % loss every ~8 s), which a delay
+signal (item 0.2) would avoid.
 
 ## 4. Real hardware
 
