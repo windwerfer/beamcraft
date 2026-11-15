@@ -86,8 +86,11 @@ line `fps, Mbit/s, rtt, ms mean/p95/max: …stages…`.
 ## Android: picture frozen, cursor still moves
 
 Read the HUD (tap the video). Line 2 is the phone's decoder: `hardware decoder <name>` or
-`SOFTWARE decoder <name> (<hardware name> failed: <reason>)`. Line 4 is
-`in X  decoded Y  shown Z fps`:
+`SOFTWARE decoder <name> (<hardware name> failed: <reason>)`, then `GPU output` (decoder
+buffers drawn as GL textures) or `CPU copy` (YUV -> RGBA; `GPU output off: <reason>` says
+why). Line 4 is `picture age A ms  reader behind B ms  out of order C`: A is now minus the
+shown picture's arrival time; seconds there while the counters move means stale pictures
+(red line). Line 5 is `in X  decoded Y  shown Z fps`:
 
 - `in` > 0, `decoded` 0, red "decoder has returned no picture": MediaCodec takes input but
   gives nothing back. Check the `input full` / `errors` counters and the decoder name;
@@ -101,6 +104,11 @@ Read the HUD (tap the video). Line 2 is the phone's decoder: `hardware decoder <
   superseded ones are not converted to RGBA.
 - `decoded` > 0 but `shown` 0, red "none were shown": the UI does not pick up pictures (a GUI
   bug, not the network).
+- Counters move, `picture age` is small, but the screen shows old content: the decoder itself
+  outputs stale pictures. Seen with `c2.android.avc.decoder` on the MTK tablet (2026-11-15),
+  starting at a presenter encoder reopen; the same stream decoded fine in FFmpeg. To check:
+  dump the presenter's H.264 and decode it with `ffmpeg`, then compare with an `adb exec-out
+  screencap -p`. Fix in practice: use the hardware decoder with GPU output.
 
 ## Presenter side
 

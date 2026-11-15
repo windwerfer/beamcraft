@@ -88,7 +88,8 @@ list (same Wi-Fi), type the 6-digit pairing code on the keypad the first time, o
 presenter's QR code with the phone's camera app: the `mirrorwire://` link opens MirrorWire
 and connects. Tap the video to show or hide the stats and **Disconnect**. The stats say
 which decoder the phone uses (`hardware decoder …` or `SOFTWARE decoder …`, with the reason a
-hardware one was skipped), the decode time, and `in / decoded / shown fps`; if the picture
+hardware one was skipped, and `GPU output` or `CPU copy` for how pictures reach the screen),
+the decode time, and `in / decoded / shown fps`; if the picture
 stops while frames still arrive, a red line names the stuck step. Logs:
 `adb logcat -s mirrorwire`.
 

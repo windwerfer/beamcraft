@@ -17,6 +17,8 @@ mod app;
 #[cfg(target_os = "android")]
 mod codec;
 #[cfg(target_os = "android")]
+mod gpu;
+#[cfg(target_os = "android")]
 mod session;
 
 /// Entry point called by android-activity's NativeActivity glue.

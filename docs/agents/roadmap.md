@@ -27,7 +27,23 @@ target), **planned**, **idea**. Update this file when an item moves.
 
 ## Next (owner-agreed order)
 
-- **BUG (first): Android MTK tablet, no picture (owner test 2026-11-14, Build 43542749952).**
+- **Android MTK tablet: fixed on the device by GPU output (2026-11-15, debug APK, not yet an
+  owner build).** The MTK hardware decoder now runs: `hardware decoder c2.mtk.avc.decoder, GPU
+  output`, `decode 23.3 ms`, `to RGBA 0.0 ms`, picture age 23–42 ms (software decoder before:
+  80–155 ms decode, 100–300 ms age), live content through 24 VAAPI encoder reopens in 2.5 min
+  (presenter: container build, h264_vaapi, adaptive bitrate). The plane-1 error was the CPU
+  path: the MTK buffers can't be CPU-read; the GPU samples them directly. Findings on the way:
+  - With `c2.android.avc.decoder` the picture froze on old content at an encoder reopen while
+    `decoded/shown` and a small picture age kept going (decoder output, not the UI). The dumped
+    stream decoded fine in FFmpeg. Not fixed; the software decoder is only the fallback now.
+  - h264_vaapi writes `idr_pic_id 0` on every IDR, and the stream has IDRs directly after IDRs
+    (reopen + keyframe request; 25 in 19 846 pictures), which H.264 7.4.3 forbids. Flushing
+    the Android decoder before such an IDR did not cure the software-decoder freeze (13 flushes,
+    still frozen), so it was dropped. Still worth fixing in the presenter (no forced IDR right
+    after an IDR) if another decoder trips on it.
+  - Open: `lost`/`unrecoverable frames` climb (433 in ~2.5 min) at 0 % reported loss, with
+    `waiting key` stretches of up to 5 s; not looked into yet.
+- **Earlier notes: Android MTK tablet, no picture (owner test 2026-11-14, Build 43542749952).**
   HUD: `hardware decoder c2.mtk.avc.decoder (error: plane 1: CodecErrorReclaimed)`,
   `in 12.0 decoded 0.0 shown 0.0`, `key req 212 errors 190`, black screen, the red stall line
   comes and goes every 20–30 s. The previous APK (software `c2.android.avc.decoder`) showed

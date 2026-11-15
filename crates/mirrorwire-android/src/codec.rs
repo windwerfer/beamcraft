@@ -21,7 +21,10 @@ use ndk::media::media_codec::{
 };
 use ndk::media::media_format::MediaFormat;
 use ndk::native_window::NativeWindow;
+use crate::gpu::{GpuFrame, SharedReader};
+use ndk::hardware_buffer::HardwareBufferUsage;
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const MIME: &str = "video/avc";
@@ -29,11 +32,23 @@ const MIME: &str = "video/avc";
 const SOFTWARE_DECODERS: [&str; 2] = ["c2.android.avc.decoder", "OMX.google.h264.decoder"];
 /// Image reader depth: one being converted, one arriving, spares for the codec.
 const READER_IMAGES: i32 = 4;
+/// GPU output keeps up to three images outside the reader (one in the
+/// hand-over channel, one waiting for the UI, one on screen).
+const READER_IMAGES_GPU: i32 = 6;
 
 pub struct DecodedImage {
     pub width: u32,
     pub height: u32,
     pub rgba: Vec<u8>,
+    /// The image reader's timestamp of this picture, in µs. It is the pts
+    /// given to MediaCodec (the viewer's reassembly time), so "now − pts" is
+    /// the picture's age.
+    pub pts_us: u64,
+    /// Newest output buffer rendered to the reader when this picture was
+    /// acquired. Above `pts_us`, the reader handed out an older image.
+    pub rendered_pts_us: u64,
+    /// GPU output: the decoder's buffer itself (`rgba` is empty).
+    pub gpu: Option<crate::gpu::GpuFrame>,
 }
 
 /// What one call did, for the HUD counters.
@@ -44,6 +59,9 @@ pub struct Counts {
     pub rendered: u64,
     /// Pictures decoded but dropped unseen because a newer frame was already waiting.
     pub superseded: u64,
+    /// Output buffers whose pts was below an earlier output's: the decoder
+    /// returns pictures out of input order (H.264 picture order count).
+    pub out_of_order: u64,
 }
 
 /// Result of feeding one access unit.
@@ -59,7 +77,7 @@ pub enum Fed {
 
 struct Active {
     codec: MediaCodec,
-    reader: ImageReader,
+    reader: Arc<SharedReader>,
     _window: NativeWindow,
     entry: CodecEntry,
 }
@@ -82,10 +100,16 @@ pub struct Decoder {
     in_flight: VecDeque<(i64, Instant)>,
     last_latency_ms: Option<f64>,
     last_convert_ms: f64,
+    /// pts of the newest output buffer rendered to the image reader.
+    last_rendered_pts: u64,
+    /// Highest pts MediaCodec has returned so far.
+    max_output_pts: i64,
+    /// Pictures go to the GPU as hardware buffers instead of RGBA.
+    gpu: bool,
 }
 
 impl Decoder {
-    pub fn new(width: u32, height: u32, decoders: &[CodecEntry]) -> Self {
+    pub fn new(width: u32, height: u32, decoders: &[CodecEntry], gpu: bool) -> Self {
         let mut candidates: VecDeque<CodecEntry> = codec_list::ranked(decoders).into();
         if candidates.is_empty() {
             candidates.extend(SOFTWARE_DECODERS.iter().map(|n| CodecEntry {
@@ -108,6 +132,9 @@ impl Decoder {
             in_flight: VecDeque::new(),
             last_latency_ms: None,
             last_convert_ms: 0.0,
+            last_rendered_pts: 0,
+            max_output_pts: i64::MIN,
+            gpu,
         }
     }
 
@@ -142,6 +169,7 @@ impl Decoder {
         if a.entry.low_latency {
             s.push_str(", low-latency");
         }
+        s.push_str(if self.gpu { ", GPU output" } else { ", CPU copy" });
         if let Some(why) = self.skipped.last() {
             s.push_str(&format!(" ({why})"));
         }
@@ -150,14 +178,26 @@ impl Decoder {
 
     fn open_one(&self, entry: &CodecEntry, keyframe: &[u8]) -> Result<Active> {
         let (sps, pps) = h264::parameter_sets(keyframe);
-        let reader = ImageReader::new(
-            self.width,
-            self.height,
-            ImageFormat::YUV_420_888,
-            READER_IMAGES,
-        )
+        let reader = if self.gpu {
+            ImageReader::new_with_usage(
+                self.width,
+                self.height,
+                ImageFormat::PRIVATE,
+                HardwareBufferUsage::GPU_SAMPLED_IMAGE,
+                READER_IMAGES_GPU,
+            )
+        } else {
+            ImageReader::new(
+                self.width,
+                self.height,
+                ImageFormat::YUV_420_888,
+                READER_IMAGES,
+            )
+        }
         .map_err(|e| anyhow!("AImageReader: {e:?}"))?;
+        let reader = SharedReader::new(reader);
         let window = reader
+            .reader()
             .window()
             .map_err(|e| anyhow!("AImageReader window: {e:?}"))?;
         let codec =
@@ -204,6 +244,7 @@ impl Decoder {
                     self.errors = 0;
                     self.unseen = 0;
                     self.in_flight.clear();
+                    self.max_output_pts = i64::MIN;
                     self.update_label();
                     return Ok(());
                 }
@@ -367,6 +408,17 @@ impl Decoder {
             {
                 DequeuedOutputBufferInfoResult::Buffer(out) => {
                     let pts = out.info().presentation_time_us();
+                    if pts < self.max_output_pts {
+                        self.counts.out_of_order += 1;
+                        if self.counts.out_of_order.is_power_of_two() {
+                            tracing::warn!(
+                                "decoder output out of order: pts {} ms behind ({} times)",
+                                (self.max_output_pts - pts) / 1000,
+                                self.counts.out_of_order
+                            );
+                        }
+                    }
+                    self.max_output_pts = self.max_output_pts.max(pts);
                     if let Some(older) = newest.replace(out) {
                         codec
                             .release_output_buffer(older, false)
@@ -398,6 +450,9 @@ impl Decoder {
             }
         }
         if let Some(out) = newest {
+            if want {
+                self.last_rendered_pts = out.info().presentation_time_us().max(0) as u64;
+            }
             codec
                 .release_output_buffer(out, want)
                 .map_err(|e| anyhow!("release output: {e:?}"))?;
@@ -416,17 +471,36 @@ impl Decoder {
         // only right after rendering, otherwise poll() picks it up later.
         let tries = if rendered_now > 0 { 10 } else { 1 };
         for _ in 0..tries {
-            match active.reader.acquire_latest_image() {
+            match active.reader.reader().acquire_latest_image() {
+                Ok(AcquireResult::Image(img)) if self.gpu => {
+                    self.unseen = 0;
+                    let pts_us = img.timestamp().map(|ns| ns.max(0) as u64 / 1000).unwrap_or(0);
+                    let frame = GpuFrame::new(img, active.reader.clone())?;
+                    self.last_convert_ms = 0.0;
+                    return Ok(Some(DecodedImage {
+                        width: frame.width,
+                        height: frame.height,
+                        rgba: Vec::new(),
+                        pts_us,
+                        rendered_pts_us: self.last_rendered_pts,
+                        gpu: Some(frame),
+                    }));
+                }
                 Ok(AcquireResult::Image(img)) => {
                     self.unseen = 0;
                     let rgba = std::mem::take(&mut self.spare);
                     let t = Instant::now();
-                    let picture = convert(&img, rgba)?;
+                    let mut picture = convert(&img, rgba)?;
+                    picture.pts_us = img
+                        .timestamp()
+                        .map(|ns| ns.max(0) as u64 / 1000)
+                        .unwrap_or(0);
+                    picture.rendered_pts_us = self.last_rendered_pts;
                     self.last_convert_ms = t.elapsed().as_secs_f64() * 1000.0;
                     return Ok(Some(picture));
                 }
                 Ok(AcquireResult::MaxImagesAcquired) => {
-                    bail!("image reader: all {READER_IMAGES} images in use")
+                    bail!("image reader: all its images are in use")
                 }
                 Ok(_) => std::thread::sleep(Duration::from_millis(1)),
                 Err(e) => bail!("acquire image: {e:?}"),
@@ -472,6 +546,9 @@ fn convert(img: &Image, mut rgba: Vec<u8>) -> Result<DecodedImage> {
         width: w as u32,
         height: h as u32,
         rgba,
+        pts_us: 0,
+        rendered_pts_us: 0,
+        gpu: None,
     })
 }
 

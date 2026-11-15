@@ -33,6 +33,14 @@ pub struct Status {
     pub decode_ms: f64,
     /// YUV → RGBA conversion of the last picture.
     pub convert_ms: f64,
+    /// Age of the last picture handed to the UI: now − its reassembly time.
+    /// Seconds here while the counters move means stale images are shown.
+    pub picture_age_ms: f64,
+    /// How far the image reader's picture was behind the newest rendered
+    /// output buffer (0 when it hands out the picture just rendered).
+    pub reader_behind_ms: f64,
+    /// Pictures MediaCodec returned with a pts older than an earlier one.
+    pub out_of_order: u64,
     pub lost: u64,
     pub first_frame: bool,
     /// How the presenter sends the cursor: `separate`, `embedded`, `hidden`.
@@ -115,6 +123,7 @@ pub fn spawn(
     target: ConnectInfo,
     name: String,
     decoders: Vec<CodecEntry>,
+    gpu: bool,
     repaint: Arc<dyn Fn() + Send + Sync>,
 ) -> Handle {
     let status = Arc::new(Mutex::new(Status::default()));
@@ -131,7 +140,7 @@ pub fn spawn(
     };
     let channels = Channels { frames_tx, frames_drain: frames, recycle_rx };
     runtime.spawn(async move {
-        let result = run(identity, target, name, decoders, status.clone(), channels, counters, stop, repaint.clone()).await;
+        let result = run(identity, target, name, decoders, gpu, status.clone(), channels, counters, stop, repaint.clone()).await;
         let mut s = status.lock().unwrap_or_else(|e| e.into_inner());
         s.connected = false;
         if let Err(e) = result {
@@ -157,6 +166,7 @@ async fn run(
     target: ConnectInfo,
     name: String,
     decoders: Vec<CodecEntry>,
+    gpu: bool,
     status: Arc<Mutex<Status>>,
     channels: Channels,
     counters: Arc<PipelineCounters>,
@@ -204,7 +214,7 @@ async fn run(
             repaint: dec_repaint,
             counters: dec_counters,
         };
-        decode_loop(decode_rx, info, decoders, ctx)
+        decode_loop(decode_rx, info, decoders, gpu, ctx)
     })?;
 
     let self_healing = session.stream_info.intra_refresh;
@@ -221,12 +231,18 @@ async fn run(
         }
         // Before waiting for a datagram, so a stall with no traffic still updates the HUD.
         if let Some(hud) = pipeline_window.tick(counters.snapshot(), now_us(), 1_000_000) {
+            let mut s = status.lock().unwrap_or_else(|e| e.into_inner());
+            let age = format!(
+                "picture age {:.0} ms, reader behind {:.0} ms, out of order {}",
+                s.picture_age_ms, s.reader_behind_ms, s.out_of_order
+            );
             if let Some(warning) = hud.stall() {
-                tracing::warn!("{warning} [{}]", hud.line().replace('\n', "; "));
+                tracing::warn!("{warning} [{}; {age}]", hud.line().replace('\n', "; "));
             } else {
-                tracing::info!("pipeline: {}", hud.line().replace('\n', "; "));
+                tracing::info!("pipeline: {}; {age}", hud.line().replace('\n', "; "));
             }
-            status.lock().unwrap_or_else(|e| e.into_inner()).pipeline = hud.clone();
+            s.pipeline = hud.clone();
+            drop(s);
         }
         let datagram = tokio::select! {
             d = session.conn.read_datagram() => d,
@@ -337,6 +353,9 @@ impl DecodeCtx {
                 s.decode_ms = ms;
             }
             s.convert_ms = decoder.convert_ms();
+            s.picture_age_ms = now_us().saturating_sub(img.pts_us) as f64 / 1000.0;
+            s.reader_behind_ms = img.rendered_pts_us.saturating_sub(img.pts_us) as f64 / 1000.0;
+            s.out_of_order = decoder.counts().out_of_order;
             s.decoder = decoder.name().to_owned();
             s.first_frame = true;
         }
@@ -360,8 +379,8 @@ const DECODE_QUEUE: usize = 6;
 /// for pictures that finished late.
 const POLL_EVERY: Duration = Duration::from_millis(8);
 
-fn decode_loop(rx: Receiver<AssembledFrame>, info: StreamInfo, decoders: Vec<CodecEntry>, ctx: DecodeCtx) -> Result<()> {
-    let mut decoder = Decoder::new(info.width, info.height, &decoders);
+fn decode_loop(rx: Receiver<AssembledFrame>, info: StreamInfo, decoders: Vec<CodecEntry>, gpu: bool, ctx: DecodeCtx) -> Result<()> {
+    let mut decoder = Decoder::new(info.width, info.height, &decoders, gpu);
     let mut first = true;
     let mut synced = crate::codec::Counts::default();
     loop {

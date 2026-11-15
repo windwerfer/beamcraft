@@ -51,11 +51,26 @@ struct ViewerApp {
     last_uri_check: Instant,
     /// Texture of the separately sent cursor, by image id.
     cursor_tex: Option<(u32, egui::TextureHandle)>,
+    /// Zero-copy video output; `None` means the CPU path (YUV → RGBA texture).
+    gpu: Option<crate::gpu::SharedRenderer>,
+    /// Why the GPU path is off (shown in the HUD).
+    gpu_off: Option<String>,
+    /// The GPU renderer has a picture for this session.
+    gpu_picture: bool,
 }
 
 impl ViewerApp {
     fn new(cc: &eframe::CreationContext<'_>, data_dir: PathBuf) -> Self {
         cc.egui_ctx.set_pixels_per_point(cc.egui_ctx.pixels_per_point().max(2.0));
+        let (gpu, gpu_off) = match cc.gl.as_deref().map(crate::gpu::VideoRenderer::new) {
+            Some(Ok(r)) => (Some(r), None),
+            Some(Err(e)) => (None, Some(format!("{e:#}"))),
+            None => (None, Some("no GL context".into())),
+        };
+        match &gpu_off {
+            None => tracing::info!("video output: GPU (hardware buffers as external textures)"),
+            Some(why) => tracing::warn!("video output: CPU copy, GPU path unavailable: {why}"),
+        }
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
@@ -92,6 +107,9 @@ impl ViewerApp {
             show_overlay: true,
             last_uri_check: Instant::now() - Duration::from_secs(1),
             cursor_tex: None,
+            gpu,
+            gpu_off,
+            gpu_picture: false,
         }
     }
 
@@ -101,7 +119,7 @@ impl ViewerApp {
             target.pairing_code = Some(self.code.clone());
         }
         self.error = None;
-        self.texture = None;
+        self.clear_picture();
         self.cursor_tex = None;
         self.target_name = target.name.clone().unwrap_or_else(|| target.addr.to_string());
         let repaint = ctx.clone();
@@ -119,15 +137,24 @@ impl ViewerApp {
             target,
             "Android".into(),
             decoders,
+            self.gpu.is_some(),
             Arc::new(move || repaint.request_repaint()),
         ));
+    }
+
+    fn clear_picture(&mut self) {
+        self.texture = None;
+        self.gpu_picture = false;
+        if let Some(r) = &self.gpu {
+            r.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        }
     }
 
     fn disconnect(&mut self) {
         if let Some(s) = self.session.take() {
             s.stop();
         }
-        self.texture = None;
+        self.clear_picture();
     }
 
     /// Links opened from outside (QR code scanned with the camera app).
@@ -243,12 +270,24 @@ impl ViewerApp {
     fn video_ui(&mut self, ui: &mut egui::Ui, status: &session::Status) {
         let rect = ui.max_rect();
         ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
-        if let Some(tex_id) = self.texture.as_ref().map(|t| t.id()) {
+        if self.texture.is_some() || self.gpu_picture {
             let (w, h) = (self.picture_size.0.max(1) as f32, self.picture_size.1.max(1) as f32);
             let scale = (rect.width() / w).min(rect.height() / h);
             let size = egui::vec2(w * scale, h * scale);
             let img_rect = egui::Rect::from_center_size(rect.center(), size);
-            ui.painter().image(tex_id, img_rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+            match (&self.texture, &self.gpu) {
+                (Some(tex), _) => {
+                    ui.painter().image(tex.id(), img_rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+                }
+                (None, Some(r)) => {
+                    let r = r.clone();
+                    let callback = eframe::egui_glow::CallbackFn::new(move |_info, painter| {
+                        r.lock().unwrap_or_else(|e| e.into_inner()).paint(painter.gl());
+                    });
+                    ui.painter().add(egui::PaintCallback { rect: img_rect, callback: Arc::new(callback) });
+                }
+                (None, None) => {}
+            }
             if status.cursor_mode == "separate" {
                 let current = status.cursor.as_ref().and_then(|c| c.lock().unwrap_or_else(|e| e.into_inner()).current());
                 if let Some((p, img)) = current {
@@ -265,16 +304,22 @@ impl ViewerApp {
         if self.show_overlay {
             let stream = status.stream.as_ref();
             let text = format!(
-                "{}x{}  {:.1} fps  {:.2} Mbit/s  presenter encodes with {}\n{}\ndecode {:.1} ms  to RGBA {:.1} ms  lost {}\n{}\ncursor {}\n{}\ntap: hide",
+                "{}x{}  {:.1} fps  {:.2} Mbit/s  presenter encodes with {}\n{}\ndecode {:.1} ms  to RGBA {:.1} ms  lost {}\npicture age {:.0} ms  reader behind {:.0} ms  out of order {}\n{}\ncursor {}\n{}\ntap: hide",
                 stream.map(|s| s.width).unwrap_or(0),
                 stream.map(|s| s.height).unwrap_or(0),
                 status.fps,
                 status.mbps,
                 stream.map(|s| s.encoder.as_str()).unwrap_or("?"),
-                status.decoder,
+                match &self.gpu_off {
+                    Some(why) => format!("{} (GPU output off: {why})", status.decoder),
+                    None => status.decoder.clone(),
+                },
                 status.decode_ms,
                 status.convert_ms,
                 status.lost,
+                status.picture_age_ms,
+                status.reader_behind_ms,
+                status.out_of_order,
                 status.pipeline.line(),
                 if status.cursor_mode.is_empty() { "?" } else { status.cursor_mode.as_str() },
                 status.link.line(),
@@ -287,7 +332,8 @@ impl ViewerApp {
             );
             let pos = rect.left_top() + egui::vec2(8.0, 40.0);
             ui.painter().galley(pos, galley.clone(), egui::Color32::from_rgb(0, 255, 120));
-            if let Some(warning) = status.pipeline.stall() {
+            let gpu_error = self.gpu.as_ref().and_then(|r| r.lock().unwrap_or_else(|e| e.into_inner()).error.clone());
+            if let Some(warning) = gpu_error.or_else(|| status.pipeline.stall()).or_else(|| stale_picture_warning(status)) {
                 let warn = ui.painter().layout(warning, egui::FontId::proportional(15.0), egui::Color32::from_rgb(255, 90, 90), rect.width() - 16.0);
                 let at = pos + egui::vec2(0.0, galley.size().y + 8.0);
                 ui.painter().rect_filled(egui::Rect::from_min_size(at, warn.size()).expand(4.0), 4.0, egui::Color32::from_black_alpha(200));
@@ -331,12 +377,24 @@ impl ViewerApp {
 }
 
 impl eframe::App for ViewerApp {
+    fn on_exit(&mut self, gl: Option<&eframe::glow::Context>) {
+        if let (Some(r), Some(gl)) = (&self.gpu, gl) {
+            r.lock().unwrap_or_else(|e| e.into_inner()).destroy(gl);
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.check_pending_uri(&ctx);
         let status = self.session.as_ref().map(|s| s.status());
         if let Some(s) = &self.session {
-            if let Ok(img) = s.frames.try_recv() {
+            if let Ok(mut img) = s.frames.try_recv() {
+                if let (Some(frame), Some(r)) = (img.gpu.take(), &self.gpu) {
+                    self.picture_size = (img.width, img.height);
+                    r.lock().unwrap_or_else(|e| e.into_inner()).push(frame);
+                    self.gpu_picture = true;
+                    s.counters.presented.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                } else {
                 let image = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.rgba);
                 self.picture_size = (img.width, img.height);
                 match &mut self.texture {
@@ -345,6 +403,7 @@ impl eframe::App for ViewerApp {
                 }
                 let _ = s.recycle.try_send(img.rgba);
                 s.counters.presented.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                }
             }
         }
         match status {
@@ -388,4 +447,17 @@ fn keypad(ui: &mut egui::Ui, code: &mut String) {
             ui.end_row();
         }
     });
+}
+
+/// Counters can move while the screen shows an old picture (MTK tablet,
+/// 2026-11-15: 20 fps "shown", the mirrored clock minutes behind). The
+/// picture's own timestamp tells.
+fn stale_picture_warning(status: &session::Status) -> Option<String> {
+    (status.first_frame && status.picture_age_ms > 2000.0).then(|| {
+        format!(
+            "The picture on screen is {:.1} s old: the decoder hands out stale images (reader behind {:.1} s).",
+            status.picture_age_ms / 1000.0,
+            status.reader_behind_ms / 1000.0
+        )
+    })
 }

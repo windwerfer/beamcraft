@@ -156,8 +156,14 @@ crates/mirrorwire-android             android_main -> eframe (glow) -> ViewerApp
               + a decode thread that also polls MediaCodec every 8 ms for late pictures
   codec.rs    AMediaCodec by name from codec_list.rs (hardware decoders first, then
               software; a decoder that fails to start or errors 3x is skipped, the reason
-              is shown) -> AImageReader YUV_420_888 -> yuv.rs -> RGBA. Pictures that a
-              newer queued frame supersedes are released unrendered (no RGBA copy).
+              is shown) -> AImageReader. GPU output (default): PRIVATE buffers with
+              GPU_SAMPLED_IMAGE usage, handed to the UI as gpu.rs GpuFrames. CPU copy
+              (fallback when the EGL/GL extensions are missing): YUV_420_888 -> yuv.rs ->
+              RGBA. Pictures that a newer queued frame supersedes are released unrendered.
+  gpu.rs      AHardwareBuffer -> EGLImage -> GL_TEXTURE_EXTERNAL_OES, drawn in an egui
+              paint callback; the GPU samples the decoder's own layout (MTK tiled YUV) and
+              does YUV -> RGB. Holds all of the crate's `unsafe` (EGL extension calls, Send
+              wrappers for ndk Image/ImageReader).
   codec_list.rs  parses/ranks h264_decoders.txt; vendor low-latency keys (Qualcomm, Exynos)
   stats.rs    pipeline counters -> HUD "in / decoded / shown fps" + a stall warning that
               names the stuck stage
