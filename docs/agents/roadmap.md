@@ -100,13 +100,23 @@ target), **planned**, **idea**. Update this file when an item moves.
       (~15 Mbit/s, the same with adaptive off). Re-measured with 0 cuts (testing.md §3.2).
       Found along the way: 5 % random loss costs three cuts before the probe learns it (cuts
       continue during the probe); a bottleneck is found only by overrunning it every ~8 s.
+      **Tablet over real Wi-Fi (2026-11-15, testing.md §3.4):** the climbing `unrecoverable
+      frames` were the presenter overrunning a ~20–25 Mbit/s link (at connect, and after the
+      budget drifted far above what was sent), amplified by 4–8 forced IDRs a second. Fixed:
+      slow start from 10 Mbit/s, the budget grows only while ≥ 80 % used, at most one forced
+      keyframe per 2 × RTT. 66–198 → 3–41 unrecoverable frames per minute. The rest is item 2.
    2. **Delay-gradient signal** (GCC-style trendline): one-way delay trend from `capture_us` /
       arrival time reported in the `LinkReport` (protocol bump). Cut only on loss plus rising delay;
       loss with flat delay counts as random. ~250–400 LOC, 1–1.5 days.
    3. **Ignore loss right after a keyframe or VAAPI reopen** so reopen, then IDR burst, then another
-      cut can't loop; spread IDR parity across frames. ~60–100 LOC.
+      cut can't loop; spread IDR parity across frames. ~60–100 LOC. (Viewer keyframe requests are
+      now limited to one per 2 × RTT, 2026-11-15.)
    4. **Hysteresis and probing:** remember the last good budget, climb slowly near it, probe with
       extra FEC before more video, start from the last good value per peer. ~100–150 LOC.
+      (Done 2026-11-15: slow start from 10 Mbit/s and no growth while unused. Still open: last
+      good value per peer, probing with FEC. Note for VAAPI: slow start changes the rate each
+      report, but VAAPI reopens at most every 5 s, so it reaches 40 Mbit/s in steps; untested
+      on the T480s.)
    5. **Don't cut when FEC recovered everything** (`unrecoverable == 0`); smooth the loss shared by
       FEC and rate control. ~40–80 LOC.
    6. **Live VAAPI bitrate without a reopen** (VA-API misc-param buffers or a QP clamp), removing

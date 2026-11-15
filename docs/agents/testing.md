@@ -181,19 +181,52 @@ model (60 fps, sends min(target, content demand)), auto FEC parity, `LossSim` an
 and no queueing delay, so the RTT and backlog triggers are not exercised. Results (40 Mbit/s
 ceiling, 60–90 s):
 
-| Link | Cuts (triggers) | Budget at end | Video delivered |
-|---|---|---|---|
-| no limit, 0 % / 2 % random | 0 | 40.0 | 36.8 / 33.8 Mbit/s |
-| no limit, 5 % random | 3 in the first 3 s (loss), then learned as background | 40.0 (min 31.0) | 30.5 Mbit/s |
-| content needs 15 Mbit/s, 2 % random | 0 | 40.0 | 15.2 Mbit/s |
-| 20 Mbit/s bottleneck, 0 % | 13 (heavy loss), sawtooth 16.5 ↔ 22 every ~8 s | 16.8 | 15.8 Mbit/s |
-| 20 Mbit/s bottleneck, 2 % | 5 (heavy loss, loss) | 19.1 | 16.0 Mbit/s |
-| 8 Mbit/s bottleneck, 2 % | 13 (heavy loss, loss) | 7.0 (min 5.6) | 5.8 Mbit/s |
+The sim feeds the sent wire rate into the controller and can add content bursts (busy
+content for 2 s every 10 s). Results with the controller as of 2026-11-15 (slow start from
+10 Mbit/s, budget grows only while ≥ 80 % used), 40 Mbit/s ceiling, 60–90 s; in brackets the
+old controller (starts at the ceiling, grows while unused) where it differs:
 
-Weak spots this shows (roadmap item 0): cuts keep firing while the random-loss probe is still
-watching, so 5 % random loss costs three cuts before it is learned; and on a bottleneck the
-controller only finds the limit by overrunning it (10–13 % loss every ~8 s), which a delay
-signal (item 0.2) would avoid.
+| Link | Cuts (triggers) | Budget at end | Video delivered | Packets lost |
+|---|---|---|---|---|
+| no limit, 0 % / 2 % random | 0 | 40.0 | 36.8 / 33.8 Mbit/s | 0 / 2.0 % |
+| no limit, 5 % random | 3 in the first 3 s (loss), then learned as background | 40.0 (min after 10 s: 11.7; old 31.0, since slow start begins at 10) | 30.4 Mbit/s | 5.1 % |
+| content needs 15 Mbit/s, 2 % random | 0 | 24.4 (old 40.0) | 15.2 Mbit/s | 2.0 % |
+| content 12 Mbit/s with 24 Mbit/s bursts, 20 Mbit/s bottleneck | 4 (old 10) | 21.3 | 13.3 Mbit/s | 0.74 % (old 2.40 %) |
+| 20 Mbit/s bottleneck, 0 % | 11 (heavy loss), sawtooth 16.8 ↔ 22.4 every ~8 s | 22.4 | 16.0 Mbit/s | 1.5 % |
+| 20 Mbit/s bottleneck, 2 % | 3 (heavy loss, loss) | 18.1 | 15.0 Mbit/s | 2.3 % |
+| 8 Mbit/s bottleneck, 2 % | 11 (heavy loss, loss) | 6.4 (min 4.7) | 6.1 Mbit/s | 2.9 % |
+
+Weak spots left (roadmap item 0): cuts keep firing while the random-loss probe is still
+watching, so 5 % random loss costs three cuts before it is learned; and a bottleneck is found
+only by overrunning it, which a delay signal (item 0.2) would avoid.
+
+### 3.4 Real Wi-Fi: presenter in the dev container, Android tablet viewer (2026-11-15)
+
+Presenter: this repo's dev container on the Fedora laptop (host network, Wi-Fi), test pattern,
+x264 1920×1080@60, 40 Mbit/s setting, adaptive bitrate and FEC auto. Viewer: the MTK tablet
+(TB336FU, `c2.mtk.avc.decoder` GPU output) over the same Wi-Fi, debug APK built here. 60 s per
+run, before and after alternated so Wi-Fi conditions are comparable. "before" is 38e3290.
+
+| Run | Unrecoverable frames | Keyframes sent | Viewer requests honoured / ignored | Cuts | 1 s windows with RTT > 150 ms | Video sent (mean) |
+|---|---|---|---|---|---|---|
+| before | 66 | 28 | 21 / – | 12 | 5 | 15.1 Mbit/s |
+| fixed | 3 | 9 | 3 / 5 | 7 | 0 | 14.5 Mbit/s |
+| before | 198 | 46 | 34 / – | 10 | 6 | 13.8 Mbit/s |
+| fixed | 41 | 9 | 4 / 9 | 5 | 2 | 12.6 Mbit/s |
+
+Earlier runs of the old build: 64, 93, 136, 102, 85 unrecoverable frames per 40–75 s.
+
+How the cause was found: the tablet's `/proc/net/snmp` `RcvbufErrors` did not move (no kernel
+drops), the presenter dropped nothing, but QUIC itself lost up to 1369 of 2921 packets in a
+second (the presenter log now shows `quic lost N of M packets, cwnd`). The link to the tablet
+carries ~20–25 Mbit/s; every loss episode was the presenter overrunning it: at connect
+(starting at 40 Mbit/s, ~28 Mbit/s sent, RTT 250+ ms, 20–47 % loss), and later after the
+budget had drifted to ~26 Mbit/s while only ~12 were sent, so the next busy frames jumped to
+~24. Each episode then drew a keyframe request every ~100 ms and 4–8 IDRs a second. Fixed by
+slow start, growing the budget only while it is used, and at most one forced keyframe per
+2 × RTT. Limiting keyframes alone (measured separately) halved the IDRs but not the lost frames
+(119 / 92 vs 102 / 85). The remaining episodes (fixed run 2) are bursts that really used a
+~21–27 Mbit/s budget; the RTT rose 1–1.5 s before the loss each time (roadmap 0.2).
 
 ## 4. Real hardware
 
