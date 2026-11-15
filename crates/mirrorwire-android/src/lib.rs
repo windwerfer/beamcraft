@@ -4,11 +4,12 @@
 //! subclass that only holds a Wi-Fi multicast lock and forwards
 //! `mirrorwire://` links) around this library. Everything else is Rust:
 //! egui UI, QUIC session (`mirrorwire-net`), and H.264 decode through the
-//! platform `MediaCodec` (hardware first, Google's software decoder as the
-//! fallback).
+//! platform `MediaCodec` (hardware first, FilmCraft's pure-Rust decoder from
+//! `mirrorwire-film` as the fallback).
 
 pub mod codec_list;
-pub mod film;
+/// FilmCraft's software decoder; all of its API use lives in `mirrorwire-film`.
+pub use mirrorwire_film as film;
 pub mod h264;
 pub mod stats;
 pub mod yuv;

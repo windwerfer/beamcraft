@@ -2104,10 +2104,10 @@ dependencies = [
  "android_logger",
  "anyhow",
  "bytes",
- "craft-video",
  "crossbeam-channel",
  "eframe",
  "log",
+ "mirrorwire-film",
  "mirrorwire-net",
  "mirrorwire-proto",
  "ndk",
@@ -2137,16 +2137,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "mirrorwire-film"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "craft-video",
+]
+
+[[package]]
 name = "mirrorwire-media"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "ashpd",
  "bytes",
- "craft-video",
  "crossbeam-channel",
  "ffmpeg-next",
  "filmcraft-h264enc",
+ "mirrorwire-film",
  "mirrorwire-proto",
  "pipewire",
  "tokio",

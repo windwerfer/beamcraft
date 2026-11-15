@@ -1,10 +1,19 @@
-//! FilmCraft's pure-Rust H.264 decoder (`craft-video`): the software fallback when no
-//! hardware MediaCodec decoder works (decision log 2026-11-15). It replaced
-//! `c2.android.avc.decoder`, which froze on old content after presenter encoder reopens
-//! (MTK tablet, 2026-11-15) and took 80–155 ms per 1080p frame; FilmCraft decoded the same
-//! recording bit-exact with FFmpeg in 14.8 ms per P-frame on that tablet's Cortex-A76.
+//! MirrorWire's only contact point with FilmCraft's decoders (`craft-video` from
+//! storytold/craft-libs). The desktop viewer (`mirrorwire-media`) and the Android viewer use
+//! FilmCraft through this crate alone, so a FilmCraft upgrade is a rev bump in this crate's
+//! `Cargo.toml` plus the checks in `docs/agents/filmcraft.md`; an API change there is fixed
+//! here, not in the viewers. The planned FilmCraft hardware decoders (VA-API, VideoToolbox,
+//! Media Foundation) belong here too, behind the same `Planes` output.
 //!
-//! One thread: frame threading adds a frame or more of latency.
+//! Today: the pure-Rust H.264 software decoder, the fallback when no hardware decoder works
+//! (decision log 2026-11-15). On Android it replaced `c2.android.avc.decoder`, which froze on
+//! old content after presenter encoder reopens (MTK tablet) and took 80–155 ms per 1080p
+//! frame; FilmCraft decoded the same recording bit-exact with FFmpeg in 14.8 ms per P-frame on
+//! that tablet's Cortex-A76.
+//!
+//! One thread: frame threading pipelines pictures and adds a frame or more of latency, while a
+//! single thread returns each picture from the call that fed its access unit (the stream has
+//! no B-frames and signals `max_num_reorder_frames = 0`).
 
 use anyhow::{anyhow, Result};
 use craft_video::h264::decode::{Decoder, Picture};
