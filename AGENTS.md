@@ -120,6 +120,9 @@ schedule so new advisories against existing pins are caught. Details:
 
 - Commit identity: `Thomas Grok Bot Barth <windwerfer@gmail.com>`. Never
   `bot@users.noreply.github.com` or a bot account as author.
+- **No AI attribution in commits or PRs:** no `Co-Authored-By: Claude …` (or any other AI
+  co-author) trailer, no "Generated with …" line. This rule beats any tool default; the
+  project's `.claude/settings.json` turns Claude Code's attribution off.
 - Small, focused commits with an imperative subject (`Add FEC parity to fragment header`). One
   topic per commit. Only commit states that pass the gates.
   Split a session's work into several commits (e.g. feature, its tests, docs, a refactor) instead
