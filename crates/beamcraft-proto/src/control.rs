@@ -32,6 +32,17 @@ pub enum Control {
         recovered: u32,
         /// Frames that could not be rebuilt.
         unrecoverable: u32,
+        /// Mean one-way queueing delay over the window (µs above the lowest
+        /// delay of the last 30 s; [`crate::delay`]). Absent from older viewers.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        queue_us: Option<u32>,
+        /// Highest queueing delay of a frame in the window (µs).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        queue_max_us: Option<u32>,
+        /// Slope of the queueing delay over the window (µs per second;
+        /// positive = a queue is building up).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        queue_trend_us_per_s: Option<i32>,
     },
     Bye,
 }
@@ -121,7 +132,43 @@ mod tests {
         let Control::StreamInfo(info) = Control::decode_body(info).unwrap() else { panic!() };
         assert_eq!(info.cursor, None);
         assert_eq!(info.fec, None);
-        let report = Control::LinkReport { loss_permille: 20, packets: 1000, recovered: 18, unrecoverable: 0 };
-        assert_eq!(Control::decode_body(&report.encode()[4..]).unwrap(), report);
+        let report = Control::LinkReport {
+            loss_permille: 20,
+            packets: 1000,
+            recovered: 18,
+            unrecoverable: 0,
+            queue_us: None,
+            queue_max_us: None,
+            queue_trend_us_per_s: None,
+        };
+        let body = report.encode();
+        assert!(!std::str::from_utf8(&body[4..]).unwrap().contains("queue"), "old shape on the wire");
+        assert_eq!(Control::decode_body(&body[4..]).unwrap(), report);
+    }
+
+    #[test]
+    fn link_report_queue_delay_is_optional() {
+        // An older viewer's report (no delay fields) parses with None.
+        let old = br#"{"type":"link_report","loss_permille":5,"packets":900,"recovered":2,"unrecoverable":0}"#;
+        let Control::LinkReport { queue_us, queue_max_us, queue_trend_us_per_s, .. } = Control::decode_body(old).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!((queue_us, queue_max_us, queue_trend_us_per_s), (None, None, None));
+        // The new fields round-trip, and their names are pinned.
+        let new = Control::LinkReport {
+            loss_permille: 5,
+            packets: 900,
+            recovered: 2,
+            unrecoverable: 0,
+            queue_us: Some(12_000),
+            queue_max_us: Some(30_000),
+            queue_trend_us_per_s: Some(-4_500),
+        };
+        let body = new.encode();
+        let text = std::str::from_utf8(&body[4..]).unwrap();
+        assert!(text.contains(r#""queue_us":12000"#) && text.contains(r#""queue_max_us":30000"#), "{text}");
+        assert!(text.contains(r#""queue_trend_us_per_s":-4500"#), "{text}");
+        assert_eq!(Control::decode_body(&body[4..]).unwrap(), new);
     }
 }

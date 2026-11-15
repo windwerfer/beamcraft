@@ -266,7 +266,9 @@ async fn run(
             s.stream = Some(info);
         }
         if let Some(w) = link_window.tick(reassembler.link_stats(), now_us()) {
-            session.report_link(&w);
+            let delay = reassembler.take_delay();
+            link_window.hud.queue = delay;
+            session.report_link(&w, delay);
             status.lock().unwrap_or_else(|e| e.into_inner()).link = link_window.hud;
         }
         if session.handle_pointer_datagram(&datagram) {

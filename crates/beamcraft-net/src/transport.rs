@@ -19,7 +19,8 @@ use beamcraft_proto::cursor::{
 };
 use beamcraft_proto::fec::{fec_fragment, FecHeader, FecMode, LinkStats, CAP_FEC};
 use beamcraft_proto::fragment::{fragment, FrameTiming};
-use beamcraft_proto::rate::{AdaptiveBitrate, Sample};
+use beamcraft_proto::delay::DelaySummary;
+use beamcraft_proto::rate::{AdaptiveBitrate, Queue, Sample};
 use beamcraft_proto::stats::StageStats;
 use beamcraft_proto::PROTOCOL_VERSION;
 use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
@@ -109,6 +110,8 @@ pub struct FecState {
     /// What the presenter sent on the wire (video + parity, kbit/s) in the
     /// last send window; the budget only grows while it is used.
     pub sent_kbps: Option<f32>,
+    /// The viewer's latest one-way queueing delay (newer viewers only).
+    pub queue: Option<Queue>,
 }
 
 impl Default for FecState {
@@ -126,6 +129,7 @@ impl Default for FecState {
             rate: AdaptiveBitrate::new(40_000),
             rtt_ms: 0.0,
             sent_kbps: None,
+            queue: None,
         }
     }
 }
@@ -236,7 +240,14 @@ impl FecControl {
         s.mode.overhead(s.loss_pct, s.boost_pct, keyframe)
     }
 
-    fn on_report(&self, loss_permille: u32, recovered: u32, unrecoverable: u32, rtt: Option<Duration>) {
+    fn on_report(
+        &self,
+        loss_permille: u32,
+        recovered: u32,
+        unrecoverable: u32,
+        queue: Option<Queue>,
+        rtt: Option<Duration>,
+    ) {
         let now_ms = self.now_ms();
         let mut s = self.lock();
         let loss = (loss_permille.min(1000) as f32) / 10.0;
@@ -258,7 +269,10 @@ impl FecControl {
         // The controller runs even when adaptive is off, so switching it on
         // starts from what it learned; it only decides the budget when on.
         let sent_kbps = s.sent_kbps;
-        s.rate.on_sample(Sample { loss_pct: Some(loss), rtt_ms, backlog_drops: 0, sent_kbps }, now_ms);
+        if queue.is_some() {
+            s.queue = queue;
+        }
+        s.rate.on_sample(Sample { loss_pct: Some(loss), rtt_ms, backlog_drops: 0, sent_kbps, queue }, now_ms);
         log_cut(&s);
         s.boost_pct = if unrecoverable > 0 && !s.rate.congested() {
             (s.boost_pct + 5.0 * unrecoverable.min(3) as f32).min(MAX_FEC_BOOST)
@@ -280,7 +294,7 @@ impl FecControl {
             s.rtt_ms = r;
         }
         if backlog_drops > 0 || s.reports == 0 {
-            s.rate.on_sample(Sample { loss_pct: None, rtt_ms, backlog_drops, sent_kbps: Some(sent_kbps) }, now_ms);
+            s.rate.on_sample(Sample { loss_pct: None, rtt_ms, backlog_drops, sent_kbps: Some(sent_kbps), queue: None }, now_ms);
             log_cut(&s);
         }
     }
@@ -598,12 +612,26 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
                         );
                     }
                 }
-                Control::LinkReport { loss_permille, packets, recovered, unrecoverable } => {
+                Control::LinkReport {
+                    loss_permille,
+                    packets,
+                    recovered,
+                    unrecoverable,
+                    queue_us,
+                    queue_max_us,
+                    queue_trend_us_per_s,
+                } => {
+                    let queue = queue_us.map(|mean_us| Queue {
+                        mean_ms: mean_us as f32 / 1000.0,
+                        max_ms: queue_max_us.unwrap_or(mean_us) as f32 / 1000.0,
+                        trend_ms_per_s: queue_trend_us_per_s.unwrap_or(0) as f32 / 1000.0,
+                    });
                     tracing::debug!(
-                        "viewer link: loss {:.1}% of {packets} packets, {recovered} rebuilt, {unrecoverable} frames lost",
-                        loss_permille as f32 / 10.0
+                        "viewer link: loss {:.1}% of {packets} packets, {recovered} rebuilt, {unrecoverable} frames lost{}",
+                        loss_permille as f32 / 10.0,
+                        queue.map_or(String::new(), |q| format!(", {q}"))
                     );
-                    shared.fec.on_report(loss_permille, recovered, unrecoverable, Some(conn.rtt()));
+                    shared.fec.on_report(loss_permille, recovered, unrecoverable, queue, Some(conn.rtt()));
                 }
                 Control::Bye => return Ok::<_, anyhow::Error>(()),
                 other => tracing::debug!("ignoring {other:?}"),
@@ -822,12 +850,13 @@ fn fec_summary(s: &FecState, parity: usize, packets: usize) -> String {
 /// `bitrate 18.0 of 40.0 Mbit/s (adaptive), encoder 15.2, rtt 6 ms`
 pub fn rate_summary(s: &FecState) -> String {
     format!(
-        "bitrate {:.1} of {:.1} Mbit/s ({}), encoder {:.1}, rtt {:.0} ms{}",
+        "bitrate {:.1} of {:.1} Mbit/s ({}), encoder {:.1}, rtt {:.0} ms{}{}",
         s.budget_kbps() as f32 / 1000.0,
         s.rate.ceiling_kbps() as f32 / 1000.0,
         if s.adaptive { "adaptive" } else { "fixed" },
         s.encoder_kbps() as f32 / 1000.0,
         s.rtt_ms,
+        s.queue.map_or(String::new(), |q| format!(", viewer {q}")),
         if s.adaptive && s.rate.congested() { ", congested" } else { "" }
     )
 }
@@ -957,7 +986,7 @@ impl ViewerSession {
 
     /// Tell the presenter how the link did over `window` (a difference of
     /// [`LinkStats`] snapshots). No-op for older presenters.
-    pub fn report_link(&self, window: &LinkStats) {
+    pub fn report_link(&self, window: &LinkStats, delay: Option<DelaySummary>) {
         if self.presenter_fec().is_none() || window.expected == 0 {
             return;
         }
@@ -967,6 +996,9 @@ impl ViewerSession {
             packets: window.expected.min(u32::MAX as u64) as u32,
             recovered: window.recovered.min(u32::MAX as u64) as u32,
             unrecoverable: window.unrecoverable_frames.min(u32::MAX as u64) as u32,
+            queue_us: delay.map(|d| d.mean_us),
+            queue_max_us: delay.map(|d| d.max_us),
+            queue_trend_us_per_s: delay.map(|d| d.trend_us_per_s),
         });
     }
 
@@ -1324,7 +1356,7 @@ mod tests {
         assert_eq!(frame.0.data, payload);
         assert_eq!(frame.1.recovered, 1);
         assert!(presenter.fec.snapshot().viewer_fec);
-        viewer.report_link(&LinkStats { expected: 1000, received: 950, recovered: 40, ..Default::default() });
+        viewer.report_link(&LinkStats { expected: 1000, received: 950, recovered: 40, ..Default::default() }, None);
         let deadline = Instant::now() + Duration::from_secs(5);
         while presenter.fec.snapshot().reports == 0 {
             assert!(Instant::now() < deadline, "link report never arrived");
@@ -1334,18 +1366,22 @@ mod tests {
         assert!((fec.loss_pct - 5.0).abs() < 0.01, "{}", fec.loss_pct);
         assert_eq!(fec.overheads(), Some((0.25, 0.5)));
         // Lost frames on a link that is not congested: more parity.
-        viewer.report_link(&LinkStats { expected: 1000, received: 990, unrecoverable_frames: 1, ..Default::default() });
+        // With the viewer's queueing delay (a small, falling queue).
+        let delay = DelaySummary { frames: 30, mean_us: 5_000, max_us: 12_000, trend_us_per_s: -1_500 };
+        viewer.report_link(&LinkStats { expected: 1000, received: 990, unrecoverable_frames: 1, ..Default::default() }, Some(delay));
         while presenter.fec.snapshot().reports < 2 {
             assert!(Instant::now() < deadline, "second link report never arrived");
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
         let fec = presenter.fec.snapshot();
         assert_eq!((fec.boost_pct, fec.unrecoverable), (5.0, 1));
+        assert_eq!(fec.queue, Some(Queue { mean_ms: 5.0, max_ms: 12.0, trend_ms_per_s: -1.5 }));
+        assert!(rate_summary(&fec).ends_with("viewer queue 5 ms (max 12, -2 ms/s)"), "{}", rate_summary(&fec));
         assert!(!fec.rate.congested());
         // Sustained heavy loss is congestion: the budget is cut and parity
         // is not raised further (it would add load).
         for n in 3..=4 {
-            viewer.report_link(&LinkStats { expected: 1000, received: 800, unrecoverable_frames: 2, ..Default::default() });
+            viewer.report_link(&LinkStats { expected: 1000, received: 800, unrecoverable_frames: 2, ..Default::default() }, None);
             while presenter.fec.snapshot().reports < n {
                 assert!(Instant::now() < deadline, "link report {n} never arrived");
                 tokio::time::sleep(Duration::from_millis(10)).await;

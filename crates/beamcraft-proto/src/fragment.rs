@@ -3,6 +3,7 @@
 //! frames, detect gaps, and measure per-stage latency without extra round trips.
 
 use bytes::{BufMut, Bytes, BytesMut};
+use crate::delay::{DelayMeter, DelaySummary};
 use crate::fec::{block_len, recover_block, FecHeader, LinkStats};
 use std::collections::BTreeMap;
 
@@ -254,6 +255,7 @@ pub struct Reassembler {
     meter: BTreeMap<u32, (u32, u32, u32)>,
     newest: u32,
     stats: LinkStats,
+    delay: DelayMeter,
 }
 
 impl Reassembler {
@@ -265,6 +267,7 @@ impl Reassembler {
             meter: BTreeMap::new(),
             newest: 0,
             stats: LinkStats::default(),
+            delay: DelayMeter::default(),
         }
     }
 
@@ -272,6 +275,7 @@ impl Reassembler {
         let packet = parse_packet(&datagram)?;
         let offset = datagram.len() - packet.payload.len();
         self.meter(&packet);
+        self.delay.on_packet(packet.frame_id, packet.timing.sent_us, now_us);
         if let Some(last) = self.last_delivered {
             if packet.frame_id <= last {
                 return None;
@@ -330,6 +334,11 @@ impl Reassembler {
     /// [`METER_LAG`] frames old, so late packets still count as received).
     pub fn link_stats(&self) -> LinkStats {
         self.stats
+    }
+
+    /// Queueing delay since the previous call (see [`crate::delay`]).
+    pub fn take_delay(&mut self) -> Option<DelaySummary> {
+        self.delay.take()
     }
 
     fn meter(&mut self, p: &Packet<'_>) {

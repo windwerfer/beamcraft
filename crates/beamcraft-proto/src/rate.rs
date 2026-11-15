@@ -57,6 +57,30 @@ pub struct Sample {
     /// What the presenter actually sent (video + parity, kbit/s) over the
     /// last window; `None` when unknown (then the budget counts as used).
     pub sent_kbps: Option<f32>,
+    /// The viewer's one-way queueing delay over its report window; `None`
+    /// from older viewers and in the presenter's own samples. Not used by
+    /// the controller yet.
+    pub queue: Option<Queue>,
+}
+
+/// One-way queueing delay as the viewer measured it (`link_report`,
+/// [`crate::delay`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct Queue {
+    pub mean_ms: f32,
+    pub max_ms: f32,
+    /// Slope over the window: positive = a queue is building up.
+    pub trend_ms_per_s: f32,
+}
+
+impl std::fmt::Display for Queue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "queue {:.0} ms (max {:.0}, {:+.0} ms/s)",
+            self.mean_ms, self.max_ms, self.trend_ms_per_s
+        )
+    }
 }
 
 /// What triggered a cut (the first that applies, in this order).
@@ -395,6 +419,7 @@ mod tests {
             rtt_ms: Some(5.0),
             backlog_drops: 0,
             sent_kbps: None,
+            queue: None,
         }
     }
 
@@ -462,6 +487,7 @@ mod tests {
             rtt_ms: Some(ms),
             backlog_drops: 0,
             sent_kbps: None,
+            queue: None,
         };
         feed(&mut r, rtt(4.0), 4, &mut t);
         feed(&mut r, rtt(80.0), 2, &mut t);
@@ -479,6 +505,7 @@ mod tests {
             rtt_ms: None,
             backlog_drops: 3,
             sent_kbps: None,
+            queue: None,
         };
         feed(&mut b, drop, 1, &mut t);
         assert_eq!(
@@ -530,6 +557,7 @@ mod tests {
             rtt_ms: Some(5.0),
             backlog_drops: 0,
             sent_kbps: Some(k),
+            queue: None,
         };
         let mut t = 0;
         // Slow start: 10 Mbit/s budget, a static screen sends 2: no growth.
@@ -594,6 +622,7 @@ mod tests {
             rtt_ms: Some(ms),
             backlog_drops: 0,
             sent_kbps: None,
+            queue: None,
         };
         feed(&mut c, rtt(4.0), 4, &mut t);
         assert_eq!(c.budget_kbps(), 20_000);
@@ -604,6 +633,7 @@ mod tests {
             rtt_ms: None,
             backlog_drops: 2,
             sent_kbps: None,
+            queue: None,
         };
         assert_eq!(feed(&mut b, drop, 1, &mut t), 17_000);
         // Garbage input is ignored, not a panic.
@@ -612,6 +642,7 @@ mod tests {
             rtt_ms: Some(f32::INFINITY),
             backlog_drops: 0,
             sent_kbps: None,
+            queue: None,
         };
         feed(&mut b, junk, 3, &mut t);
     }
@@ -741,6 +772,7 @@ mod tests {
                         rtt_ms: Some(link.rtt_ms),
                         backlog_drops: 0,
                         sent_kbps: Some(sent_kbps),
+                        queue: None,
                     },
                     now_ms,
                 );

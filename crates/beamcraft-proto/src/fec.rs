@@ -397,6 +397,9 @@ pub struct LinkHud {
     pub recovered_per_s: f32,
     /// Frames lost since connecting.
     pub unrecoverable: u64,
+    /// Queueing delay of the last window (set by the caller from
+    /// [`crate::fragment::Reassembler::take_delay`]).
+    pub queue: Option<crate::delay::DelaySummary>,
 }
 
 impl LinkHud {
@@ -410,8 +413,16 @@ impl LinkHud {
         } else {
             "fec off".to_owned()
         };
+        let queue = self.queue.map_or(String::new(), |q| {
+            format!(
+                "  queue {:.0} ms (max {:.0}, {:+.0} ms/s)",
+                q.mean_us as f32 / 1000.0,
+                q.max_us as f32 / 1000.0,
+                q.trend_us_per_s as f32 / 1000.0
+            )
+        });
         format!(
-            "{fec}  loss {:.1}%  unrecoverable frames {}",
+            "{fec}  loss {:.1}%  unrecoverable frames {}{queue}",
             self.loss_pct, self.unrecoverable
         )
     }
@@ -443,6 +454,7 @@ impl LinkWindow {
             loss_pct: window.loss_pct(),
             recovered_per_s: window.recovered as f32 * 1e6 / elapsed as f32,
             unrecoverable: now.unrecoverable_frames,
+            queue: None,
         };
         self.last = now;
         self.start_us = Some(now_us);

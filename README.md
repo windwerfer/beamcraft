@@ -212,7 +212,9 @@ viewer reports, and further while frames still can't be rebuilt (bursts; up to 3
 sends no parity. Parity is paid from the bitrate (the encoder gets the rest). Older viewers get plain packets.
 FEC can be changed live in the presenter's Quality panel (saved in `settings.json`). The presenter
 window shows `FEC: auto · parity +N% delta / +M% keyframes · viewer loss … · rebuilt … packets/s ·
-unrecoverable frames …`; the viewer overlay shows `fec +N%  rebuilt N/s  loss N%  unrecoverable frames N`.
+unrecoverable frames …`; the viewer overlay shows `fec +N%  rebuilt N/s  loss N%  unrecoverable frames N`,
+and with a current viewer `queue N ms (max N, +N ms/s)`: how long video packets waited in a queue
+on the way (Wi-Fi, router), and whether that queue is growing.
 
 **Adaptive bitrate** (default on; `--adaptive-bitrate on|off`, `BEAMCRAFT_ADAPTIVE_BITRATE`,
 a checkbox in the Quality panel, saved in `settings.json`). The bitrate setting is the maximum.

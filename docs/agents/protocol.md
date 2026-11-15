@@ -33,7 +33,7 @@ followed by a JSON body (`serde`, `tag = "type"`, `snake_case`). Bodies over
 | `rejected` | presenter → viewer | `reason` (shown to the user) |
 | `stream_info` | presenter → viewer | `width`, `height`, `fps`, `codec`, `encoder`, `bitrate_kbps`, `intra_refresh`, `cursor` (optional: `separate`, `embedded`, `hidden`; absent = embedded), `fec` (optional: the presenter's FEC setting `off`/`auto`/`20%`, informational; present = the presenter understands `link_report`). Sent after `hello`, and **again** whenever it changes (older viewers ignore the repeat) |
 | `request_keyframe` | viewer → presenter | `reason`. The presenter forces at most one keyframe per 2 × RTT (500 ms–2 s) per viewer and ignores requests in between (the viewer keeps asking every ~100 ms while it waits, so a lost keyframe is still replaced) |
-| `link_report` | viewer → presenter | `loss_permille`, `packets`, `recovered`, `unrecoverable` over the last ~0.5 s. Sent **only** if `stream_info.fec` is present: an older presenter fails on unknown message types |
+| `link_report` | viewer → presenter | `loss_permille`, `packets`, `recovered`, `unrecoverable` over the last ~0.5 s; optional `queue_us`, `queue_max_us` (u32, µs) and `queue_trend_us_per_s` (i32): the one-way queueing delay of the window's frames (mean, max) and its least-squares slope, see §3c. Absent from older viewers; older presenters ignore them. Sent **only** if `stream_info.fec` is present: an older presenter fails on unknown message types |
 | `ping` / `pong` | viewer ↔ presenter | `t_viewer_us`, `t_presenter_us` (clock offset + RTT) |
 | `bye` | either | — |
 
@@ -155,6 +155,18 @@ live (no keyframe); VAAPI/FilmCraft reopen (keyframe), at most every 5 s and onl
 **Loss accounting**: the viewer counts, per frame, packets sent (`data_count + parity_count`)
 against packets received, once the frame is 30 frames old (so late packets still count). Frames
 that never arrive at all are not in the packet count; they show up as unrecoverable frames.
+
+## 3c. One-way queueing delay (`beamcraft-proto/src/delay.rs`)
+
+The viewer measures, for the **first packet that arrives of each new frame**, `arrival − sent_us`
+(its clock minus the presenter's; the unknown clock offset is constant). The lowest value of the
+last 30 s (per-second minima) is the empty-queue baseline; `delay − baseline` is the time the
+packet waited in a queue. The last packet is not used: it also waits for the frame's own packets
+to cross the link, which is not a queue left by earlier frames. A value above 2 s is taken as a
+clock step and restarts the baseline; clock drift (ppm) is absorbed by the 30 s window. Per
+`link_report` window: mean and max of the frames' queueing delay, and the least-squares slope over
+arrival time (µs per s). The viewer overlay shows it as `queue N ms (max N, +N ms/s)`. No wire
+change for video packets; `sent_us` was always there.
 
 ## 4. Versioning rules
 

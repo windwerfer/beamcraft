@@ -297,7 +297,9 @@ async fn session(
             }
         }
         if let Some(window) = link_window.tick(reassembler.link_stats(), now_us()) {
-            session.report_link(&window);
+            let delay = reassembler.take_delay();
+            link_window.hud.queue = delay;
+            session.report_link(&window, delay);
             status.lock().expect("status lock").link = link_window.hud;
         }
         if stream_updates.has_changed().unwrap_or(false) {
