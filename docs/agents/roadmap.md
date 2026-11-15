@@ -219,6 +219,24 @@ target), **planned**, **idea**. Update this file when an item moves.
   SIMD (desktop cost); a small Cortex-A55 core does ~20 fps, so the Android decode thread
   should stay on a big core (not controlled yet); not tested on Windows or with a real screen
   on the tablet's software path; GUI selector on the desktop not built (CLI only).
+- **Hardware decode without FFmpeg (owner request 2026-11-15; measured, not built).** Goal: a
+  pure-Rust stack except the unavoidable OS driver FFI. FilmCraft's `filmcraft-platform` has
+  VA-API (Linux, libva loaded at run time), NVDEC, VideoToolbox and Media Foundation decoders
+  behind a pure-Rust H.264 parser, with a transparent software fallback (`HybridDecoder`).
+  Measured on the build box (Intel iHD, container) with the 2804-frame h264_vaapi recording,
+  one access unit per call (`VaDecoder` via `NalStreamInfo::from_avcc`, Annex B converted to
+  4-byte length prefixes): 2804 pictures, 0 errors, **bit-exact with FFmpeg's software
+  decoder**, 6.8 ms per access unit (p95 9.2) including the read-back to planar YUV, no output
+  delay; for comparison our FFmpeg VAAPI path measured 8.9 ms in the loopback (different
+  setup). Blocker: the dependency. `filmcraft-platform` depends on FilmCraft's export/codec
+  stack and adds ~50 crates (symphonia audio, captions, project, render, ProRes, DNG,
+  Matroska, …); cold release build 6 min 40 s. The VA-API part itself is ~1.6k lines needing
+  only `craft-video`'s parsers. Next step (owner, upstream): move the hardware decoders into a
+  small crate (e.g. `craft-video` features `vaapi`/`videotoolbox`/`media-foundation`, or a
+  `craft-hwdec` crate in craft-libs) without the editor dependencies; then the viewer's
+  `VideoDecoder` gets a FilmCraft hardware backend and FFmpeg leaves the viewer. Encoding:
+  FilmCraft has no VA-API encoder (VideoToolbox and NVENC only), so the presenter keeps FFmpeg
+  for VAAPI encode, the zero-copy VPP path and x264 until one exists.
 - **Rename to BeamCraft (owner 2026-11-14):** the owner's favourite (alternatives: WireCraft
   etc.). Steps: check the name is free (GitHub, Flathub, app stores, trademarks); then do one
   rename before friends install it: app id, mDNS service, ALPN, URI scheme, config dir (D5),
