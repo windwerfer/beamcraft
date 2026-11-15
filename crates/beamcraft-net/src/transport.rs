@@ -661,6 +661,8 @@ async fn send_loop(
     let (mut window_frames, mut window_bytes, mut window_keyframes) = (0u32, 0usize, 0u32);
     let mut backlog_drops = 0u32;
     let (mut window_parity, mut window_packets) = (0usize, 0usize);
+    // QUIC's own packet counters at the last window: (connection, sent, lost).
+    let mut quic_prev = (0usize, 0u64, 0u64);
 
     while let Some(frame) = frames.recv().await {
         let Some((conn, viewer_fec)) = current.borrow().as_ref().map(|v| (v.conn.clone(), v.fec)) else { continue };
@@ -727,13 +729,27 @@ async fn send_loop(
         let elapsed = window_start.elapsed();
         if elapsed >= Duration::from_secs(1) {
             let secs = elapsed.as_secs_f64();
+            // Loss as QUIC sees it (packets never acknowledged): on-air loss,
+            // as opposed to what the viewer counts after reassembly.
+            let path = conn.stats().path;
+            if quic_prev.0 != conn.stable_id() {
+                quic_prev = (conn.stable_id(), 0, 0);
+            }
+            let (quic_sent, quic_lost) = (
+                path.sent_packets.saturating_sub(quic_prev.1),
+                path.lost_packets.saturating_sub(quic_prev.2),
+            );
+            quic_prev = (conn.stable_id(), path.sent_packets, path.lost_packets);
             tracing::info!(
-                "presenter: {:.1} fps, {:.2} Mbit/s, {} keyframes, {} dropped for backlog, mtu {}, {}, ms mean/p95/max:{}",
+                "presenter: {:.1} fps, {:.2} Mbit/s, {} keyframes, {} dropped for backlog, mtu {}, quic lost {} of {} packets, cwnd {} KiB, {}, ms mean/p95/max:{}",
                 window_frames as f64 / secs,
                 window_bytes as f64 * 8.0 / secs / 1e6,
                 window_keyframes,
                 backlog_drops,
                 max,
+                quic_lost,
+                quic_sent,
+                path.cwnd / 1024,
                 fec_summary(&fec.snapshot(), window_parity, window_packets),
                 stats.report()
             );
