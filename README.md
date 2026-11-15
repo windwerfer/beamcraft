@@ -87,10 +87,11 @@ then Artifacts). A `v*` tag also attaches them to a GitHub Release:
 list (same Wi-Fi), type the 6-digit pairing code on the keypad the first time, or scan the
 presenter's QR code with the phone's camera app: the `mirrorwire://` link opens MirrorWire
 and connects. Tap the video to show or hide the stats and **Disconnect**. The stats say
-which decoder the phone uses (`hardware decoder …` or `SOFTWARE decoder …`, with the reason a
-hardware one was skipped, and `GPU output` or `CPU copy` for how pictures reach the screen),
+which decoder the phone uses (`hardware decoder …`, or `SOFTWARE decoder FilmCraft (pure Rust)`
+when no hardware decoder works, with the reason a hardware one was skipped, and `GPU output` or `CPU copy` for how pictures reach the screen),
 the decode time, and `in / decoded / shown fps`; if the picture
-stops while frames still arrive, a red line names the stuck step. Logs:
+stops while frames still arrive, a red line names the stuck step. The home-screen switch
+**Software decoder (FilmCraft)** skips the hardware decoder, for comparison. Logs:
 `adb logcat -s mirrorwire`.
 
 **Opening the unsigned Mac app.** The builds are ad-hoc signed, not notarized.
@@ -135,7 +136,9 @@ no Metal. If wgpu fails to start, the app retries with OpenGL. Override with
 the CPU (swscale) before it is uploaded as an egui texture, so the OpenGL path does
 not need a wgpu shader. Hardware H.264 decode (`--hwdec` or the View checkbox) uses
 VideoToolbox or VAAPI when present, and falls back to software with a log line if
-the device is missing or later fails.
+the device is missing or later fails. The software decoder is FilmCraft's pure-Rust
+decoder on Linux and Windows and FFmpeg on macOS; `--software-decoder ffmpeg|filmcraft`
+overrides it (on a fast desktop FFmpeg's is ~3× quicker, FilmCraft has no SIMD yet).
 
 The presenter can also be started from a terminal:
 

@@ -22,6 +22,9 @@ ffmpeg-next = "9"
 mirrorwire-proto = { path = "../mirrorwire-proto" }
 # Not on crates.io; pinned to a reviewed commit (deny.toml allows only this git source
 # and craft-libs, which it depends on).
+# FilmCraft's pure-Rust H.264 decoder (MIT OR Apache-2.0, no unsafe): the software decoder on
+# Linux and Windows (decision log 2026-11-15). Same craft-libs commit the encoder pins.
+craft-video = { git = "https://github.com/storytold/craft-libs", rev = "09dcbc225b95232998498a40ca56e24716571d53", default-features = false, features = ["h264-decode"] }
 filmcraft-h264enc = { git = "https://github.com/storytold/filmcraft", rev = "cb9783ba1a2b658ba2adc7cb131226d156bb2356", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]

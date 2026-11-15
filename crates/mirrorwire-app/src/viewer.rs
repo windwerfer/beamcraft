@@ -1,7 +1,7 @@
 use crate::ViewArgs;
 use anyhow::{anyhow, Result};
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
-use mirrorwire_media::decode::{luma, Decoder, HwDecode, RgbaConverter, YuvImage};
+use mirrorwire_media::decode::{self, HwDecode, RgbaConverter, SoftwareDecoder, YuvImage};
 use mirrorwire_media::pattern::read_marker;
 use mirrorwire_net::identity::Identity;
 use mirrorwire_net::pairing::ConnectInfo;
@@ -105,6 +105,7 @@ pub struct Totals {
 
 pub struct ViewerOptions {
     pub hwdec: bool,
+    pub software_decoder: SoftwareDecoder,
     pub simulate_loss: f64,
     pub simulate_burst: f64,
     /// Bottleneck simulation in kbit/s (0 = off), see `BandwidthSim`.
@@ -383,11 +384,10 @@ fn decode_loop(
     control: tokio::sync::mpsc::UnboundedSender<mirrorwire_proto::control::Control>,
     on_frame: Option<Arc<dyn Fn() + Send + Sync>>,
 ) -> Result<(Totals, StageStats)> {
-    let mut decoder = Decoder::new(if opts.hwdec {
-        HwDecode::Auto
-    } else {
-        HwDecode::None
-    })?;
+    let mut decoder = decode::open_decoder(
+        if opts.hwdec { HwDecode::Auto } else { HwDecode::None },
+        opts.software_decoder,
+    )?;
     let mut decoder_name = decoder.name().to_owned();
     {
         let mut s = status.lock().expect("status lock");
@@ -412,7 +412,7 @@ fn decode_loop(
     while let Ok(ToDecode { frame }) = rx.recv() {
         let offset = clock.lock().expect("clock lock").clone();
         let decode_started = now_us();
-        let decoded = match decoder.decode(&frame.data) {
+        let img = match decoder.decode_yuv(&frame.data) {
             Ok(Some(d)) => {
                 consecutive_hw_errors = 0;
                 d
@@ -427,7 +427,7 @@ fn decode_loop(
                 }
                 if decoder.is_hardware() && (transfer_fail || consecutive_hw_errors >= 3) {
                     tracing::warn!("hardware decode failed ({e}); falling back to software H.264");
-                    decoder = Decoder::software_after_hw_failure()?;
+                    decoder = decode::software_after_hw_failure(opts.software_decoder)?;
                     decoder_name = decoder.name().to_owned();
                     status.lock().expect("status lock").decoder = decoder_name.clone();
                     consecutive_hw_errors = 0;
@@ -443,8 +443,7 @@ fn decode_loop(
             }
         };
         let decoded_us = now_us();
-        let (y, stride, w, h) = luma(decoded);
-        if let Some(marker) = read_marker(y, stride, w, h) {
+        if let Some(marker) = read_marker(&img.y, img.y_stride, img.width as usize, img.height as usize) {
             if let Some((prev_marker, prev_id)) = last_marker {
                 totals.marker_checked += 1;
                 if marker.wrapping_sub(prev_marker) != frame.frame_id.wrapping_sub(prev_id) {
@@ -460,7 +459,7 @@ fn decode_loop(
             let (width, height) = converter
                 .as_mut()
                 .expect("rgba converter")
-                .convert(decoded, &mut rgba)?;
+                .convert_yuv(&img, &mut rgba)?;
             (
                 Some(ms(now_us(), decoded_us)),
                 Some(DisplayFrame {
@@ -471,7 +470,6 @@ fn decode_loop(
                 }),
             )
         } else {
-            let img = YuvImage::from_frame(decoded)?;
             (
                 Some(ms(now_us(), decoded_us)),
                 Some(DisplayFrame {
@@ -595,6 +593,7 @@ pub fn run_headless(args: ViewArgs, config_dir: &Path) -> Result<()> {
         target,
         ViewerOptions {
             hwdec: args.want_hwdec(),
+            software_decoder: args.software_decoder(),
             simulate_loss: args.simulate_loss / 100.0,
             simulate_burst: args.simulate_burst,
             simulate_bandwidth_kbps: (args.simulate_bandwidth.max(0.0) * 1000.0).round() as u32,

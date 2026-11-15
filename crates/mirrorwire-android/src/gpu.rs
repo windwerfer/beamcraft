@@ -10,6 +10,7 @@
 //! ndk's `Image`/`ImageReader` are not `Send`, although the NDK objects behind
 //! them lock internally. The public API is safe.
 
+use crate::film::Planes;
 use anyhow::{anyhow, bail, Result};
 use eframe::glow::{self, HasContext};
 use ndk::media::image_reader::{Image, ImageReader};
@@ -239,7 +240,7 @@ void main() {
     gl_Position = vec4(a_corner * 2.0 - 1.0, 0.0, 1.0);
 }";
 
-const FRAGMENT: &str = "#extension GL_OES_EGL_image_external : require
+const FRAGMENT_EXTERNAL: &str = "#extension GL_OES_EGL_image_external : require
 precision mediump float;
 varying vec2 v_uv;
 uniform samplerExternalOES u_tex;
@@ -247,19 +248,49 @@ void main() {
     gl_FragColor = vec4(texture2D(u_tex, v_uv).rgb, 1.0);
 }";
 
-/// The GL side: one external texture, a quad, and the frame on screen.
+/// I420 planes (FilmCraft) → RGB: BT.709 full range, the same matrix as yuv.rs and the
+/// desktop viewer's shader.
+const FRAGMENT_YUV: &str = "precision mediump float;
+varying vec2 v_uv;
+uniform sampler2D u_y;
+uniform sampler2D u_u;
+uniform sampler2D u_v;
+void main() {
+    float y = texture2D(u_y, v_uv).r;
+    float cb = texture2D(u_u, v_uv).r - 0.5;
+    float cr = texture2D(u_v, v_uv).r - 0.5;
+    gl_FragColor = vec4(y + 1.5748 * cr, y - 0.1873 * cb - 0.4681 * cr, y + 1.8556 * cb, 1.0);
+}";
+
+/// A picture waiting to be shown.
+enum Pending {
+    Buffer(GpuFrame),
+    Planes(Planes),
+}
+
+/// What the textures hold.
+enum Shown {
+    Nothing,
+    /// Decoder buffer bound to the external texture (kept until replaced).
+    Buffer(GpuFrame, EglImage),
+    /// FilmCraft planes uploaded to the three plane textures.
+    Planes,
+}
+
+/// The GL side: an external texture for decoder buffers, three plane textures for
+/// FilmCraft pictures, one quad.
 pub struct VideoRenderer {
     egl: Egl,
-    program: glow::Program,
+    external: glow::Program,
+    yuv: glow::Program,
     vao: glow::VertexArray,
     vbo: glow::Buffer,
     texture: glow::Texture,
-    u_uv: Option<glow::UniformLocation>,
-    u_tex: Option<glow::UniformLocation>,
-    /// Newest frame from the decoder, not yet imported.
-    pending: Option<GpuFrame>,
-    /// Frame on screen and its EGLImage; kept until the next one replaces it.
-    current: Option<(GpuFrame, EglImage)>,
+    planes: [glow::Texture; 3],
+    /// Size of the plane textures, to reallocate only on a change.
+    plane_size: (u32, u32),
+    pending: Option<Pending>,
+    shown: Shown,
     /// Last import failure, shown in the HUD.
     pub error: Option<String>,
 }
@@ -271,42 +302,71 @@ unsafe impl Send for VideoRenderer {}
 
 pub type SharedRenderer = Arc<Mutex<VideoRenderer>>;
 
+/// Compiles and links one program with `a_corner` at attribute 0.
+///
+/// # Safety
+/// A GL context must be current.
+unsafe fn link(gl: &glow::Context, fragment: &str) -> Result<glow::Program> {
+    let program = gl
+        .create_program()
+        .map_err(|e| anyhow!("create program: {e}"))?;
+    for (kind, src) in [
+        (glow::VERTEX_SHADER, VERTEX),
+        (glow::FRAGMENT_SHADER, fragment),
+    ] {
+        let shader = gl
+            .create_shader(kind)
+            .map_err(|e| anyhow!("create shader: {e}"))?;
+        gl.shader_source(shader, src);
+        gl.compile_shader(shader);
+        if !gl.get_shader_compile_status(shader) {
+            let log = gl.get_shader_info_log(shader);
+            gl.delete_shader(shader);
+            gl.delete_program(program);
+            bail!("video shader: {log}");
+        }
+        gl.attach_shader(program, shader);
+        gl.delete_shader(shader);
+    }
+    gl.bind_attrib_location(program, 0, "a_corner");
+    gl.link_program(program);
+    if !gl.get_program_link_status(program) {
+        let log = gl.get_program_info_log(program);
+        gl.delete_program(program);
+        bail!("video program: {log}");
+    }
+    Ok(program)
+}
+
+/// A linear-filtered, edge-clamped texture on `target`.
+///
+/// # Safety
+/// A GL context must be current.
+unsafe fn texture(gl: &glow::Context, target: u32) -> Result<glow::Texture> {
+    let t = gl.create_texture().map_err(|e| anyhow!("texture: {e}"))?;
+    gl.bind_texture(target, Some(t));
+    for (k, v) in [
+        (glow::TEXTURE_MIN_FILTER, glow::LINEAR),
+        (glow::TEXTURE_MAG_FILTER, glow::LINEAR),
+        (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
+        (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
+    ] {
+        gl.tex_parameter_i32(target, k, v as i32);
+    }
+    gl.bind_texture(target, None);
+    Ok(t)
+}
+
 impl VideoRenderer {
-    /// Checks the EGL/GL extensions and builds the shader; `Err` means the
+    /// Checks the EGL/GL extensions and builds the shaders; `Err` means the
     /// viewer uses the CPU path (YUV → RGBA) instead.
     pub fn new(gl: &glow::Context) -> Result<SharedRenderer> {
         let egl = Egl::load(gl)?;
         // SAFETY (glow calls): glow's methods are unsafe because they talk to
         // the current GL context, which eframe made current for this call.
         unsafe {
-            let program = gl
-                .create_program()
-                .map_err(|e| anyhow!("create program: {e}"))?;
-            for (kind, src) in [
-                (glow::VERTEX_SHADER, VERTEX),
-                (glow::FRAGMENT_SHADER, FRAGMENT),
-            ] {
-                let shader = gl
-                    .create_shader(kind)
-                    .map_err(|e| anyhow!("create shader: {e}"))?;
-                gl.shader_source(shader, src);
-                gl.compile_shader(shader);
-                if !gl.get_shader_compile_status(shader) {
-                    let log = gl.get_shader_info_log(shader);
-                    gl.delete_shader(shader);
-                    gl.delete_program(program);
-                    bail!("video shader: {log}");
-                }
-                gl.attach_shader(program, shader);
-                gl.delete_shader(shader);
-            }
-            gl.bind_attrib_location(program, 0, "a_corner");
-            gl.link_program(program);
-            if !gl.get_program_link_status(program) {
-                let log = gl.get_program_info_log(program);
-                gl.delete_program(program);
-                bail!("video program: {log}");
-            }
+            let external = link(gl, FRAGMENT_EXTERNAL)?;
+            let yuv = link(gl, FRAGMENT_YUV)?;
             let vao = gl
                 .create_vertex_array()
                 .map_err(|e| anyhow!("vertex array: {e}"))?;
@@ -320,94 +380,160 @@ impl VideoRenderer {
             gl.vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, 8, 0);
             gl.bind_vertex_array(None);
             gl.bind_buffer(glow::ARRAY_BUFFER, None);
-            let texture = gl.create_texture().map_err(|e| anyhow!("texture: {e}"))?;
-            gl.bind_texture(GL_TEXTURE_EXTERNAL_OES, Some(texture));
-            gl.tex_parameter_i32(
-                GL_TEXTURE_EXTERNAL_OES,
-                glow::TEXTURE_MIN_FILTER,
-                glow::LINEAR as i32,
-            );
-            gl.tex_parameter_i32(
-                GL_TEXTURE_EXTERNAL_OES,
-                glow::TEXTURE_MAG_FILTER,
-                glow::LINEAR as i32,
-            );
-            gl.tex_parameter_i32(
-                GL_TEXTURE_EXTERNAL_OES,
-                glow::TEXTURE_WRAP_S,
-                glow::CLAMP_TO_EDGE as i32,
-            );
-            gl.tex_parameter_i32(
-                GL_TEXTURE_EXTERNAL_OES,
-                glow::TEXTURE_WRAP_T,
-                glow::CLAMP_TO_EDGE as i32,
-            );
-            gl.bind_texture(GL_TEXTURE_EXTERNAL_OES, None);
-            let u_uv = gl.get_uniform_location(program, "u_uv");
-            let u_tex = gl.get_uniform_location(program, "u_tex");
+            let texture = texture(gl, GL_TEXTURE_EXTERNAL_OES)?;
+            let planes = [texture_2d(gl)?, texture_2d(gl)?, texture_2d(gl)?];
             Ok(Arc::new(Mutex::new(Self {
                 egl,
-                program,
+                external,
+                yuv,
                 vao,
                 vbo,
                 texture,
-                u_uv,
-                u_tex,
+                planes,
+                plane_size: (0, 0),
                 pending: None,
-                current: None,
+                shown: Shown::Nothing,
                 error: None,
             })))
         }
     }
 
-    /// Queues the decoder's newest picture; an older unshown one goes back
-    /// to the decoder right away.
+    /// Queues the hardware decoder's newest picture; an older unshown one goes
+    /// back to the decoder right away.
     pub fn push(&mut self, frame: GpuFrame) {
-        self.pending = Some(frame);
+        self.pending = Some(Pending::Buffer(frame));
+    }
+
+    /// Queues FilmCraft's newest picture.
+    pub fn push_planes(&mut self, planes: Planes) {
+        self.pending = Some(Pending::Planes(planes));
     }
 
     /// Drops the frames (disconnect); the GL objects stay for the next session.
     pub fn clear(&mut self) {
         self.pending = None;
-        if let Some((_, image)) = self.current.take() {
+        if let Shown::Buffer(_, image) = std::mem::replace(&mut self.shown, Shown::Nothing) {
             self.egl.destroy(image);
         }
         self.error = None;
     }
 
-    /// Draws the current picture into the callback's viewport. Called from an
-    /// egui paint callback, so egui's GL context is current.
-    pub fn paint(&mut self, gl: &glow::Context) {
-        if let Some(frame) = self.pending.take() {
-            match self.egl.import(&frame) {
+    /// Makes the pending picture the shown one.
+    fn take_pending(&mut self, gl: &glow::Context) {
+        match self.pending.take() {
+            None => {}
+            Some(Pending::Buffer(frame)) => match self.egl.import(&frame) {
                 Ok(image) => {
                     // SAFETY: GL context is current (paint callback).
                     unsafe { gl.bind_texture(GL_TEXTURE_EXTERNAL_OES, Some(self.texture)) };
                     self.egl.bind(image);
-                    if let Some((_, old)) = self.current.replace((frame, image)) {
+                    if let Shown::Buffer(_, old) =
+                        std::mem::replace(&mut self.shown, Shown::Buffer(frame, image))
+                    {
                         self.egl.destroy(old);
                     }
                     self.error = None;
                 }
                 Err(e) => self.error = Some(format!("GPU video import: {e:#}")),
+            },
+            Some(Pending::Planes(p)) => {
+                let (cw, ch) = p.chroma_size();
+                let realloc = self.plane_size != (p.width, p.height);
+                let sizes = [(p.width, p.height), (cw, ch), (cw, ch)];
+                // SAFETY: GL context is current (paint callback); each plane holds
+                // exactly width × height bytes (film.rs packs them tightly), and
+                // UNPACK_ALIGNMENT 1 makes GL read rows of exactly that width.
+                unsafe {
+                    gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
+                    for ((tex, (w, h)), data) in
+                        self.planes.iter().zip(sizes).zip([&p.y, &p.u, &p.v])
+                    {
+                        if data.len() < (w * h) as usize {
+                            self.error = Some("FilmCraft picture plane is short".into());
+                            return;
+                        }
+                        gl.bind_texture(glow::TEXTURE_2D, Some(*tex));
+                        let pixels = glow::PixelUnpackData::Slice(Some(&data[..(w * h) as usize]));
+                        if realloc {
+                            gl.tex_image_2d(
+                                glow::TEXTURE_2D,
+                                0,
+                                glow::LUMINANCE as i32,
+                                w as i32,
+                                h as i32,
+                                0,
+                                glow::LUMINANCE,
+                                glow::UNSIGNED_BYTE,
+                                pixels,
+                            );
+                        } else {
+                            gl.tex_sub_image_2d(
+                                glow::TEXTURE_2D,
+                                0,
+                                0,
+                                0,
+                                w as i32,
+                                h as i32,
+                                glow::LUMINANCE,
+                                glow::UNSIGNED_BYTE,
+                                pixels,
+                            );
+                        }
+                    }
+                    gl.bind_texture(glow::TEXTURE_2D, None);
+                    gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 4);
+                }
+                self.plane_size = (p.width, p.height);
+                if let Shown::Buffer(_, old) = std::mem::replace(&mut self.shown, Shown::Planes) {
+                    self.egl.destroy(old);
+                }
+                self.error = None;
             }
         }
-        let Some((frame, _)) = &self.current else {
-            return;
-        };
-        let uv = frame.uv;
+    }
+
+    /// Draws the current picture into the callback's viewport. Called from an
+    /// egui paint callback, so egui's GL context is current.
+    pub fn paint(&mut self, gl: &glow::Context) {
+        self.take_pending(gl);
         // SAFETY: GL context is current (paint callback); all handles were
         // created on this context. egui_glow restores its own state afterwards.
         unsafe {
+            match &self.shown {
+                Shown::Nothing => return,
+                Shown::Buffer(frame, _) => {
+                    let uv = frame.uv;
+                    gl.use_program(Some(self.external));
+                    let u_uv = gl.get_uniform_location(self.external, "u_uv");
+                    gl.uniform_4_f32(u_uv.as_ref(), uv[0], uv[1], uv[2], uv[3]);
+                    gl.uniform_1_i32(gl.get_uniform_location(self.external, "u_tex").as_ref(), 0);
+                    gl.active_texture(glow::TEXTURE0);
+                    gl.bind_texture(GL_TEXTURE_EXTERNAL_OES, Some(self.texture));
+                }
+                Shown::Planes => {
+                    gl.use_program(Some(self.yuv));
+                    let u_uv = gl.get_uniform_location(self.yuv, "u_uv");
+                    gl.uniform_4_f32(u_uv.as_ref(), 0.0, 0.0, 1.0, 1.0);
+                    for (i, (name, tex)) in
+                        ["u_y", "u_u", "u_v"].iter().zip(self.planes).enumerate()
+                    {
+                        gl.uniform_1_i32(
+                            gl.get_uniform_location(self.yuv, name).as_ref(),
+                            i as i32,
+                        );
+                        gl.active_texture(glow::TEXTURE0 + i as u32);
+                        gl.bind_texture(glow::TEXTURE_2D, Some(tex));
+                    }
+                }
+            }
             gl.disable(glow::BLEND);
-            gl.use_program(Some(self.program));
-            gl.uniform_4_f32(self.u_uv.as_ref(), uv[0], uv[1], uv[2], uv[3]);
-            gl.uniform_1_i32(self.u_tex.as_ref(), 0);
-            gl.active_texture(glow::TEXTURE0);
-            gl.bind_texture(GL_TEXTURE_EXTERNAL_OES, Some(self.texture));
             gl.bind_vertex_array(Some(self.vao));
             gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
             gl.bind_vertex_array(None);
+            for i in (0..3).rev() {
+                gl.active_texture(glow::TEXTURE0 + i);
+                gl.bind_texture(glow::TEXTURE_2D, None);
+            }
             gl.bind_texture(GL_TEXTURE_EXTERNAL_OES, None);
             gl.enable(glow::BLEND);
         }
@@ -417,10 +543,22 @@ impl VideoRenderer {
         self.clear();
         // SAFETY: GL context is current (eframe on_exit); handles belong to it.
         unsafe {
-            gl.delete_program(self.program);
+            gl.delete_program(self.external);
+            gl.delete_program(self.yuv);
             gl.delete_vertex_array(self.vao);
             gl.delete_buffer(self.vbo);
             gl.delete_texture(self.texture);
+            for t in self.planes {
+                gl.delete_texture(t);
+            }
         }
     }
+}
+
+/// A plane texture.
+///
+/// # Safety
+/// A GL context must be current.
+unsafe fn texture_2d(gl: &glow::Context) -> Result<glow::Texture> {
+    texture(gl, glow::TEXTURE_2D)
 }

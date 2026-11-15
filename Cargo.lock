@@ -716,6 +716,15 @@ version = "0.1.0"
 source = "git+https://github.com/storytold/craft-libs?rev=09dcbc225b95232998498a40ca56e24716571d53#09dcbc225b95232998498a40ca56e24716571d53"
 
 [[package]]
+name = "craft-video"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs?rev=09dcbc225b95232998498a40ca56e24716571d53#09dcbc225b95232998498a40ca56e24716571d53"
+dependencies = [
+ "craft-media",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2095,6 +2104,7 @@ dependencies = [
  "android_logger",
  "anyhow",
  "bytes",
+ "craft-video",
  "crossbeam-channel",
  "eframe",
  "log",
@@ -2133,6 +2143,7 @@ dependencies = [
  "anyhow",
  "ashpd",
  "bytes",
+ "craft-video",
  "crossbeam-channel",
  "ffmpeg-next",
  "filmcraft-h264enc",

@@ -35,7 +35,8 @@ target), **planned**, **idea**. Update this file when an item moves.
   path: the MTK buffers can't be CPU-read; the GPU samples them directly. Findings on the way:
   - With `c2.android.avc.decoder` the picture froze on old content at an encoder reopen while
     `decoded/shown` and a small picture age kept going (decoder output, not the UI). The dumped
-    stream decoded fine in FFmpeg. Not fixed; the software decoder is only the fallback now.
+    stream decoded fine in FFmpeg. Not fixed there; the software fallback is FilmCraft since
+    2026-11-15 (bit-exact on that recording).
   - h264_vaapi writes `idr_pic_id 0` on every IDR, and the stream has IDRs directly after IDRs
     (reopen + keyframe request; 25 in 19 846 pictures), which H.264 7.4.3 forbids. Flushing
     the Android decoder before such an IDR did not cure the software-decoder freeze (13 flushes,
@@ -208,10 +209,16 @@ target), **planned**, **idea**. Update this file when an item moves.
   texture instead of the CPU YUV→RGBA copy; soft keyboard for the link field (today: QR via
   the camera app, or the keypad + mDNS list); a stable release keystore so updates install
   over each other (CI debug keys change per run).
-- **FilmCraft pure-Rust decoder (later, owner request 2026-11-14):** an opt-in option
-  (`--decoder filmcraft`, cargo feature, GUI selector), like the FilmCraft encoder. It is never
-  picked automatically. The goal is for the owner to judge whether its latency is acceptable,
-  with decode time shown in the HUD next to FFmpeg's. Depends on the 0c `Decoder` trait.
+- **FilmCraft pure-Rust decoder: built (2026-11-15) as the software fallback except on macOS**
+  (decision log). Desktop: `VideoDecoder` trait in `mirrorwire-media/src/decode.rs`,
+  `film_decode.rs`, `--software-decoder`. Android: `film.rs`, planes drawn by a GPU shader.
+  Measured: tablet (MT8755) with the home-screen switch, VAAPI test-pattern presenter, 1080p:
+  decode 14–16 ms, picture age 14–23 ms, 38–48 fps shown, live through 24 encoder reopens in
+  ~2 min, 0 decode errors. Loopback on the build box (x264 1080p60): FilmCraft decode
+  14–17 ms, capture_to_decoded ~32–35 ms vs FFmpeg 4 ms / ~19–20 ms. Open: FilmCraft has no
+  SIMD (desktop cost); a small Cortex-A55 core does ~20 fps, so the Android decode thread
+  should stay on a big core (not controlled yet); not tested on Windows or with a real screen
+  on the tablet's software path; GUI selector on the desktop not built (CLI only).
 - **Rename to BeamCraft (owner 2026-11-14):** the owner's favourite (alternatives: WireCraft
   etc.). Steps: check the name is free (GitHub, Flathub, app stores, trademarks); then do one
   rename before friends install it: app id, mDNS service, ALPN, URI scheme, config dir (D5),

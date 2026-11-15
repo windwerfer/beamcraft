@@ -21,6 +21,98 @@ pub struct Decoder {
 
 unsafe impl Send for Decoder {}
 
+/// Which software H.264 decoder runs when there is no hardware decoder (or it is off).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SoftwareDecoder {
+    /// FilmCraft's pure-Rust decoder (`craft-video`).
+    FilmCraft,
+    /// FFmpeg's libavcodec.
+    Ffmpeg,
+}
+
+impl SoftwareDecoder {
+    /// FilmCraft everywhere except macOS, which keeps FFmpeg for now (decision log 2026-11-15).
+    pub fn platform_default() -> Self {
+        if cfg!(target_os = "macos") {
+            Self::Ffmpeg
+        } else {
+            Self::FilmCraft
+        }
+    }
+}
+
+/// An H.264 decoder that hands out pictures as [`YuvImage`]: the FFmpeg [`Decoder`]
+/// (hardware or software) or FilmCraft's [`FilmDecoder`](crate::film_decode::FilmDecoder).
+pub trait VideoDecoder: Send {
+    /// Decodes one complete access unit; `None` when no picture came out.
+    fn decode_yuv(&mut self, au: &[u8]) -> Result<Option<YuvImage>>;
+    /// For the overlay, e.g. `h264 (vaapi)`.
+    fn name(&self) -> &str;
+    fn is_hardware(&self) -> bool;
+}
+
+impl VideoDecoder for Decoder {
+    fn decode_yuv(&mut self, au: &[u8]) -> Result<Option<YuvImage>> {
+        self.decode(au)?.map(YuvImage::from_frame).transpose()
+    }
+    fn name(&self) -> &str {
+        Decoder::name(self)
+    }
+    fn is_hardware(&self) -> bool {
+        Decoder::is_hardware(self)
+    }
+}
+
+impl VideoDecoder for crate::film_decode::FilmDecoder {
+    fn decode_yuv(&mut self, au: &[u8]) -> Result<Option<YuvImage>> {
+        self.decode(au)
+    }
+    fn name(&self) -> &str {
+        crate::film_decode::FilmDecoder::name(self)
+    }
+    fn is_hardware(&self) -> bool {
+        false
+    }
+}
+
+/// The viewer's decoder: hardware first when `hw` is `Auto`, else (or when it is missing)
+/// the chosen software decoder, with the reason in its name.
+pub fn open_decoder(hw: HwDecode, software: SoftwareDecoder) -> Result<Box<dyn VideoDecoder>> {
+    if hw == HwDecode::Auto {
+        match open_hw_device() {
+            Ok((dev, label)) => match Decoder::open(Some((dev, label))) {
+                Ok(d) => return Ok(Box::new(d)),
+                Err(e) => {
+                    tracing::warn!("{label} H.264 decode failed to open ({e:#}); falling back to software");
+                    return open_software(software, &format!("{label} could not open the H.264 decoder"));
+                }
+            },
+            Err(e) => {
+                let note = software_reason();
+                tracing::info!("{note} ({e:#}); using the software decoder");
+                return open_software(software, note);
+            }
+        }
+    }
+    open_software(software, "hardware decode is off")
+}
+
+/// The software decoder after the hardware one failed while decoding.
+pub fn software_after_hw_failure(software: SoftwareDecoder) -> Result<Box<dyn VideoDecoder>> {
+    open_software(software, software_reason())
+}
+
+fn open_software(software: SoftwareDecoder, why: &str) -> Result<Box<dyn VideoDecoder>> {
+    Ok(match software {
+        SoftwareDecoder::FilmCraft => Box::new(crate::film_decode::FilmDecoder::new(why)),
+        SoftwareDecoder::Ffmpeg => {
+            let mut d = Decoder::open(None)?;
+            d.name = format!("h264 (software: {why})");
+            Box::new(d)
+        }
+    })
+}
+
 impl Decoder {
     pub fn new(hw: HwDecode) -> Result<Self> {
         match hw {
@@ -294,6 +386,38 @@ impl Default for RgbaConverter {
 }
 
 impl RgbaConverter {
+    /// [`RgbaConverter::convert`] for a [`YuvImage`] (copies its planes into an FFmpeg frame).
+    pub fn convert_yuv(&mut self, img: &YuvImage, dst: &mut Vec<u8>) -> Result<(u32, u32)> {
+        let (w, h) = (img.width as usize, img.height as usize);
+        let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
+        let mut frame = match img.layout {
+            YuvLayout::Yuv420 => frame::Video::new(Pixel::YUV420P, img.width, img.height),
+            YuvLayout::Nv12 => frame::Video::new(Pixel::NV12, img.width, img.height),
+        };
+        let planes: Vec<(&[u8], usize, usize, usize)> = match img.layout {
+            YuvLayout::Yuv420 => vec![
+                (&img.y, img.y_stride, w, h),
+                (&img.u, img.u_stride, cw, ch),
+                (&img.v, img.v_stride, cw, ch),
+            ],
+            YuvLayout::Nv12 => vec![(&img.y, img.y_stride, w, h), (&img.u, img.u_stride, cw * 2, ch)],
+        };
+        for (i, (src, stride, width, rows)) in planes.into_iter().enumerate() {
+            let dst_stride = frame.stride(i);
+            let data = frame.data_mut(i);
+            for r in 0..rows {
+                let (Some(s), Some(d)) = (
+                    src.get(r * stride..r * stride + width),
+                    data.get_mut(r * dst_stride..r * dst_stride + width),
+                ) else {
+                    bail!("YUV plane {i} is short");
+                };
+                d.copy_from_slice(s);
+            }
+        }
+        self.convert(&frame, dst)
+    }
+
     pub fn convert(&mut self, src: &frame::Video, dst: &mut Vec<u8>) -> Result<(u32, u32)> {
         let key = (src.format(), src.width(), src.height());
         if self

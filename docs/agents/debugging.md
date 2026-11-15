@@ -108,7 +108,10 @@ shown picture's arrival time; seconds there while the counters move means stale 
   outputs stale pictures. Seen with `c2.android.avc.decoder` on the MTK tablet (2026-11-15),
   starting at a presenter encoder reopen; the same stream decoded fine in FFmpeg. To check:
   dump the presenter's H.264 and decode it with `ffmpeg`, then compare with an `adb exec-out
-  screencap -p`. Fix in practice: use the hardware decoder with GPU output.
+  screencap -p`. Since then the software fallback is FilmCraft, not the platform decoders.
+- Comparing decoders on one device: tick **Software decoder (FilmCraft)** on the home screen;
+  line 2 then reads `SOFTWARE decoder FilmCraft (pure Rust), GPU output (software decoder
+  chosen on the home screen)` and `decode` is FilmCraft's time per access unit.
 
 ## Presenter side
 

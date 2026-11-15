@@ -57,6 +57,8 @@ struct ViewerApp {
     gpu_off: Option<String>,
     /// The GPU renderer has a picture for this session.
     gpu_picture: bool,
+    /// Home-screen switch: skip the hardware decoders and use FilmCraft.
+    force_software: bool,
 }
 
 impl ViewerApp {
@@ -110,6 +112,7 @@ impl ViewerApp {
             gpu,
             gpu_off,
             gpu_picture: false,
+            force_software: false,
         }
     }
 
@@ -138,6 +141,7 @@ impl ViewerApp {
             "Android".into(),
             decoders,
             self.gpu.is_some(),
+            self.force_software,
             Arc::new(move || repaint.request_repaint()),
         ));
     }
@@ -194,6 +198,7 @@ impl ViewerApp {
         });
         keypad(ui, &mut self.code);
         ui.weak("Only needed the first time; the presenter then remembers this device.");
+        ui.checkbox(&mut self.force_software, "Software decoder (FilmCraft) instead of the hardware one");
         ui.separator();
 
         ui.label("Presenters on this network:");
@@ -389,9 +394,19 @@ impl eframe::App for ViewerApp {
         let status = self.session.as_ref().map(|s| s.status());
         if let Some(s) = &self.session {
             if let Ok(mut img) = s.frames.try_recv() {
-                if let (Some(frame), Some(r)) = (img.gpu.take(), &self.gpu) {
+                let gpu_picture = match (img.gpu.take(), img.yuv.take(), &self.gpu) {
+                    (Some(frame), _, Some(r)) => {
+                        r.lock().unwrap_or_else(|e| e.into_inner()).push(frame);
+                        true
+                    }
+                    (_, Some(planes), Some(r)) => {
+                        r.lock().unwrap_or_else(|e| e.into_inner()).push_planes(planes);
+                        true
+                    }
+                    _ => false,
+                };
+                if gpu_picture {
                     self.picture_size = (img.width, img.height);
-                    r.lock().unwrap_or_else(|e| e.into_inner()).push(frame);
                     self.gpu_picture = true;
                     s.counters.presented.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                 } else {

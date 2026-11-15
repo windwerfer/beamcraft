@@ -40,6 +40,19 @@ without new information.
 
 Newest first. Add an entry when the owner decides something non-obvious.
 
+- **2026-11-15 (FilmCraft decoder as the software fallback):** the owner wants FilmCraft's
+  pure-Rust H.264 decoder (`craft-video`, feature `h264-decode`, same pinned craft-libs commit
+  as the encoder) as the automatic software decoder everywhere except macOS, which keeps
+  FFmpeg's software decoder for now. This replaces the earlier plan of an opt-in-only option.
+  Order: hardware first (VAAPI/VideoToolbox via FFmpeg on the desktop, hardware MediaCodec
+  on Android), then FilmCraft. Android no longer uses the platform's software MediaCodec
+  decoders (`c2.android.avc.decoder` froze on old content after presenter encoder reopens).
+  Escape hatch: `mirrorwire view --software-decoder ffmpeg`; on Android a home-screen switch
+  forces FilmCraft for comparison. Evidence: bit-exact with FFmpeg on a 2804-frame VAAPI
+  recording with encoder reopens and on two simulated-loss variants; tablet (MT8755,
+  Cortex-A76) 14.8 ms per 1080p P-frame single-threaded vs 80–155 ms for
+  `c2.android.avc.decoder`. Known cost: on the build box FilmCraft takes ~14 ms per 1080p60
+  frame vs FFmpeg's ~4 ms (no SIMD yet), +~13 ms capture-to-decoded in the loopback.
 - **2026-11 (Adaptive bitrate):** after a Wi-Fi test with 22–24 % loss, ~2000 unrecoverable
   frames and 9 fps at the viewer (auto FEC had climbed to +60 %/+100 %: more parity, more
   load, more loss), the owner approved: FEC parity is paid from the bitrate budget, auto FEC is

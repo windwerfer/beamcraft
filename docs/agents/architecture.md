@@ -7,7 +7,7 @@ A Cargo workspace with five crates. Lower layers never depend on higher ones.
 | Layer | Crate | Job | May depend on |
 |---|---|---|---|
 | L0 | `mirrorwire-proto` | Wire format: datagram fragment header, fragmentation and reassembly, control messages (JSON over a length-prefixed stream), clock-offset estimation, latency statistics, protocol constants (`PROTOCOL_VERSION`, `ALPN`, `MDNS_SERVICE`, `DEFAULT_PORT`). **No I/O, no async, no FFmpeg.** | `bytes`, `serde`, `serde_json`, `anyhow`, `reed-solomon-simd` (FEC) only |
-| L1 | `mirrorwire-media` | Frame sources (test pattern, portal + PipeWire), H.264 encoder and decoder via FFmpeg (VAAPI / VideoToolbox / x264), YUV→RGBA conversion, the capture→encode loop and the `VideoSink` trait. | `mirrorwire-proto` |
+| L1 | `mirrorwire-media` | Frame sources (test pattern, portal + PipeWire), H.264 encoder via FFmpeg (VAAPI / VideoToolbox / x264), H.264 decoders behind the `VideoDecoder` trait (FFmpeg hardware/software in `decode.rs`, FilmCraft's pure-Rust `craft-video` in `film_decode.rs`, the default software decoder except on macOS), YUV→RGBA conversion, the capture→encode loop and the `VideoSink` trait. | `mirrorwire-proto` |
 | L1 | `mirrorwire-net` | Identity (self-signed cert), pinned TLS verifiers, QUIC presenter/viewer sessions, pairing (`paired_viewers.json`, pairing code, `mirrorwire://` URI, QR), mDNS announce/browse, persisted presenter settings (`settings.json`), Linux firewall detection and a best-effort firewalld D-Bus open-port request. | `mirrorwire-proto` |
 | L2 | `mirrorwire-app` | The `mirrorwire` binary: CLI (`present`, `view`, `view --headless`, `discover`), presenter and viewer glue, the egui GUI (start screen, presenter status, viewer list, video, stats overlay). | all of the above |
 | L2 | `mirrorwire-android` | The Android viewer: `libmirrorwire_android.so` loaded by the APK. egui (glow) via `android-activity` NativeActivity, MediaCodec decode (`ndk` crate, `AImageReader` → CPU BT.709 → texture), the viewer receive loop. No FFmpeg. On non-Android targets only its pure helpers (`h264`, `yuv`) compile, so host `cargo test` covers them. | `mirrorwire-proto`, `mirrorwire-net` |
@@ -154,13 +154,16 @@ crates/mirrorwire-android             android_main -> eframe (glow) -> ViewerApp
               polls pending_uri.txt every 500 ms (QR scanned with the camera app opens the link)
   session.rs  QUIC receive loop (like mirrorwire-app's viewer, but a 6-deep decode queue)
               + a decode thread that also polls MediaCodec every 8 ms for late pictures
-  codec.rs    AMediaCodec by name from codec_list.rs (hardware decoders first, then
-              software; a decoder that fails to start or errors 3x is skipped, the reason
-              is shown) -> AImageReader. GPU output (default): PRIVATE buffers with
+  codec.rs    AMediaCodec by name from codec_list.rs (hardware decoders only; one that
+              fails to start or errors 3x is skipped, the reason is shown), then FilmCraft
+              (film.rs) as the software fallback -> AImageReader. GPU output (default): PRIVATE buffers with
               GPU_SAMPLED_IMAGE usage, handed to the UI as gpu.rs GpuFrames. CPU copy
               (fallback when the EGL/GL extensions are missing): YUV_420_888 -> yuv.rs ->
               RGBA. Pictures that a newer queued frame supersedes are released unrendered.
-  gpu.rs      AHardwareBuffer -> EGLImage -> GL_TEXTURE_EXTERNAL_OES, drawn in an egui
+  film.rs     FilmCraft (craft-video) H.264 decode on the decode thread, one worker
+              thread, panics caught -> tight I420 planes
+  gpu.rs      AHardwareBuffer -> EGLImage -> GL_TEXTURE_EXTERNAL_OES, or FilmCraft planes
+              -> three LUMINANCE textures + a BT.709 shader, drawn in an egui
               paint callback; the GPU samples the decoder's own layout (MTK tiled YUV) and
               does YUV -> RGB. Holds all of the crate's `unsafe` (EGL extension calls, Send
               wrappers for ndk Image/ImageReader).

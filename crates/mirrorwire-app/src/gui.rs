@@ -96,6 +96,7 @@ pub fn run(
         let initial = initial.clone();
         let log = log.clone();
         let hwdec = args.want_hwdec();
+        let software_decoder = args.software_decoder();
         move |used: ResolvedRenderer| {
             let identity = identity.clone();
             let config_dir = config_dir.clone();
@@ -113,6 +114,7 @@ pub fn run(
                         .map_err(|e| tracing::warn!("mDNS browse unavailable: {e:#}"))
                         .ok(),
                     hwdec,
+                    software_decoder,
                     name,
                     uri_input: String::new(),
                     code_input: String::new(),
@@ -189,6 +191,7 @@ struct MirrorApp {
     config_dir: PathBuf,
     browser: Option<Browser>,
     hwdec: bool,
+    software_decoder: mirrorwire_media::decode::SoftwareDecoder,
     name: String,
     uri_input: String,
     code_input: String,
@@ -240,6 +243,7 @@ impl MirrorApp {
             target,
             ViewerOptions {
                 hwdec: self.hwdec,
+                software_decoder: self.software_decoder,
                 simulate_loss: 0.0,
                 simulate_burst: 1.0,
                 simulate_bandwidth_kbps: 0,

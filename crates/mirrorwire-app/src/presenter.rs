@@ -1269,6 +1269,7 @@ mod tests {
             target,
             ViewerOptions {
                 hwdec: false,
+                software_decoder: mirrorwire_media::decode::SoftwareDecoder::platform_default(),
                 simulate_loss: 0.01,
                 simulate_burst: 1.0,
                 simulate_bandwidth_kbps: 0,

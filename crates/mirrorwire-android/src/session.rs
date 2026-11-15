@@ -117,6 +117,7 @@ impl Drop for Handle {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn spawn(
     runtime: &tokio::runtime::Handle,
     identity: Arc<Identity>,
@@ -124,6 +125,7 @@ pub fn spawn(
     name: String,
     decoders: Vec<CodecEntry>,
     gpu: bool,
+    force_software: bool,
     repaint: Arc<dyn Fn() + Send + Sync>,
 ) -> Handle {
     let status = Arc::new(Mutex::new(Status::default()));
@@ -140,7 +142,7 @@ pub fn spawn(
     };
     let channels = Channels { frames_tx, frames_drain: frames, recycle_rx };
     runtime.spawn(async move {
-        let result = run(identity, target, name, decoders, gpu, status.clone(), channels, counters, stop, repaint.clone()).await;
+        let result = run(identity, target, name, decoders, gpu, force_software, status.clone(), channels, counters, stop, repaint.clone()).await;
         let mut s = status.lock().unwrap_or_else(|e| e.into_inner());
         s.connected = false;
         if let Err(e) = result {
@@ -167,6 +169,7 @@ async fn run(
     name: String,
     decoders: Vec<CodecEntry>,
     gpu: bool,
+    force_software: bool,
     status: Arc<Mutex<Status>>,
     channels: Channels,
     counters: Arc<PipelineCounters>,
@@ -214,7 +217,7 @@ async fn run(
             repaint: dec_repaint,
             counters: dec_counters,
         };
-        decode_loop(decode_rx, info, decoders, gpu, ctx)
+        decode_loop(decode_rx, info, decoders, gpu, force_software, ctx)
     })?;
 
     let self_healing = session.stream_info.intra_refresh;
@@ -379,8 +382,8 @@ const DECODE_QUEUE: usize = 6;
 /// for pictures that finished late.
 const POLL_EVERY: Duration = Duration::from_millis(8);
 
-fn decode_loop(rx: Receiver<AssembledFrame>, info: StreamInfo, decoders: Vec<CodecEntry>, gpu: bool, ctx: DecodeCtx) -> Result<()> {
-    let mut decoder = Decoder::new(info.width, info.height, &decoders, gpu);
+fn decode_loop(rx: Receiver<AssembledFrame>, info: StreamInfo, decoders: Vec<CodecEntry>, gpu: bool, force_software: bool, ctx: DecodeCtx) -> Result<()> {
+    let mut decoder = Decoder::new(info.width, info.height, &decoders, gpu, force_software);
     let mut first = true;
     let mut synced = crate::codec::Counts::default();
     loop {

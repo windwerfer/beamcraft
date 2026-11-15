@@ -40,6 +40,15 @@ struct Cli {
     command: Option<Command>,
 }
 
+/// `--software-decoder`: the H.264 decoder used without (or after failed) hardware decode.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
+pub enum SoftwareDecoderChoice {
+    /// FilmCraft's pure-Rust decoder. Default on Linux and Windows.
+    Filmcraft,
+    /// FFmpeg's libavcodec. Default on macOS.
+    Ffmpeg,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum RendererChoice {
     /// Try wgpu first and fall back to OpenGL if it fails.
@@ -82,6 +91,10 @@ pub struct ViewArgs {
     /// Force the software H.264 decoder.
     #[arg(long, overrides_with = "hwdec")]
     pub software_decode: bool,
+    /// Software H.264 decoder: FilmCraft (pure Rust; default on Linux and Windows) or
+    /// FFmpeg (default on macOS).
+    #[arg(long, value_enum, value_name = "filmcraft|ffmpeg")]
+    pub software_decoder: Option<SoftwareDecoderChoice>,
     /// Convert decoded frames to RGBA in headless mode too, to measure that cost.
     #[arg(long)]
     pub rgba: bool,
@@ -109,6 +122,7 @@ impl Default for ViewArgs {
             duration: None,
             hwdec: cfg!(target_os = "macos"),
             software_decode: false,
+            software_decoder: None,
             rgba: false,
             simulate_loss: 0.0,
             simulate_burst: 1.0,
@@ -119,6 +133,15 @@ impl Default for ViewArgs {
 }
 
 impl ViewArgs {
+    pub fn software_decoder(&self) -> mirrorwire_media::decode::SoftwareDecoder {
+        use mirrorwire_media::decode::SoftwareDecoder;
+        match self.software_decoder {
+            Some(SoftwareDecoderChoice::Filmcraft) => SoftwareDecoder::FilmCraft,
+            Some(SoftwareDecoderChoice::Ffmpeg) => SoftwareDecoder::Ffmpeg,
+            None => SoftwareDecoder::platform_default(),
+        }
+    }
+
     pub fn want_hwdec(&self) -> bool {
         if self.software_decode {
             false

@@ -8,6 +8,7 @@
 //! fallback).
 
 pub mod codec_list;
+pub mod film;
 pub mod h264;
 pub mod stats;
 pub mod yuv;
