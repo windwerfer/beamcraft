@@ -6,8 +6,8 @@
 # a JDK 17 on PATH, cargo-ndk and the aarch64-linux-android Rust target.
 # Usage: packaging/android/build-apk.sh [out-dir]
 # Optional: ANDROID_ABI (default arm64-v8a; x86_64 for the emulator),
-#           MIRRORWIRE_KEYSTORE=path (a debug key is generated when missing),
-#           MIRRORWIRE_KS_PASS / MIRRORWIRE_KEY_PASS / MIRRORWIRE_KEY_ALIAS for a
+#           BEAMCRAFT_KEYSTORE=path (a debug key is generated when missing),
+#           BEAMCRAFT_KS_PASS / BEAMCRAFT_KEY_PASS / BEAMCRAFT_KEY_ALIAS for a
 #           release key (default: the debug key's "android" / androiddebugkey),
 #           VERSION_CODE (default 1).
 set -euo pipefail
@@ -32,8 +32,8 @@ WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 echo "== Rust library ($ABI)"
-(cd "$ROOT" && cargo ndk -t "$ABI" --platform 26 -o "$WORK/apk/lib" build --release --locked -p mirrorwire-android)
-SO="$WORK/apk/lib/$ABI/libmirrorwire_android.so"
+(cd "$ROOT" && cargo ndk -t "$ABI" --platform 26 -o "$WORK/apk/lib" build --release --locked -p beamcraft-android)
+SO="$WORK/apk/lib/$ABI/libbeamcraft_android.so"
 [ -f "$SO" ] || { echo "cargo-ndk did not produce $SO" >&2; exit 1; }
 "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin/llvm-strip --strip-debug "$SO"
 ls -la "$WORK/apk/lib/$ABI"
@@ -46,7 +46,7 @@ javac -source 11 -target 11 -Xlint:-options -encoding UTF-8 -classpath "$ANDROID
 
 echo "== Resources and manifest"
 mkdir -p "$WORK/res/mipmap-xxxhdpi"
-cp "$ROOT/packaging/icons/io.github.windwerfer.MirrorWire.png" "$WORK/res/mipmap-xxxhdpi/ic_launcher.png"
+cp "$ROOT/packaging/icons/io.github.windwerfer.BeamCraft.png" "$WORK/res/mipmap-xxxhdpi/ic_launcher.png"
 "$BT/aapt2" compile --dir "$WORK/res" -o "$WORK/res.zip"
 sed -e "s/@VERSION_CODE@/$VERSION_CODE/" -e "s/@VERSION_NAME@/$VERSION_NAME/" \
   "$HERE/AndroidManifest.xml" > "$WORK/AndroidManifest.xml"
@@ -68,20 +68,20 @@ with zipfile.ZipFile(apk, "a") as z:
 PY
 "$BT/zipalign" -P 16 -f 4 "$WORK/unsigned.apk" "$WORK/aligned.apk"
 
-KEYSTORE="${MIRRORWIRE_KEYSTORE:-$HOME/.android/mirrorwire-debug.keystore}"
+KEYSTORE="${BEAMCRAFT_KEYSTORE:-$HOME/.android/beamcraft-debug.keystore}"
 mkdir -p "$(dirname "$KEYSTORE")"
 if [ ! -f "$KEYSTORE" ]; then
   echo "== Generating debug key $KEYSTORE"
   keytool -genkeypair -v -keystore "$KEYSTORE" -storepass android -keypass android \
     -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 \
-    -dname "CN=MirrorWire Debug,O=MirrorWire,C=DE" >/dev/null
+    -dname "CN=BeamCraft Debug,O=BeamCraft,C=DE" >/dev/null
 fi
-APK="$OUT/MirrorWire-$ABI.apk"
+APK="$OUT/BeamCraft-$ABI.apk"
 # Passwords go through env: so they never show up in the process list or logs.
-export MIRRORWIRE_KS_PASS="${MIRRORWIRE_KS_PASS:-android}"
-export MIRRORWIRE_KEY_PASS="${MIRRORWIRE_KEY_PASS:-$MIRRORWIRE_KS_PASS}"
-"$BT/apksigner" sign --ks "$KEYSTORE" --ks-pass env:MIRRORWIRE_KS_PASS \
-  --key-pass env:MIRRORWIRE_KEY_PASS --ks-key-alias "${MIRRORWIRE_KEY_ALIAS:-androiddebugkey}" \
+export BEAMCRAFT_KS_PASS="${BEAMCRAFT_KS_PASS:-android}"
+export BEAMCRAFT_KEY_PASS="${BEAMCRAFT_KEY_PASS:-$BEAMCRAFT_KS_PASS}"
+"$BT/apksigner" sign --ks "$KEYSTORE" --ks-pass env:BEAMCRAFT_KS_PASS \
+  --key-pass env:BEAMCRAFT_KEY_PASS --ks-key-alias "${BEAMCRAFT_KEY_ALIAS:-androiddebugkey}" \
   --out "$APK" "$WORK/aligned.apk"
 "$BT/apksigner" verify --verbose "$APK" | head -n 4
 ls -la "$APK"

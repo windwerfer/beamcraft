@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Thin shell: all logic lives in libmirrorwire_android.so (crates/mirrorwire-android). -->
+<!-- Thin shell: all logic lives in libbeamcraft_android.so (crates/beamcraft-android). -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="io.github.windwerfer.mirrorwire"
+    package="io.github.windwerfer.beamcraft"
     android:versionCode="@VERSION_CODE@"
     android:versionName="@VERSION_NAME@">
 
@@ -16,7 +16,7 @@
     <uses-feature android:glEsVersion="0x00030000" android:required="true" />
 
     <application
-        android:label="MirrorWire"
+        android:label="BeamCraft"
         android:icon="@mipmap/ic_launcher"
         android:hasCode="true"
         android:extractNativeLibs="false"
@@ -29,17 +29,17 @@
             android:launchMode="singleTask"
             android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|keyboard|density|uiMode"
             android:theme="@android:style/Theme.Black.NoTitleBar">
-            <meta-data android:name="android.app.lib_name" android:value="mirrorwire_android" />
+            <meta-data android:name="android.app.lib_name" android:value="beamcraft_android" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-            <!-- The presenter's QR code is a mirrorwire:// link; scanning it with the camera opens us. -->
+            <!-- The presenter's QR code is a beamcraft:// link; scanning it with the camera opens us. -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="mirrorwire" />
+                <data android:scheme="beamcraft" />
             </intent-filter>
         </activity>
     </application>

@@ -1,13 +1,15 @@
 # Protocol
 
-Everything here lives in `mirrorwire-proto` (constants, framing) and `mirrorwire-net`
+Everything here lives in `beamcraft-proto` (constants, framing) and `beamcraft-net`
 (handshake, URI, mDNS). If you change any of it, follow §4.
 
 ## 1. Connection
 
-- QUIC over UDP, default port **47800** (`DEFAULT_PORT`), ALPN **`mirrorwire/1`** (`ALPN`).
-  The presenter port is configurable (`--port`, `MIRRORWIRE_PORT`, saved `settings.json`).
-  A changed port is advertised in mDNS (`ServiceInfo` port) and in the URI (`mirrorwire://ip:port?…`);
+- QUIC over UDP, default port **47800** (`DEFAULT_PORT`), ALPN **`beamcraft/1`** (`ALPN`).
+  (Before the 2026-11-15 rename it was `mirrorwire/1`; same protocol otherwise. Pre-rename
+  builds fail the TLS handshake against BeamCraft and are not supported, see decisions.md.)
+  The presenter port is configurable (`--port`, `BEAMCRAFT_PORT`, saved `settings.json`).
+  A changed port is advertised in mDNS (`ServiceInfo` port) and in the URI (`beamcraft://ip:port?…`);
   the viewer always uses the advertised port, never a hard-coded 47800.
 - TLS 1.3 with self-signed certificates on both sides (`rcgen`, ring provider).
   - The viewer's verifier accepts the presenter's cert **only** if its SHA-256 fingerprint
@@ -62,7 +64,7 @@ loss, and asks for a keyframe unless the stream uses intra refresh.
 
 Only for viewers that listed `cursor-metadata` in `hello.caps`; older viewers never see these
 and get the cursor in the video (the presenter reopens the capture with an embedded cursor
-while such a viewer is connected). All in `mirrorwire-proto/src/cursor.rs`. No
+while such a viewer is connected). All in `beamcraft-proto/src/cursor.rs`. No
 `PROTOCOL_VERSION`/`WIRE_VERSION` bump: nothing an old peer receives changed.
 
 **Pointer datagram** (unreliable, one per change, not tied to video frames). The first byte
@@ -98,7 +100,7 @@ line up. The same message is meant to carry the future pen/Wacom mode.
 
 Only viewers that list `fec-rs1` in `hello.caps` get these packets, and only while the
 presenter's FEC setting isn't `off`; everyone else gets the version-1 fragments of §3. Code in
-`mirrorwire-proto/src/fec.rs` (erasure code: `reed-solomon-simd`, MIT AND BSD-3-Clause). No
+`beamcraft-proto/src/fec.rs` (erasure code: `reed-solomon-simd`, MIT AND BSD-3-Clause). No
 `PROTOCOL_VERSION` bump: a new wire version is only sent to viewers that asked for it.
 
 The frame is cut into `data_count` equal shards of `shard_len` bytes (even; the last data shard
@@ -137,7 +139,7 @@ congestion (parity would only add load). A fixed setting `N%` gives delta frames
 keyframes 1.5 × N %. At least one parity packet per block (two for keyframes). Parity is paid
 from the bitrate budget: the encoder target is budget / (1 + delta overhead).
 
-**Adaptive bitrate** (presenter only, no wire change; `mirrorwire-proto/src/rate.rs`): the
+**Adaptive bitrate** (presenter only, no wire change; `beamcraft-proto/src/rate.rs`): the
 same `link_report` loss plus the presenter's QUIC RTT and backlog drops drive an AIMD
 controller. Its ceiling is the bitrate setting, its floor 3 Mbit/s. Congestion (loss ≥ 3 points
 above the learned background loss in two reports in a row, ≥ 10 points once, RTT > 1.5 × min
@@ -156,21 +158,21 @@ that never arrive at all are not in the packet count; they show up as unrecovera
 | Change | Bump |
 |---|---|
 | Datagram header layout or flag meaning | `WIRE_VERSION` (`fragment.rs`; FEC packets are version 2, `fec.rs`) |
-| Control message incompatible change, handshake/auth semantics | `PROTOCOL_VERSION` (`lib.rs`) **and** the ALPN suffix (`mirrorwire/2`) |
+| Control message incompatible change, handshake/auth semantics | `PROTOCOL_VERSION` (`lib.rs`) **and** the ALPN suffix (`beamcraft/2`) |
 | mDNS TXT keys or meaning | TXT `v` |
 | URI parameters (removal or meaning) | document it; keep parsing the old form |
 
 In the same commit: update this file, the README if users see it, and add a test in
-`mirrorwire-proto` / `mirrorwire-net` that pins the new layout (encode → bytes → decode).
+`beamcraft-proto` / `beamcraft-net` that pins the new layout (encode → bytes → decode).
 A presenter must reject an incompatible viewer with a `rejected` message the viewer GUI shows
 ("presenter is version X, update the viewer"), not a timeout. Ask the owner before any change
 that makes old peers stop working (D6).
 
 ## 5. Discovery and pairing
 
-- **mDNS:** service `_mirrorwire._udp.local.`, instance name = presenter name (hostname by
+- **mDNS:** service `_beamcraft._udp.local.`, instance name = presenter name (hostname by
   default), TXT `fp` (fingerprint), `v` (`1`), `res` (`WxH`).
-- **URI / QR:** `mirrorwire://<ip>:<port>?fp=<64 hex>&code=<6 digits>&name=<name>`. `fp` is
+- **URI / QR:** `beamcraft://<ip>:<port>?fp=<64 hex>&code=<6 digits>&name=<name>`. `fp` is
   required; `code` and `name` are optional. IPv6 hosts are bracketed.
 - **Pairing code:** 6 decimal digits from `getrandom`, new on each presenter start, shown in the
   presenter window and terminal. Only needed on the first connection of a viewer.

@@ -6,35 +6,35 @@ A Cargo workspace with six crates. Lower layers never depend on higher ones.
 
 | Layer | Crate | Job | May depend on |
 |---|---|---|---|
-| L0 | `mirrorwire-proto` | Wire format: datagram fragment header, fragmentation and reassembly, control messages (JSON over a length-prefixed stream), clock-offset estimation, latency statistics, protocol constants (`PROTOCOL_VERSION`, `ALPN`, `MDNS_SERVICE`, `DEFAULT_PORT`). **No I/O, no async, no FFmpeg.** | `bytes`, `serde`, `serde_json`, `anyhow`, `reed-solomon-simd` (FEC) only |
-| L0 | `mirrorwire-film` | The only crate that calls FilmCraft's decoders (`craft-video`, pinned here): `FilmDecoder` → tight I420 `Planes`, one worker thread, panics caught. Upgrades and measurements: [filmcraft.md](filmcraft.md). | `anyhow`, `craft-video` only |
-| L1 | `mirrorwire-media` | Frame sources (test pattern, portal + PipeWire), H.264 encoder via FFmpeg (VAAPI / VideoToolbox / x264), H.264 decoders behind the `VideoDecoder` trait (FFmpeg hardware/software in `decode.rs`, FilmCraft's pure-Rust decoder from `mirrorwire-film` in `film_decode.rs`, the default software decoder except on macOS), YUV→RGBA conversion, the capture→encode loop and the `VideoSink` trait. | `mirrorwire-proto`, `mirrorwire-film` |
-| L1 | `mirrorwire-net` | Identity (self-signed cert), pinned TLS verifiers, QUIC presenter/viewer sessions, pairing (`paired_viewers.json`, pairing code, `mirrorwire://` URI, QR), mDNS announce/browse, persisted presenter settings (`settings.json`), Linux firewall detection and a best-effort firewalld D-Bus open-port request. | `mirrorwire-proto` |
-| L2 | `mirrorwire-app` | The `mirrorwire` binary: CLI (`present`, `view`, `view --headless`, `discover`), presenter and viewer glue, the egui GUI (start screen, presenter status, viewer list, video, stats overlay). | all of the above |
-| L2 | `mirrorwire-android` | The Android viewer: `libmirrorwire_android.so` loaded by the APK. egui (glow) via `android-activity` NativeActivity, MediaCodec decode (`ndk` crate, `AImageReader` → CPU BT.709 → texture), the viewer receive loop. No FFmpeg. On non-Android targets only its pure helpers (`h264`, `yuv`) compile, so host `cargo test` covers them. | `mirrorwire-proto`, `mirrorwire-net`, `mirrorwire-film` |
+| L0 | `beamcraft-proto` | Wire format: datagram fragment header, fragmentation and reassembly, control messages (JSON over a length-prefixed stream), clock-offset estimation, latency statistics, protocol constants (`PROTOCOL_VERSION`, `ALPN`, `MDNS_SERVICE`, `DEFAULT_PORT`). **No I/O, no async, no FFmpeg.** | `bytes`, `serde`, `serde_json`, `anyhow`, `reed-solomon-simd` (FEC) only |
+| L0 | `beamcraft-film` | The only crate that calls FilmCraft's decoders (`craft-video`, pinned here): `FilmDecoder` → tight I420 `Planes`, one worker thread, panics caught. Upgrades and measurements: [filmcraft.md](filmcraft.md). | `anyhow`, `craft-video` only |
+| L1 | `beamcraft-media` | Frame sources (test pattern, portal + PipeWire), H.264 encoder via FFmpeg (VAAPI / VideoToolbox / x264), H.264 decoders behind the `VideoDecoder` trait (FFmpeg hardware/software in `decode.rs`, FilmCraft's pure-Rust decoder from `beamcraft-film` in `film_decode.rs`, the default software decoder except on macOS), YUV→RGBA conversion, the capture→encode loop and the `VideoSink` trait. | `beamcraft-proto`, `beamcraft-film` |
+| L1 | `beamcraft-net` | Identity (self-signed cert), pinned TLS verifiers, QUIC presenter/viewer sessions, pairing (`paired_viewers.json`, pairing code, `beamcraft://` URI, QR), mDNS announce/browse, persisted presenter settings (`settings.json`), Linux firewall detection and a best-effort firewalld D-Bus open-port request. | `beamcraft-proto` |
+| L2 | `beamcraft-app` | The `beamcraft` binary: CLI (`present`, `view`, `view --headless`, `discover`), presenter and viewer glue, the egui GUI (start screen, presenter status, viewer list, video, stats overlay). | all of the above |
+| L2 | `beamcraft-android` | The Android viewer: `libbeamcraft_android.so` loaded by the APK. egui (glow) via `android-activity` NativeActivity, MediaCodec decode (`ndk` crate, `AImageReader` → CPU BT.709 → texture), the viewer receive loop. No FFmpeg. On non-Android targets only its pure helpers (`h264`, `yuv`) compile, so host `cargo test` covers them. | `beamcraft-proto`, `beamcraft-net`, `beamcraft-film` |
 
 ```
-mirrorwire-proto  <-  mirrorwire-media
-                  <-  mirrorwire-net
+beamcraft-proto  <-  beamcraft-media
+                  <-  beamcraft-net
                          ^       ^
-                         mirrorwire-app   mirrorwire-android (proto + net + film)
+                         beamcraft-app   beamcraft-android (proto + net + film)
 ```
 
 Rules:
 
-- **`mirrorwire-media` and `mirrorwire-net` never depend on each other.** The presenter pushes
+- **`beamcraft-media` and `beamcraft-net` never depend on each other.** The presenter pushes
   encoded frames into a `VideoSink`; QUIC is one sink. A Miracast/RTSP sink or a file sink can be
   added beside it without touching the encoder.
-- **Only `mirrorwire-app` and `mirrorwire-android` know about egui/eframe** (and only the app
+- **Only `beamcraft-app` and `beamcraft-android` know about egui/eframe** (and only the app
   about clap and tracing-subscriber). Library crates
   log through `tracing` and return `anyhow::Result`.
-- **`unsafe` is avoided (D15).** Today it exists as FFI in `mirrorwire-media` (`encode.rs`,
-  `decode.rs`, `hw.rs`, one site in `source/portal.rs`), in `mirrorwire-app` (`yuv_glow.rs` GL
-  calls, one in `applog.rs`) and in `mirrorwire-net/src/diag.rs`. All of it lacks `// SAFETY:`
+- **`unsafe` is avoided (D15).** Today it exists as FFI in `beamcraft-media` (`encode.rs`,
+  `decode.rs`, `hw.rs`, one site in `source/portal.rs`), in `beamcraft-app` (`yuv_glow.rs` GL
+  calls, one in `applog.rs`) and in `beamcraft-net/src/diag.rs`. All of it lacks `// SAFETY:`
   comments (see roadmap 0b). The goal is to remove the sites outside media where a safe API
   exists and to keep proto `unsafe`-free. Any new `unsafe` needs a note to the owner.
 - New platform code (Android JNI, a pure-Rust encoder) goes behind the same traits
-  (`FrameSource`, `VideoSink`, the encoder backend enum), not as special cases in `mirrorwire-app`.
+  (`FrameSource`, `VideoSink`, the encoder backend enum), not as special cases in `beamcraft-app`.
 
 ## 2. Pipeline
 
@@ -78,7 +78,7 @@ xdg-desktop-portal ScreenCast  (one-time dialog, restore token)
 DMA-BUF fallback: if the encoder is not VAAPI, FFmpeg lacks libdrm, or the VAAPI import
 fails, the pipeline drops that frame and calls `FrameSource::disable_dmabuf`; the portal
 source renegotiates shared memory with the compositor. `--no-dmabuf` or
-`MIRRORWIRE_NO_DMABUF=1` skips DMA-BUF entirely. The release FFmpeg builds need
+`BEAMCRAFT_NO_DMABUF=1` skips DMA-BUF entirely. The release FFmpeg builds need
 `--enable-libdrm` for the zero-copy path.
 
 Encoder selection (`--encoder auto|vaapi|x264|videotoolbox|filmcraft`): `auto` tries VAAPI on
@@ -87,14 +87,14 @@ in both GUIs. The presenter GUI's Quality panel has an Encoder selector; Apply r
 encoder live, and if the new one can't open, the old one keeps running (logged).
 
 `filmcraft` is the pure-Rust `filmcraft-h264enc` (MIT/Apache), compiled only with cargo feature
-`filmcraft` (`mirrorwire-media/src/filmcraft.rs`). It takes the same swscale I420 picture as
+`filmcraft` (`beamcraft-media/src/filmcraft.rs`). It takes the same swscale I420 picture as
 x264, so the two software encoders compare like for like. Encoder name and per-frame encode
 time (last and 1 s mean) are in the presenter's per-second log line and status panel.
 
 Planned encoder option (see [roadmap.md](roadmap.md)): an optional "use the system FFmpeg" mode (Flatpak: the `org.freedesktop.Platform.ffmpeg-full`
 extension) so bundled builds can drop x264.
 
-Renderer selection (`--renderer gl|wgpu|auto`, env `MIRRORWIRE_RENDERER`): `auto` is glow
+Renderer selection (`--renderer gl|wgpu|auto`, env `BEAMCRAFT_RENDERER`): `auto` is glow
 (OpenGL) on macOS x86_64 and wgpu elsewhere, retrying with glow if wgpu fails to start.
 
 ## 3. Threads (today)
@@ -109,20 +109,20 @@ Bounded channels everywhere on the media path. A queue that can grow is a latenc
 
 ## 4. Files on disk
 
-Config dir: `~/.config/mirrorwire` (Flatpak: `~/.var/app/io.github.windwerfer.MirrorWire/config/mirrorwire`,
-macOS: `~/Library/Application Support/mirrorwire`), overridable with `--config-dir`.
+Config dir: `~/.config/beamcraft` (Flatpak: `~/.var/app/io.github.windwerfer.BeamCraft/config/beamcraft`,
+macOS: `~/Library/Application Support/beamcraft`), overridable with `--config-dir`.
 
 | File | Written by | Contents |
 |---|---|---|
 | `identity.cert.der`, `identity.key.der` | both | per-install self-signed cert and key (key file mode 0600) |
 | `paired_viewers.json` | presenter | fingerprints and names of viewers that showed the pairing code |
 | `portal_restore_token` | presenter (Linux) | ScreenCast restore token, so the share dialog appears once |
-| `settings.json` | presenter | Saved UDP port from the start-screen field. Overridden by `--port` or `MIRRORWIRE_PORT` for one run. |
+| `settings.json` | presenter | Saved UDP port from the start-screen field. Overridden by `--port` or `BEAMCRAFT_PORT` for one run. |
 
 Deleting the directory resets identity and pairings; viewers then see a new fingerprint.
 
 The presenter UDP port defaults to 47800. A changed port is what mDNS advertises and
-what the QR/`mirrorwire://` URI contains, so the viewer does not need a matching
+what the QR/`beamcraft://` URI contains, so the viewer does not need a matching
 setting. On Linux the presenter probes firewalld over the system bus when it can
 (and ufw's readable config otherwise), using only calls polkit allows without
 authentication (D14): `getDefaultZone`/`getActiveZones` (`…FirewallD1.info`), and
@@ -132,7 +132,7 @@ the Flatpak the bus proxy blocks polkit, so the state is "unknown"). A viewer co
 or attempt counts as "firewall OK". If the port is blocked or unknown, the GUI shows
 the command with a Copy button and **Open port for me…** (D-Bus add-port, runtime +
 permanent per zone, stops at the first cancelled or denied authorization: one click,
-at most one dialog). The logic is `mirrorwire-net/src/firewall.rs` against a
+at most one dialog). The logic is `beamcraft-net/src/firewall.rs` against a
 `Firewalld` trait; the D-Bus code is `firewall/system.rs`. The app never runs as root.
 
 ## 5. Packaging
@@ -148,17 +148,17 @@ x264 on Linux only). `packaging/macos/` makes the `.app` and a UDZO DMG (ad-hoc 
 ```
 packaging/android/MainActivity.java   extends NativeActivity; the only Java. Holds the Wi-Fi
                                       MulticastLock (mDNS), keeps the screen on, writes an
-                                      opened mirrorwire:// link to files/pending_uri.txt, and
+                                      opened beamcraft:// link to files/pending_uri.txt, and
                                       lists the H.264 decoders (MediaCodecList, no NDK API)
                                       into files/h264_decoders.txt
-crates/mirrorwire-android             android_main -> eframe (glow) -> ViewerApp
+crates/beamcraft-android             android_main -> eframe (glow) -> ViewerApp
   app.rs      home (mDNS list, 6-digit keypad, link field), connecting steps, video + overlay;
               polls pending_uri.txt every 500 ms (QR scanned with the camera app opens the link)
-  session.rs  QUIC receive loop (like mirrorwire-app's viewer, but a 6-deep decode queue)
+  session.rs  QUIC receive loop (like beamcraft-app's viewer, but a 6-deep decode queue)
               + a decode thread that also polls MediaCodec every 8 ms for late pictures
   codec.rs    AMediaCodec by name from codec_list.rs (hardware decoders only; one that
               fails to start or errors 3x is skipped, the reason is shown), then FilmCraft
-              (mirrorwire-film, re-exported as `film`) as the software fallback -> AImageReader.
+              (beamcraft-film, re-exported as `film`) as the software fallback -> AImageReader.
               GPU output (default): PRIVATE buffers with
               GPU_SAMPLED_IMAGE usage, handed to the UI as gpu.rs GpuFrames. CPU copy
               (fallback when the EGL/GL extensions are missing): YUV_420_888 -> yuv.rs ->
@@ -177,5 +177,5 @@ packaging/android/build-apk.sh        cargo-ndk + javac/d8 + aapt2 + zipalign + 
 The Java shell stays minimal: new features go into the Rust crate. It only grows for what has
 no NDK API and would otherwise need JNI (`unsafe`), handed over as a file (pending link, decoder
 list). Debug output:
-`adb logcat -s mirrorwire`.
+`adb logcat -s beamcraft`.
 

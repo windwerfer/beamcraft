@@ -1,0 +1,31 @@
+[package]
+name = "beamcraft-android"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "BeamCraft viewer for Android: the Rust side of the APK (egui + MediaCodec)"
+
+# The APK loads libbeamcraft_android.so (NativeActivity, android-activity).
+# On other targets this crate is only the host-testable helpers (h264, yuv).
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+anyhow.workspace = true
+# FilmCraft's pure-Rust H.264 decoder: the software fallback (decision log 2026-11-15).
+beamcraft-film = { path = "../beamcraft-film" }
+
+[target.'cfg(target_os = "android")'.dependencies]
+bytes.workspace = true
+crossbeam-channel.workspace = true
+tokio.workspace = true
+tracing = { workspace = true, features = ["log"] }
+beamcraft-proto = { path = "../beamcraft-proto" }
+beamcraft-net = { path = "../beamcraft-net" }
+eframe = { version = "0.37", default-features = false, features = ["glow", "default_fonts", "android-native-activity"] }
+winit = { version = "0.30", default-features = false, features = ["android-native-activity", "rwh_06"] }
+ndk = { version = "0.9", features = ["media", "api-level-26"] }
+android_logger = "0.15"
+log = "0.4"

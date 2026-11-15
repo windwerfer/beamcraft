@@ -22,7 +22,7 @@ mDNS working proves multicast gets through, not that UDP 47800 does.
 2. **Wrong address.** Check the presenter panel's "Listening on" and the IP in the viewer's
    list/URI. VPNs, Docker bridges and a second NIC can make mDNS advertise an unreachable
    address. Try the pasted URI with the right IP, or `--advertise-ip`.
-3. **macOS Local Network permission.** On first launch macOS asks to let MirrorWire find
+3. **macOS Local Network permission.** On first launch macOS asks to let BeamCraft find
    devices on the local network. If denied: System Settings › Privacy & Security › Local
    Network.
 4. **Different networks / client isolation.** Guest Wi-Fi and some mesh routers block
@@ -94,7 +94,7 @@ shown picture's arrival time; seconds there while the counters move means stale 
 
 - `in` > 0, `decoded` 0, red "decoder has returned no picture": MediaCodec takes input but
   gives nothing back. Check the `input full` / `errors` counters and the decoder name;
-  `adb logcat -s mirrorwire` has the MediaCodec error.
+  `adb logcat -s beamcraft` has the MediaCodec error.
 - `waiting key N/s` high and the red "waiting for a keyframe" line: the viewer dropped the
   stream (loss or decode backlog) and the presenter is not sending keyframes; check the
   presenter's `keyframes` count.
@@ -124,6 +124,6 @@ shown picture's arrival time; seconds there while the counters move means stale 
 - Window system: the footer (and the viewer stats overlay) shows `Wayland (native)` or
   `X11 via XWayland`. Linux is Wayland-first (D13); XWayland means winit fell back, e.g.
   `WAYLAND_DISPLAY` missing in the environment.
-- Force shared-memory capture to compare: `mirrorwire present --no-dmabuf` (or
-  `MIRRORWIRE_NO_DMABUF=1` for the GUI).
-- Terminal logs: `RUST_LOG=debug,mdns_sd=warn flatpak run io.github.windwerfer.MirrorWire present`.
+- Force shared-memory capture to compare: `beamcraft present --no-dmabuf` (or
+  `BEAMCRAFT_NO_DMABUF=1` for the GUI).
+- Terminal logs: `RUST_LOG=debug,mdns_sd=warn flatpak run io.github.windwerfer.BeamCraft present`.

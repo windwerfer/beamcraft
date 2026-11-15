@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Packages target/release/mirrorwire as an AppImage with linuxdeploy.
+# Packages target/release/beamcraft as an AppImage with linuxdeploy.
 # libva, libdrm and libpipewire stay with the host system: their drivers and modules
 # must match the versions installed there.
 # usage: packaging/appimage/build.sh <out-dir>
@@ -37,16 +37,16 @@ fetch "https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/downl
 chmod +x "$WORK/linuxdeploy" "$WORK/linuxdeploy-plugin-appimage"
 export PATH="$WORK:$PATH"
 export APPIMAGE_EXTRACT_AND_RUN=1
-export OUTPUT="$OUT/MirrorWire-x86_64.AppImage"
+export OUTPUT="$OUT/BeamCraft-x86_64.AppImage"
 # For packagers: host firewalld will not see this path inside the AppImage.
-mkdir -p "$WORK/AppDir/usr/share/firewalld/services" "$WORK/AppDir/usr/share/doc/mirrorwire"
-cp "$ROOT/packaging/linux/mirrorwire.xml" "$WORK/AppDir/usr/share/firewalld/services/mirrorwire.xml"
-cp "$ROOT/packaging/linux/README-firewalld.md" "$WORK/AppDir/usr/share/doc/mirrorwire/README-firewalld.md"
+mkdir -p "$WORK/AppDir/usr/share/firewalld/services" "$WORK/AppDir/usr/share/doc/beamcraft"
+cp "$ROOT/packaging/linux/beamcraft.xml" "$WORK/AppDir/usr/share/firewalld/services/beamcraft.xml"
+cp "$ROOT/packaging/linux/README-firewalld.md" "$WORK/AppDir/usr/share/doc/beamcraft/README-firewalld.md"
 "$WORK/linuxdeploy" \
   --appdir "$WORK/AppDir" \
-  --executable "$ROOT/target/release/mirrorwire" \
-  --desktop-file "$ROOT/packaging/linux/io.github.windwerfer.MirrorWire.desktop" \
-  --icon-file "$ROOT/packaging/icons/io.github.windwerfer.MirrorWire.png" \
+  --executable "$ROOT/target/release/beamcraft" \
+  --desktop-file "$ROOT/packaging/linux/io.github.windwerfer.BeamCraft.desktop" \
+  --icon-file "$ROOT/packaging/icons/io.github.windwerfer.BeamCraft.png" \
   --exclude-library 'libva*' \
   --exclude-library 'libdrm*' \
   --exclude-library 'libpipewire-0.3*' \

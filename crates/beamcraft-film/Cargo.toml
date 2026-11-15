@@ -1,0 +1,18 @@
+[package]
+name = "beamcraft-film"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "BeamCraft's only contact point with FilmCraft's decoders (craft-video): one pin, one adapter"
+
+# Every FilmCraft decoder API call lives in this crate, so a FilmCraft upgrade is one rev bump
+# here plus the checks in docs/agents/filmcraft.md. Callers see only `FilmDecoder` and `Planes`.
+[dependencies]
+anyhow.workspace = true
+# FilmCraft's pure-Rust H.264 decoder (MIT OR Apache-2.0, no unsafe): the software decoder
+# (decision log 2026-11-15). Not on crates.io; pinned to a reviewed commit (deny.toml allows
+# this git source). Keep the same craft-libs commit that filmcraft-h264enc in
+# beamcraft-media pulls, or the workspace builds two copies of craft-libs.
+craft-video = { git = "https://github.com/storytold/craft-libs", rev = "09dcbc225b95232998498a40ca56e24716571d53", default-features = false, features = ["h264-decode"] }

@@ -12,7 +12,7 @@ feature is not enabled on this repository yet. Until it is, email
 short, non-exploitable description and wait for a private channel before
 sending details or a sample.
 
-A useful report includes the MirrorWire version or commit, operating system
+A useful report includes the BeamCraft version or commit, operating system
 and architecture, what is affected, the impact, and reproduction steps. Please
 allow time to investigate before any public disclosure. This is a pre-1.0
 project; there is no promised response deadline or supported-version window
@@ -20,12 +20,12 @@ beyond current `main`.
 
 ## What this project does
 
-- **Static analysis.** [SonarQube Cloud](https://sonarcloud.io/project/overview?id=windwerfer_mirrorWire)
+- **Static analysis.** [SonarQube Cloud](https://sonarcloud.io/project/overview?id=windwerfer_beamcraft)
   is run from GitHub Actions on `main` and on pull requests from this
   repository (a Clippy report and unit-test lcov coverage are uploaded with
   the scan). Fork pull requests skip the upload when `SONAR_TOKEN` is
   unavailable. Automatic Analysis must stay off on the SonarCloud project,
-  or the CI upload is rejected. [GitHub CodeQL](https://github.com/windwerfer/mirrorWire/security/code-scanning)
+  or the CI upload is rejected. [GitHub CodeQL](https://github.com/windwerfer/beamcraft/security/code-scanning)
   is a second, separate scan of the Rust code and GitHub Actions workflows
   (`build-mode: none`) on `main`, pull requests, and a weekly schedule.
   Results appear under the repository's Security › Code scanning tab.

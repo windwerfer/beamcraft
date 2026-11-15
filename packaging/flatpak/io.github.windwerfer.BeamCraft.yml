@@ -1,0 +1,97 @@
+id: io.github.windwerfer.BeamCraft
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+  - org.freedesktop.Sdk.Extension.llvm20
+command: beamcraft
+finish-args:
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --share=ipc
+  - --share=network
+  - --device=dri
+  # Query / open the presenter UDP port via firewalld (polkit prompt). No host
+  # filesystem and no generic --talk-name; this is the only extra D-Bus name.
+  - --system-talk-name=org.fedoraproject.FirewallD1
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm20/bin
+  prepend-ld-library-path: /usr/lib/sdk/llvm20/lib
+  env:
+    LIBCLANG_PATH: /usr/lib/sdk/llvm20/lib
+cleanup:
+  - /include
+  - /lib/pkgconfig
+  - /share/doc
+  - '*.a'
+modules:
+  - name: x264
+    buildsystem: autotools
+    config-opts:
+      - --enable-static
+      - --enable-pic
+      - --disable-cli
+      - --disable-lavf
+      - --disable-swscale
+      - --disable-ffms
+      - --disable-gpac
+      - --disable-lsmash
+    sources:
+      - type: git
+        url: https://code.videolan.org/videolan/x264.git
+        commit: b35605ace3ddf7c1a5d67a2eb553f034aef41d55
+
+  - name: ffmpeg
+    buildsystem: autotools
+    config-opts:
+      - --enable-static
+      - --disable-shared
+      - --enable-pic
+      - --disable-programs
+      - --disable-doc
+      - --disable-network
+      - --disable-autodetect
+      - --disable-everything
+      - --disable-debug
+      - --enable-decoder=h264
+      - --enable-parser=h264
+      - --enable-swscale
+      - --enable-avfilter
+      - --enable-filter=buffer,buffersink,format,scale,hwupload,hwdownload,hwmap,null,scale_vaapi,vpp_vaapi
+      - --enable-gpl
+      - --enable-libx264
+      - --enable-encoder=libx264
+      - --enable-vaapi
+      - --enable-libdrm
+      - --enable-encoder=h264_vaapi
+      - --enable-hwaccel=h264_vaapi
+      - --pkg-config-flags=--static
+    sources:
+      - type: archive
+        url: https://ffmpeg.org/releases/ffmpeg-7.1.5.tar.xz
+        sha256: de668509caf9e35e3cd162473441fdb29538c6d96ed080292b3cf9e6fc5d558f
+
+  - name: beamcraft
+    buildsystem: simple
+    build-options:
+      # Cargo fetches crates during the build. Fine for CI bundles; a Flathub
+      # submission would vendor them with flatpak-cargo-generator instead.
+      build-args:
+        - --share=network
+      env:
+        CARGO_HOME: /run/build/beamcraft/cargo
+        PKG_CONFIG_PATH: /app/lib/pkgconfig
+    build-commands:
+      - cargo build --release --locked -p beamcraft-app --features static-ffmpeg,filmcraft
+      - install -Dm755 target/release/beamcraft /app/bin/beamcraft
+      - install -Dm644 packaging/linux/io.github.windwerfer.BeamCraft.desktop /app/share/applications/io.github.windwerfer.BeamCraft.desktop
+      - install -Dm644 packaging/linux/io.github.windwerfer.BeamCraft.metainfo.xml /app/share/metainfo/io.github.windwerfer.BeamCraft.metainfo.xml
+      - install -Dm644 packaging/icons/io.github.windwerfer.BeamCraft.png /app/share/icons/hicolor/512x512/apps/io.github.windwerfer.BeamCraft.png
+      - install -Dm644 packaging/linux/beamcraft.xml /app/share/firewalld/services/beamcraft.xml
+      - install -Dm644 packaging/linux/README-firewalld.md /app/share/doc/beamcraft/README-firewalld.md
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - target

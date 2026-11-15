@@ -288,6 +288,107 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac07cdecf99051d9a5238b80f35af32cdeba5b336e55d957b318b50137e18da5"
 
 [[package]]
+name = "beamcraft-android"
+version = "0.1.0"
+dependencies = [
+ "android_logger",
+ "anyhow",
+ "beamcraft-film",
+ "beamcraft-net",
+ "beamcraft-proto",
+ "bytes",
+ "crossbeam-channel",
+ "eframe",
+ "log",
+ "ndk",
+ "tokio",
+ "tracing",
+ "winit",
+]
+
+[[package]]
+name = "beamcraft-app"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "beamcraft-media",
+ "beamcraft-net",
+ "beamcraft-proto",
+ "bytes",
+ "clap",
+ "crossbeam-channel",
+ "dirs",
+ "eframe",
+ "hostname",
+ "libc",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "beamcraft-film"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "craft-video",
+]
+
+[[package]]
+name = "beamcraft-media"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "ashpd",
+ "beamcraft-film",
+ "beamcraft-proto",
+ "bytes",
+ "crossbeam-channel",
+ "ffmpeg-next",
+ "filmcraft-h264enc",
+ "pipewire",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "beamcraft-net"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "beamcraft-proto",
+ "bytes",
+ "dirs",
+ "getrandom 0.3.4",
+ "hex",
+ "hostname",
+ "if-addrs",
+ "mdns-sd",
+ "qrcode",
+ "quinn",
+ "rcgen",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tracing",
+ "url",
+ "zbus",
+]
+
+[[package]]
+name = "beamcraft-proto"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bytes",
+ "reed-solomon-simd",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "bindgen"
 version = "0.72.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2095,107 +2196,6 @@ dependencies = [
  "log",
  "wasi",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "mirrorwire-android"
-version = "0.1.0"
-dependencies = [
- "android_logger",
- "anyhow",
- "bytes",
- "crossbeam-channel",
- "eframe",
- "log",
- "mirrorwire-film",
- "mirrorwire-net",
- "mirrorwire-proto",
- "ndk",
- "tokio",
- "tracing",
- "winit",
-]
-
-[[package]]
-name = "mirrorwire-app"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytes",
- "clap",
- "crossbeam-channel",
- "dirs",
- "eframe",
- "hostname",
- "libc",
- "mirrorwire-media",
- "mirrorwire-net",
- "mirrorwire-proto",
- "tokio",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "mirrorwire-film"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "craft-video",
-]
-
-[[package]]
-name = "mirrorwire-media"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "ashpd",
- "bytes",
- "crossbeam-channel",
- "ffmpeg-next",
- "filmcraft-h264enc",
- "mirrorwire-film",
- "mirrorwire-proto",
- "pipewire",
- "tokio",
- "tracing",
-]
-
-[[package]]
-name = "mirrorwire-net"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytes",
- "dirs",
- "getrandom 0.3.4",
- "hex",
- "hostname",
- "if-addrs",
- "mdns-sd",
- "mirrorwire-proto",
- "qrcode",
- "quinn",
- "rcgen",
- "rustls",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "tracing",
- "url",
- "zbus",
-]
-
-[[package]]
-name = "mirrorwire-proto"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "bytes",
- "reed-solomon-simd",
- "serde",
- "serde_json",
 ]
 
 [[package]]

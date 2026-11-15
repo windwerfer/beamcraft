@@ -27,12 +27,12 @@ the diff readable. See [roadmap.md](roadmap.md) "Known debt".
 
 | Kind | Where | What it proves |
 |---|---|---|
-| Unit | `#[cfg(test)]` in `mirrorwire-proto` | header encode/parse, fragmentation and reassembly (loss, reordering, late fragments), control framing, clock offset, stats |
-| Unit | `#[cfg(test)]` in `mirrorwire-net` | identity load/create, URI round trip (including a non-default port) and rejection of bad fingerprints, QR generation, port settings precedence, firewall guide text, ufw rule parsing |
-| Unit (FilmCraft) | `mirrorwire-media/src/filmcraft.rs`, feature `filmcraft` | FilmCraft output via the real `Encoder` decodes with FFmpeg, markers read back, keyframe on request; an `#[ignore]` x264-vs-FilmCraft benchmark |
-| Unit (app) | `#[cfg(test)]` in `mirrorwire-app` | CLI parsing, capture/FEC preference precedence, process log, and `presenter::tests::test_source_streams_to_an_in_process_viewer`: test-pattern presenter (x264) → QUIC → viewer with 1 % loss in one process, live FEC/bitrate/cursor changes, markers read back (needs FFmpeg with libx264; part of the coverage report) |
-| Unit (firewall) | `mirrorwire-net/src/firewall.rs` | hint and notice for every firewalld/ufw state, a fake `Firewalld` proving the startup probe makes no privileged call, one click = one authorization and cancel = no further prompts (D14), D-Bus error classification, zone merging, open-port messages (the D-Bus/process glue is `firewall/system.rs`) |
-| Unit (rate) | `mirrorwire-proto/src/rate.rs`, `fec.rs`, `mirrorwire-media/src/pipeline.rs` | AIMD controller (cuts on loss/RTT/backlog, floor 3 Mbit/s, ceiling = user setting, learned random-loss baseline), auto FEC caps 35 %/60 %, token-bucket bandwidth simulator, x264 bitrate change live without a keyframe, VAAPI reopen rate-limited |
+| Unit | `#[cfg(test)]` in `beamcraft-proto` | header encode/parse, fragmentation and reassembly (loss, reordering, late fragments), control framing, clock offset, stats |
+| Unit | `#[cfg(test)]` in `beamcraft-net` | identity load/create, URI round trip (including a non-default port) and rejection of bad fingerprints, QR generation, port settings precedence, firewall guide text, ufw rule parsing |
+| Unit (FilmCraft) | `beamcraft-media/src/filmcraft.rs`, feature `filmcraft` | FilmCraft output via the real `Encoder` decodes with FFmpeg, markers read back, keyframe on request; an `#[ignore]` x264-vs-FilmCraft benchmark |
+| Unit (app) | `#[cfg(test)]` in `beamcraft-app` | CLI parsing, capture/FEC preference precedence, process log, and `presenter::tests::test_source_streams_to_an_in_process_viewer`: test-pattern presenter (x264) → QUIC → viewer with 1 % loss in one process, live FEC/bitrate/cursor changes, markers read back (needs FFmpeg with libx264; part of the coverage report) |
+| Unit (firewall) | `beamcraft-net/src/firewall.rs` | hint and notice for every firewalld/ufw state, a fake `Firewalld` proving the startup probe makes no privileged call, one click = one authorization and cancel = no further prompts (D14), D-Bus error classification, zone merging, open-port messages (the D-Bus/process glue is `firewall/system.rs`) |
+| Unit (rate) | `beamcraft-proto/src/rate.rs`, `fec.rs`, `beamcraft-media/src/pipeline.rs` | AIMD controller (cuts on loss/RTT/backlog, floor 3 Mbit/s, ceiling = user setting, learned random-loss baseline), auto FEC caps 35 %/60 %, token-bucket bandwidth simulator, x264 bitrate change live without a keyframe, VAAPI reopen rate-limited |
 | Loopback (end to end) | `scripts/loopback-test.sh` | test pattern → encoder → QUIC (pinned TLS, pairing) → reassembly → decoder, on localhost, with latency stats |
 | Real hardware | the owner's T480s + iMac | portal capture, VAAPI, Wi-Fi, OpenGL on a non-Metal Mac (only he can run this) |
 
@@ -107,7 +107,7 @@ the T480s (untested on target). Two measurements:
 
 Encoder-only benchmark (synthetic gradient + moving pattern, 120 frames, CBR 15 Mbit/s, Y-PSNR
 against a BT.601 reference, so the ceiling is ~50 dB):
-`MIRRORWIRE_BENCH_SIZE=1920x1080 cargo test --release -p mirrorwire-media --features filmcraft -- --ignored bench_ --nocapture`
+`BEAMCRAFT_BENCH_SIZE=1920x1080 cargo test --release -p beamcraft-media --features filmcraft -- --ignored bench_ --nocapture`
 
 | Encoder | Size | encode mean / p95 | max fps | Mbit/s @60 | Y-PSNR |
 |---|---|---|---|---|---|
@@ -117,7 +117,7 @@ against a BT.601 reference, so the ceiling is ~50 dB):
 | filmcraft-h264enc | 2000×1000 | 11.97 / 15.46 ms | ~84 | 14.7 | 41.54 dB |
 
 End-to-end loopback, 15 s, test pattern at 60 fps, all frame markers read back, 0 mismatches
-(`MIRRORWIRE_FEATURES=filmcraft scripts/loopback-test.sh 15 --encoder filmcraft --width W --height H --bitrate-kbps K`):
+(`BEAMCRAFT_FEATURES=filmcraft scripts/loopback-test.sh 15 --encoder filmcraft --width W --height H --bitrate-kbps K`):
 
 | Encoder | Size, bitrate | fps | Mbit/s | capture_to_encoded mean / p95 | capture_to_decoded mean / p95 |
 |---|---|---|---|---|---|
@@ -135,7 +135,7 @@ Useful runs:
 
 ```sh
 scripts/loopback-test.sh 30 --encoder x264 --width 1920 --height 1080 --bitrate-kbps 30000
-MIRRORWIRE_FEATURES=filmcraft scripts/loopback-test.sh 15 --encoder filmcraft --width 1920 --height 1080 --bitrate-kbps 30000
+BEAMCRAFT_FEATURES=filmcraft scripts/loopback-test.sh 15 --encoder filmcraft --width 1920 --height 1080 --bitrate-kbps 30000
 scripts/loopback-test.sh 10 --intra-refresh -- --simulate-loss 0.5
 ```
 
@@ -192,7 +192,7 @@ screen**, not logs. So:
   and don't add logic files to it. The project uses the built-in *Sonar way*
   gate (new code coverage ≥ 80 %); custom gates need a paid plan. **Automatic Analysis must
   be off** under SonarCloud Administration › Analysis method for
-  `windwerfer_mirrorWire`; if it is still on, the upload fails and should
+  `windwerfer_beamcraft`; if it is still on, the upload fails and should
   not be worked around in the workflow.
 - `codeql.yml` (push to `main`, pull requests, weekly Wednesday cron, and
   `workflow_dispatch`; also called from Build on `v*` tags and
@@ -224,5 +224,5 @@ screen**, not logs. So:
 - **Re-runs hide artifacts:** if a job is re-run, the run page shows the latest attempt, which
   only has the re-run job's artifact. The others are on `…/actions/runs/<id>/attempts/1`. When
   you hand out links, check every artifact exists and link the attempt that has it (`gh api
-  repos/windwerfer/mirrorWire/actions/runs/<id>/artifacts`).
+  repos/windwerfer/beamcraft/actions/runs/<id>/artifacts`).
 - Do not change workflows as a side effect of a feature. A workflow change is its own commit.

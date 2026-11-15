@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds a minimal static FFmpeg (plus x264 on Linux) with only what MirrorWire uses:
+# Builds a minimal static FFmpeg (plus x264 on Linux) with only what BeamCraft uses:
 # the H.264 decoder/parser, swscale, and the platform's hardware encoder
 # (VideoToolbox on macOS, VAAPI + libdrm + libx264 on Linux).
 #

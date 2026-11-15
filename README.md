@@ -1,16 +1,16 @@
-# MirrorWire
+# BeamCraft
 
 <p>
-  <a href="https://github.com/windwerfer/mirrorWire/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/windwerfer/mirrorWire/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square"></a>
-  <a href="https://github.com/windwerfer/mirrorWire/actions/workflows/build.yml"><img alt="Build" src="https://github.com/windwerfer/mirrorWire/actions/workflows/build.yml/badge.svg?branch=main&style=flat-square"></a>
+  <a href="https://github.com/windwerfer/beamcraft/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/windwerfer/beamcraft/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square"></a>
+  <a href="https://github.com/windwerfer/beamcraft/actions/workflows/build.yml"><img alt="Build" src="https://github.com/windwerfer/beamcraft/actions/workflows/build.yml/badge.svg?branch=main&style=flat-square"></a>
   <a href="#license"><img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square"></a>
   <br>
-  <a href="https://sonarcloud.io/project/overview?id=windwerfer_mirrorWire"><img alt="Scanned by SonarCloud" src="https://img.shields.io/badge/Scanned_by-SonarCloud-4b9fd5?style=flat-square&logo=sonarqubecloud&logoColor=white"></a>
-  <a href="https://sonarcloud.io/summary/new_code?id=windwerfer_mirrorWire"><img alt="Quality Gate Status" src="https://sonarcloud.io/api/project_badges/measure?project=windwerfer_mirrorWire&metric=alert_status"></a>
-  <a href="https://github.com/windwerfer/mirrorWire/security/code-scanning"><img alt="CodeQL" src="https://github.com/windwerfer/mirrorWire/actions/workflows/codeql.yml/badge.svg?branch=main&style=flat-square"></a>
+  <a href="https://sonarcloud.io/project/overview?id=windwerfer_beamcraft"><img alt="Scanned by SonarCloud" src="https://img.shields.io/badge/Scanned_by-SonarCloud-4b9fd5?style=flat-square&logo=sonarqubecloud&logoColor=white"></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=windwerfer_beamcraft"><img alt="Quality Gate Status" src="https://sonarcloud.io/api/project_badges/measure?project=windwerfer_beamcraft&metric=alert_status"></a>
+  <a href="https://github.com/windwerfer/beamcraft/security/code-scanning"><img alt="CodeQL" src="https://github.com/windwerfer/beamcraft/actions/workflows/codeql.yml/badge.svg?branch=main&style=flat-square"></a>
 </p>
 
-Low-latency screen mirroring over a LAN, written in Rust. One binary (`mirrorwire`) runs in
+Low-latency screen mirroring over a LAN, written in Rust. One binary (`beamcraft`) runs in
 **presenter** mode (captures and encodes the screen) or **viewer** mode
 (receives, decodes and shows it).
 
@@ -33,8 +33,8 @@ Low-latency screen mirroring over a LAN, written in Rust. One binary (`mirrorwir
   pins the presenter's SHA-256 fingerprint (from the QR code or mDNS). The
   presenter only streams to viewers that have shown the pairing code once; it
   remembers their certificate after that (`paired_viewers.json`).
-- Discovery: mDNS (`_mirrorwire._udp.local.`) plus a QR code with a
-  `mirrorwire://ip:port?fp=…&code=…&name=…` URI.
+- Discovery: mDNS (`_beamcraft._udp.local.`) plus a QR code with a
+  `beamcraft://ip:port?fp=…&code=…&name=…` URI.
 - Viewer UI: eframe/egui on wgpu (Metal on macOS, Vulkan/GL on Linux), with a list
   of discovered presenters, a box to paste a URI, the video, and a stats overlay.
 
@@ -42,14 +42,14 @@ Low-latency screen mirroring over a LAN, written in Rust. One binary (`mirrorwir
 
 ```
 crates/
-  mirrorwire-proto   wire format: datagram fragmentation/reassembly, control messages,
+  beamcraft-proto   wire format: datagram fragmentation/reassembly, control messages,
                  clock-offset estimation, latency statistics (no I/O)
-  mirrorwire-media   frame sources (test pattern, portal/PipeWire), H.264 encoder and
+  beamcraft-media   frame sources (test pattern, portal/PipeWire), H.264 encoder and
                  decoder (FFmpeg, VAAPI/VideoToolbox/x264), capture->encode pipeline
                  and the VideoSink trait
-  mirrorwire-net     identity/certificates, pinned TLS, QUIC presenter/viewer sessions,
+  beamcraft-net     identity/certificates, pinned TLS, QUIC presenter/viewer sessions,
                  mDNS, QR/URI pairing
-  mirrorwire-app     the `mirrorwire` binary: CLI, presenter, headless viewer, egui viewer
+  beamcraft-app     the `beamcraft` binary: CLI, presenter, headless viewer, egui viewer
 scripts/
   loopback-test.sh   test pattern -> QUIC -> headless viewer on localhost
 packaging/
@@ -74,33 +74,33 @@ then Artifacts). A `v*` tag also attaches them to a GitHub Release:
 
 | artifact | for | notes |
 |---|---|---|
-| `MirrorWire-<ver>-macos-x86_64.dmg` | Intel Macs, macOS 10.13 or newer | FFmpeg statically linked, no Homebrew needed |
-| `MirrorWire-<ver>-macos-arm64.dmg` | Apple Silicon Macs, macOS 11 or newer | FFmpeg statically linked |
-| `MirrorWire-x86_64.flatpak` | Linux (Fedora, …) | `flatpak install --user MirrorWire-x86_64.flatpak` |
-| `MirrorWire-x86_64.AppImage` | Linux, glibc 2.39 or newer (Fedora 40+, Ubuntu 24.04+) | needs `libva` and `libpipewire` from the system |
-| `MirrorWire-arm64-v8a.apk` | Android 8+ phones and tablets (64-bit ARM), **viewer only** | debug-signed: allow "install unknown apps"; uninstall an older build first |
+| `BeamCraft-<ver>-macos-x86_64.dmg` | Intel Macs, macOS 10.13 or newer | FFmpeg statically linked, no Homebrew needed |
+| `BeamCraft-<ver>-macos-arm64.dmg` | Apple Silicon Macs, macOS 11 or newer | FFmpeg statically linked |
+| `BeamCraft-x86_64.flatpak` | Linux (Fedora, …) | `flatpak install --user BeamCraft-x86_64.flatpak` |
+| `BeamCraft-x86_64.AppImage` | Linux, glibc 2.39 or newer (Fedora 40+, Ubuntu 24.04+) | needs `libva` and `libpipewire` from the system |
+| `BeamCraft-arm64-v8a.apk` | Android 8+ phones and tablets (64-bit ARM), **viewer only** | debug-signed: allow "install unknown apps"; uninstall an older build first |
 
 `<ver>` is the version on a tagged release, or the short commit SHA on a
 `main`-branch build. Each artifact is a single file (not a zip).
 
-**Android viewer.** Install the APK, open MirrorWire, and either tap a presenter in the
+**Android viewer.** Install the APK, open BeamCraft, and either tap a presenter in the
 list (same Wi-Fi), type the 6-digit pairing code on the keypad the first time, or scan the
-presenter's QR code with the phone's camera app: the `mirrorwire://` link opens MirrorWire
+presenter's QR code with the phone's camera app: the `beamcraft://` link opens BeamCraft
 and connects. Tap the video to show or hide the stats and **Disconnect**. The stats say
 which decoder the phone uses (`hardware decoder …`, or `SOFTWARE decoder FilmCraft (pure Rust)`
 when no hardware decoder works, with the reason a hardware one was skipped, and `GPU output` or `CPU copy` for how pictures reach the screen),
 the decode time, and `in / decoded / shown fps`; if the picture
 stops while frames still arrive, a red line names the stuck step. The home-screen switch
 **Software decoder (FilmCraft)** skips the hardware decoder, for comparison. Logs:
-`adb logcat -s mirrorwire`.
+`adb logcat -s beamcraft`.
 
 **Opening the unsigned Mac app.** The builds are ad-hoc signed, not notarized.
-Open the DMG, drag `MirrorWire.app` to Applications, then right-click it and
+Open the DMG, drag `BeamCraft.app` to Applications, then right-click it and
 choose **Open**, then **Open** again. On macOS 15 or newer, double-click once,
 then go to System Settings, Privacy & Security, and click **Open Anyway**. If
 Gatekeeper still blocks it, run
-`xattr -dr com.apple.quarantine /Applications/MirrorWire.app`. When asked, allow
-MirrorWire to find devices on your local network.
+`xattr -dr com.apple.quarantine /Applications/BeamCraft.app`. When asked, allow
+BeamCraft to find devices on your local network.
 
 Launching the app without arguments opens a start screen with **Present this screen**
 and **View**. Present starts capture and the pairing window (Linux only; the button is
@@ -109,7 +109,7 @@ code and QR, the viewer status, a short firewall note, a live quality panel (bit
 CBR/VBR/CQP/ICQ, keyint) and a collapsed **Details** section (encoder, capture path,
 FEC, frame rate, connection attempts); the window scrolls on small screens. The default port is
 UDP 47800; it can be changed in the start screen (saved for next time), with
-`--port`, or with `MIRRORWIRE_PORT`. The mDNS announcement and the QR/link already
+`--port`, or with `BEAMCRAFT_PORT`. The mDNS announcement and the QR/link already
 include the port, so the viewer finds it automatically. Firewall handling is described
 under [Firewall](#firewall) below. **View** lists
 presenters and, while connecting, a staged status (handshake, certificate, pairing,
@@ -124,15 +124,15 @@ the screen is still. Both windows show the window system in the footer
 (`Wayland (native)` or `X11 via XWayland`); Linux is Wayland-first. **Copy** buttons use
 the Wayland clipboard (the text stays selectable if pasting fails).
 
-Logs are written to `~/Library/Logs/MirrorWire/mirrorwire.log` on macOS and to
-`$XDG_STATE_HOME/mirrorwire/mirrorwire.log` on Linux (under
-`~/.var/app/io.github.windwerfer.MirrorWire/` for the Flatpak). The path is shown
+Logs are written to `~/Library/Logs/BeamCraft/beamcraft.log` on macOS and to
+`$XDG_STATE_HOME/beamcraft/beamcraft.log` on Linux (under
+`~/.var/app/io.github.windwerfer.BeamCraft/` for the Flatpak). The path is shown
 in the window, with a **Copy log** button.
 
 **Renderer.** The viewer uses wgpu (Metal on macOS, Vulkan/GL on Linux) by default,
 except on macOS x86_64, where it uses OpenGL (`glow`) because older Intel Macs have
 no Metal. If wgpu fails to start, the app retries with OpenGL. Override with
-`--renderer gl|wgpu|auto` or `MIRRORWIRE_RENDERER`. Video is converted YUV→RGBA on
+`--renderer gl|wgpu|auto` or `BEAMCRAFT_RENDERER`. Video is converted YUV→RGBA on
 the CPU (swscale) before it is uploaded as an egui texture, so the OpenGL path does
 not need a wgpu shader. Hardware H.264 decode (on by default; the View checkbox or
 `--software-decode` turns it off) uses VideoToolbox or VAAPI when present, and falls back
@@ -143,9 +143,9 @@ overrides it (on a fast desktop FFmpeg's is ~3× quicker, FilmCraft has no SIMD 
 The presenter can also be started from a terminal:
 
 ```sh
-flatpak run io.github.windwerfer.MirrorWire present     # Flatpak
-./MirrorWire-x86_64.AppImage present                     # AppImage
-/Applications/MirrorWire.app/Contents/MacOS/mirrorwire view --hwdec   # Mac viewer from a terminal
+flatpak run io.github.windwerfer.BeamCraft present     # Flatpak
+./BeamCraft-x86_64.AppImage present                     # AppImage
+/Applications/BeamCraft.app/Contents/MacOS/beamcraft view --hwdec   # Mac viewer from a terminal
 ```
 
 **Flatpak permissions:** `--socket=wayland`, `--socket=fallback-x11`, `--share=ipc`
@@ -155,9 +155,9 @@ can see whether firewalld runs and, only after you click **Open port for me…**
 to open the UDP port; that click shows one password dialog).
 There is no host filesystem access. Screen capture goes through the
 ScreenCast portal, which needs no extra permission. Settings live in
-`~/.var/app/io.github.windwerfer.MirrorWire/config/mirrorwire`.
+`~/.var/app/io.github.windwerfer.BeamCraft/config/beamcraft`.
 
-`mirrorwire-media` does not depend on `mirrorwire-net`. The presenter pushes encoded frames
+`beamcraft-media` does not depend on `beamcraft-net`. The presenter pushes encoded frames
 into a `VideoSink`; the QUIC transport is one implementation, and a Miracast/RTSP
 sink can be added next to it later.
 
@@ -174,17 +174,17 @@ vainfo | grep -i enc          # expect H264 VAEntrypointEncSlice lines
 
 curl https://sh.rustup.rs -sSf | sh     # if Rust is not installed yet
 cargo build --release
-./target/release/mirrorwire present          # portal dialog appears once, then a QR code
+./target/release/beamcraft present          # portal dialog appears once, then a QR code
 ```
 
 Useful presenter options: `--fps 30|60|max` (frame-rate cap asked of the compositor; default
-60, `max` = the display refresh rate; also `MIRRORWIRE_FPS`), `--cursor separate|embedded|hidden`
-(default `separate`, also `MIRRORWIRE_CURSOR`), `--fec auto|off|20` (forward error
-correction, default `auto`; also `MIRRORWIRE_FEC`), `--adaptive-bitrate on|off` (default on;
-also `MIRRORWIRE_ADAPTIVE_BITRATE`), `--bitrate-kbps 40000` (or `--bitrate-mbps 40`; the maximum when adaptive),
+60, `max` = the display refresh rate; also `BEAMCRAFT_FPS`), `--cursor separate|embedded|hidden`
+(default `separate`, also `BEAMCRAFT_CURSOR`), `--fec auto|off|20` (forward error
+correction, default `auto`; also `BEAMCRAFT_FEC`), `--adaptive-bitrate on|off` (default on;
+also `BEAMCRAFT_ADAPTIVE_BITRATE`), `--bitrate-kbps 40000` (or `--bitrate-mbps 40`; the maximum when adaptive),
 `--rc auto|cbr|vbr|cqp|icq`, `--qp 18`, `--keyint` (frames; 0 = 10 s),
 `--encoder auto|vaapi|x264|filmcraft`, `--intra-refresh`, `--source test`, `--no-pairing`,
-`--port` (or `MIRRORWIRE_PORT`; the GUI also saves the port in `settings.json`),
+`--port` (or `BEAMCRAFT_PORT`; the GUI also saves the port in `settings.json`),
 `--no-dmabuf` (capture through shared memory instead of zero-copy GPU buffers).
 `filmcraft` is an optional pure-Rust H.264 encoder for comparison (built into the Flatpak
 and AppImage; from source add `--features filmcraft`). It can also be switched live in the
@@ -214,7 +214,7 @@ FEC can be changed live in the presenter's Quality panel (saved in `settings.jso
 window shows `FEC: auto · parity +N% delta / +M% keyframes · viewer loss … · rebuilt … packets/s ·
 unrecoverable frames …`; the viewer overlay shows `fec +N%  rebuilt N/s  loss N%  unrecoverable frames N`.
 
-**Adaptive bitrate** (default on; `--adaptive-bitrate on|off`, `MIRRORWIRE_ADAPTIVE_BITRATE`,
+**Adaptive bitrate** (default on; `--adaptive-bitrate on|off`, `BEAMCRAFT_ADAPTIVE_BITRATE`,
 a checkbox in the Quality panel, saved in `settings.json`). The bitrate setting is the maximum.
 When the viewer reports loss above what the link always loses, or the round-trip time grows (a
 queue is building), the presenter lowers the rate (down to 3 Mbit/s); on a clean link it raises
@@ -229,9 +229,9 @@ reopened (one keyframe), at most every 5 s. The presenter window shows
 ```sh
 brew install ffmpeg pkg-config
 curl https://sh.rustup.rs -sSf | sh
-cargo build --release -p mirrorwire-app --no-default-features --features gui
-./target/release/mirrorwire view              # pick a discovered presenter, enter pairing code once
-./target/release/mirrorwire view 'mirrorwire://192.168.1.20:47800?fp=…&code=…'
+cargo build --release -p beamcraft-app --no-default-features --features gui
+./target/release/beamcraft view              # pick a discovered presenter, enter pairing code once
+./target/release/beamcraft view 'beamcraft://192.168.1.20:47800?fp=…&code=…'
 ```
 
 The viewer defaults to hardware decode (VideoToolbox on macOS, VAAPI on Linux) and falls
@@ -260,9 +260,9 @@ point `PKG_CONFIG_PATH` at it.
 scripts/loopback-test.sh 10 --encoder x264            # 10 s, native test pattern 1920x1080@60, 40 Mbit/s
 scripts/loopback-test.sh 10 --intra-refresh -- --simulate-loss 0.5
 scripts/loopback-test.sh 10 --encoder x264 --fec auto -- --simulate-loss 5 --simulate-burst 4
-MIRRORWIRE_FEATURES=filmcraft scripts/loopback-test.sh 10 --encoder filmcraft
-mirrorwire view --headless --duration 10 '<uri>'          # against a real presenter
-mirrorwire discover                                       # list presenters via mDNS
+BEAMCRAFT_FEATURES=filmcraft scripts/loopback-test.sh 10 --encoder filmcraft
+beamcraft view --headless --duration 10 '<uri>'          # against a real presenter
+beamcraft discover                                       # list presenters via mDNS
 ```
 
 The test pattern writes its frame number into the image as black/white blocks.
@@ -344,7 +344,7 @@ builds use only FFmpeg's LGPL parts plus VideoToolbox.
 
 ## Firewall
 
-MirrorWire never asks for an admin password on its own. When presenting starts it only
+BeamCraft never asks for an admin password on its own. When presenting starts it only
 asks firewalld things that need no authorization (is it running, which zones are
 active). Reading the zone rules needs admin rights on Fedora's default polkit policy,
 so the app reads them only if polkit already allows it without a dialog; otherwise
@@ -376,9 +376,9 @@ Ubuntu with ufw: sudo ufw allow 47800/udp
 
 If you use another Linux distribution, look up how to allow a UDP port in its firewall.
 Replace `47800` with the port shown in the presenter if you changed it. A firewalld
-service file (`mirrorwire.xml`, UDP 47800 only) is shipped in the AppImage and Flatpak
+service file (`beamcraft.xml`, UDP 47800 only) is shipped in the AppImage and Flatpak
 under `share/firewalld/services/`; it only takes effect if it is installed on the host
-(`sudo firewall-cmd --permanent --add-service=mirrorwire && sudo firewall-cmd --reload`).
+(`sudo firewall-cmd --permanent --add-service=beamcraft && sudo firewall-cmd --reload`).
 See [packaging/linux/README-firewalld.md](packaging/linux/README-firewalld.md).
 
 ## Known limitations and next steps
