@@ -218,15 +218,17 @@ on the way (Wi-Fi, router), and whether that queue is growing.
 
 **Adaptive bitrate** (default on; `--adaptive-bitrate on|off`, `BEAMCRAFT_ADAPTIVE_BITRATE`,
 a checkbox in the Quality panel, saved in `settings.json`). The bitrate setting is the maximum.
-When the viewer reports loss above what the link always loses, or the round-trip time grows (a
-queue is building), the presenter lowers the rate (down to 3 Mbit/s); on a clean link it raises
-it again slowly. A new viewer starts at 10 Mbit/s and the rate grows quickly (×1.25 per second)
+The viewer measures how long video packets wait in a queue on the way; when that queue starts
+to build (before packets are lost), the presenter lowers the rate (down to 3 Mbit/s). Loss
+while the queue stays flat is random Wi-Fi loss: FEC covers it and the rate stays. Older viewers
+are judged by loss and the round-trip time instead. On a clean link the rate rises again slowly. A new viewer starts at 10 Mbit/s and the rate grows quickly (×1.25 per second)
 until the link pushes back, and it only grows while the stream actually uses it, so a quiet
 screen does not leave a budget the link can't carry. FEC parity is counted inside that budget, so more parity never pushes the
 stream above what the link can carry. x264 changes rate without a keyframe; VAAPI has to be
 reopened (one keyframe), at most every 5 s. The presenter window shows
 `Bitrate: target X of max Y Mbit/s (adaptive)`. After a cut it adds why, e.g.
-`last cut: loss 5.2 % (background 1.8 %)` or `rtt 48 ms (min 3 ms)`, and the log has one
+`last cut: queue 64 ms (max 112, +121 ms/s)`, `loss 5.2 % (background 1.8 %)` or
+`rtt 48 ms (min 3 ms)`, and the status line shows the viewer's latest `viewer queue …`; the log has one
 `adaptive bitrate: cut …` line per cut. x264 no longer pads frames to the bitrate
 (`nal-hrd=cbr` filler is gone), so a simple screen sends less than the setting.
 

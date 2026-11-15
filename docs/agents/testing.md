@@ -177,9 +177,11 @@ on its own: the excess-loss rule needs 3 points above the background loss.
 
 `cargo test -p beamcraft-proto sim_ -- --nocapture` runs the controller against an encoder
 model (60 fps, sends min(target, content demand)), auto FEC parity, `LossSim` and
-`BandwidthSim` (150 ms bucket), with a 500 ms report and a constant 3 ms RTT. There is no QUIC
-and no queueing delay, so the RTT and backlog triggers are not exercised. Results (40 Mbit/s
-ceiling, 60–90 s):
+`BandwidthSim` (150 ms bucket), with a 500 ms report and a constant 3 ms RTT. There is no QUIC,
+so the backlog trigger is not exercised. The `WIFI` link instead uses a FIFO bottleneck with a
+300 ms buffer (overload shows as delay first, then loss; the RTT includes the queue) and a
+`DelayMeter` as the viewer has, with and without queue reports. Results (40 Mbit/s ceiling,
+60–90 s):
 
 The sim feeds the sent wire rate into the controller and can add content bursts (busy
 content for 2 s every 10 s). Results with the controller as of 2026-11-15 (slow start from
@@ -195,10 +197,13 @@ old controller (starts at the ceiling, grows while unused) where it differs:
 | 20 Mbit/s bottleneck, 0 % | 11 (heavy loss), sawtooth 16.8 ↔ 22.4 every ~8 s | 22.4 | 16.0 Mbit/s | 1.5 % |
 | 20 Mbit/s bottleneck, 2 % | 3 (heavy loss, loss) | 18.1 | 15.0 Mbit/s | 2.3 % |
 | 8 Mbit/s bottleneck, 2 % | 11 (heavy loss, loss) | 6.4 (min 4.7) | 6.1 Mbit/s | 2.9 % |
+| no limit, 5 % random, **queue reports** | 0 (queue flat: loss is random) | 40.0 | 30.5 Mbit/s | 5.1 % |
+| 16 Mbit/s, 300 ms FIFO, RTT only (older viewer) | 19 (rtt) | 17.3 (min 12.4) | 13.0 Mbit/s | 0 %, queue mean 25.9 / p95 129 ms |
+| 16 Mbit/s, 300 ms FIFO, **queue reports** | 16 (queue) | 14.2 | 13.8 Mbit/s | 0 %, queue mean 18.1 / p95 70.5 ms |
 
-Weak spots left (roadmap item 0): cuts keep firing while the random-loss probe is still
-watching, so 5 % random loss costs three cuts before it is learned; and a bottleneck is found
-only by overrunning it, which a delay signal (item 0.2) would avoid.
+Weak spots left (roadmap item 0): without queue reports, cuts keep firing while the random-loss
+probe is still watching (5 % random loss costs three cuts); with them, a bottleneck is still found
+by overrunning it every ~6–8 s (the additive climb of 1.6 Mbit/s per second; item 0.4).
 
 ### 3.4 Real Wi-Fi: presenter in the dev container, Android tablet viewer (2026-11-15)
 
@@ -227,6 +232,35 @@ slow start, growing the budget only while it is used, and at most one forced key
 2 × RTT. Limiting keyframes alone (measured separately) halved the IDRs but not the lost frames
 (119 / 92 vs 102 / 85). The remaining episodes (fixed run 2) are bursts that really used a
 ~21–27 Mbit/s budget; the RTT rose 1–1.5 s before the loss each time (roadmap 0.2).
+
+### 3.5 Real Wi-Fi: one-way queueing delay (2026-11-15, same setup as §3.4)
+
+Same presenter and tablet as §3.4; this Wi-Fi link was weaker (tablet RSSI −75 dBm, 11n,
+39 Mbit/s link speed) and carried ~15–17 Mbit/s. The APK reports the queueing delay in both
+columns; "before" is 79eb65b's controller (ignores it), "queue" cuts on it. 60 s per run,
+alternated. Queue statistics are over the viewer's 0.5 s reports (mean of the window means;
+95th percentile of the window means).
+
+| Run | Unrecoverable frames | Keyframes | Cuts | 1 s windows RTT > 150 ms | Video sent | Queue mean / p95 |
+|---|---|---|---|---|---|---|
+| before | 13 | 12 | 7 | 5 | 15.8 Mbit/s | 24 / 102 ms |
+| queue (no max rule) | 10 | 10 | 8 | 0 | 14.7 Mbit/s | 20 / 65 ms |
+| before | 1 | 9 | 9 | 0 | 15.6 Mbit/s | 21 / 85 ms |
+| queue (no max rule) | 1 | 9 | 7 | 1 | 14.2 Mbit/s | 13 / 40 ms |
+| before | 0 | 9 | 10 | 0 | 15.1 Mbit/s | 19 / 63 ms |
+| queue | 0 | 9 | 10 | 0 | 14.1 Mbit/s | 13 / 36 ms |
+| before | 35 | 13 | 8 | 4 | 15.3 Mbit/s | 32 / 129 ms |
+| queue | 126 (121 in one outage) | 10 | 9 | 4 | 13.4 Mbit/s | 15 / 71 ms |
+
+The queue controller lowers queueing delay every time (p95 −35 to −58 %) for ~7 % less video.
+Lost frames are dominated by rare events that four minutes can't separate: the 121 came from a
+Wi-Fi outage (no viewer report for 2.4 s, QUIC lost 2606 packets, queue 3 ms right after); the
+rest of that run and the 10 in the first "queue" run are bursts after the budget had climbed
+far above the link (27.5 Mbit/s budget while 10–15 were sent, then queue 4 → 128 ms in one
+report). The first observation run (old controller) showed the shape of every episode: the
+queue rises for 0.5–1.5 s (e.g. 42 → 104 → 211 → 292 ms) before any loss, while the RTT rule
+fired only at 110–180 ms. "No max rule" missed 24 ms (max 82, +193 ms/s) one report before a
+236 ms queue, which is why one frame waiting ≥ 50 ms now counts.
 
 ## 4. Real hardware
 
