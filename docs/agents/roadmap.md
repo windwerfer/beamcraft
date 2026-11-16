@@ -151,8 +151,9 @@ target), **planned**, **idea**. Update this file when an item moves.
       app/applog.rs and portal.rs via safe APIs (D15); lock poisoning via `unwrap_or_else(PoisonError::into_inner)`. ~1 day.
    2. **cargo-fuzz targets** for fragment, fec, cursor and control decode, plus a CI job (if not
       already done alongside item 0). ~½ day.
-   3. **One formatting-only commit** (`cargo fmt`, `rustfmt.toml`), then a `cargo xtask ci` gate:
-      fmt, clippy, tests, a crate-layer check (architecture.md made mechanical), loopback test.
+   3. **A `cargo xtask ci` gate** (the formatting-only commit and the CI fmt check are done,
+      rustfmt defaults, no `rustfmt.toml`): fmt, clippy, tests, a crate-layer check
+      (architecture.md made mechanical), loopback test.
    4. **Machine-checked perf budgets:** loopback p95 capture→decoded and the adaptive-bitrate
       simulation rows as TOML budgets checked in CI, instead of prose tables in testing.md.
    5. **Split the big files** (encode.rs, presenter.rs, transport.rs; move FecState and the rate
@@ -343,7 +344,6 @@ need access a browser cannot give).
 - Default bitrate and whether to offer 4:4:4 where the encoder supports it.
 - VideoToolbox decode on the HD 6770M under OCLP: the photos show it unavailable (no H.264
   decoder for that GPU); software decode takes ≈2.4 ms/frame there, so it is fine as default.
-- Line width for `rustfmt` (see Known debt).
 
 ## Known debt and doc/code mismatches
 
@@ -352,10 +352,6 @@ Found while writing these docs (2026-11-12, commit `f7677c7`). Fix them in their
 - **Hardcoded 2000×1000:** `--width/--height` default to 2000×1000 and the GUI presenter uses
   them, so a 1920×1080 screen is scaled and distorted. The docs describe native resolution as
   the goal. (Being fixed under Next 1.)
-- **Formatting:** `cargo fmt --all --check` fails on `main` (≈40 hunks in `beamcraft-media`,
-  `beamcraft-net`, `beamcraft-proto`); there is no `rustfmt.toml` and CI has no fmt step.
-  Decide a width, add `rustfmt.toml`, one formatting-only commit, then add
-  `cargo fmt --all --check` to `ci.yml`.
 - **`unsafe` without `// SAFETY:` comments** in `beamcraft-media` (`encode.rs`, `decode.rs`,
   `hw.rs`, incl. `unsafe impl Send` for FFmpeg wrappers). No workspace lint forbids `unsafe`
   elsewhere yet (consider `unsafe_code = "forbid"` in proto/net/app).

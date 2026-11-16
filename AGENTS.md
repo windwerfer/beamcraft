@@ -109,7 +109,7 @@ format changes, say what the user loses. See [decisions.md](docs/agents/decision
 ## 3. Gates before every push
 
 ```sh
-cargo fmt --all                                    # see the formatting note in testing.md
+cargo fmt --all                                    # rustfmt defaults (width 100); CI checks it
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 scripts/loopback-test.sh 10 --encoder x264         # end to end on localhost
@@ -118,7 +118,7 @@ cargo deny --all-features --locked check advisories bans licenses sources
 ```
 
 Install `cargo-audit` and `cargo-deny` once (`cargo install cargo-audit cargo-deny`).
-CI (`.github/workflows/ci.yml`) runs clippy, tests, a 5 s loopback, the audit
+CI (`.github/workflows/ci.yml`) runs a fmt check, clippy, tests, a 5 s loopback, the audit
 workflow (`.github/workflows/audit.yml`), and SonarCloud on every push and pull
 request. CodeQL (`.github/workflows/codeql.yml`) is a second, separate scan
 of the Rust code and GitHub Actions workflows on those same events, plus a

@@ -17,11 +17,9 @@ with `cargo install cargo-audit cargo-deny` (or `taiki-e/install-action` in CI).
 Build dependencies (Fedora and Ubuntu package lists) are in the README and in
 `.github/workflows/ci.yml`. A headless box without a GPU or a portal can run all of these gates.
 
-**Formatting note.** `main` is not yet `cargo fmt`-clean (the code was written to a wider line
-width and there is no `rustfmt.toml`), and CI does not check formatting. Until the owner picks
-a width and one formatting-only commit lands, don't reformat files you aren't otherwise
-changing: format only the files you edit (`rustfmt --edition 2021 path/to/file.rs`) and keep
-the diff readable. See [roadmap.md](roadmap.md) "Known debt".
+**Formatting note.** The workspace uses the rustfmt defaults (`max_width` 100); there is no
+`rustfmt.toml`. `main` is `cargo fmt`-clean and CI fails on unformatted code
+(`cargo fmt --all -- --check`, before clippy), so run `cargo fmt --all` before every commit.
 
 ## 2. Test layers
 
@@ -282,7 +280,7 @@ screen**, not logs. So:
 
 ## 5. CI and artifacts
 
-- `ci.yml` (push to `main`, PRs): clippy `-D warnings`, `cargo test`, 5 s loopback with x264,
+- `ci.yml` (push to `main`, PRs): `cargo fmt --all -- --check`, clippy `-D warnings`, `cargo test`, 5 s loopback with x264,
   then clippy/tests/5 s loopback again with feature `filmcraft` and `--encoder filmcraft`,
   the reusable audit workflow, and the reusable SonarCloud scan (`needs: audit`).
 - `sonarcloud.yml` (called from CI; also from Build on `v*` tags and
