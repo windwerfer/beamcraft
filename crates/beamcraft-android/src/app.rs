@@ -293,7 +293,7 @@ impl ViewerApp {
                 }
                 (None, None) => {}
             }
-            if status.cursor_mode == "separate" {
+            if status.cursor_mode == Some(beamcraft_proto::control::CursorMode::Separate) {
                 let current = status.cursor.as_ref().and_then(|c| c.lock().unwrap_or_else(|e| e.into_inner()).current());
                 if let Some((p, img)) = current {
                     self.draw_cursor(ui, &p, &img, img_rect);
@@ -326,7 +326,7 @@ impl ViewerApp {
                 status.reader_behind_ms,
                 status.out_of_order,
                 status.pipeline.line(),
-                if status.cursor_mode.is_empty() { "?" } else { status.cursor_mode.as_str() },
+                status.cursor_mode.map_or("?", |m| m.as_str()),
                 status.link.line(),
             );
             let galley = ui.painter().layout(

@@ -43,8 +43,8 @@ pub struct Status {
     pub out_of_order: u64,
     pub lost: u64,
     pub first_frame: bool,
-    /// How the presenter sends the cursor: `separate`, `embedded`, `hidden`.
-    pub cursor_mode: String,
+    /// How the presenter sends the cursor, once connected.
+    pub cursor_mode: Option<beamcraft_proto::control::CursorMode>,
     /// Cursor sent as coordinates, once connected.
     pub cursor: Option<Arc<Mutex<ViewerCursor>>>,
     /// FEC overhead, packet loss and rebuilt packets (last ~0.5 s).
@@ -185,7 +185,7 @@ async fn run(
         s.connected = true;
         s.error = None;
         s.stream = Some(info.clone());
-        s.cursor_mode = session.cursor_mode();
+        s.cursor_mode = Some(session.cursor_mode());
         s.cursor = Some(session.cursor.clone());
     }
     repaint();
@@ -262,7 +262,7 @@ async fn run(
         if stream_updates.has_changed().unwrap_or(false) {
             let info = stream_updates.borrow_and_update().clone();
             let mut s = status.lock().unwrap_or_else(|e| e.into_inner());
-            s.cursor_mode = info.cursor.clone().unwrap_or_else(|| "embedded".into());
+            s.cursor_mode = Some(info.cursor);
             s.stream = Some(info);
         }
         if let Some(w) = link_window.tick(reassembler.link_stats(), now_us()) {

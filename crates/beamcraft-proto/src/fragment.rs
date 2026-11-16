@@ -3,7 +3,8 @@
 //! frames, detect gaps, and measure per-stage latency without extra round trips.
 
 use bytes::{BufMut, Bytes, BytesMut};
-use crate::delay::{DelayMeter, DelaySummary};
+use crate::control::QueueDelay;
+use crate::delay::DelayMeter;
 use crate::fec::{block_len, recover_block, FecHeader, LinkStats};
 use std::collections::BTreeMap;
 
@@ -337,7 +338,7 @@ impl Reassembler {
     }
 
     /// Queueing delay since the previous call (see [`crate::delay`]).
-    pub fn take_delay(&mut self) -> Option<DelaySummary> {
+    pub fn take_delay(&mut self) -> Option<QueueDelay> {
         self.delay.take()
     }
 

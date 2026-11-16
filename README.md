@@ -83,6 +83,11 @@ then Artifacts). A `v*` tag also attaches them to a GitHub Release:
 `<ver>` is the version on a tagged release, or the short commit SHA on a
 `main`-branch build. Each artifact is a single file (not a zip).
 
+**Use the same build on both sides.** BeamCraft is in development and does not keep
+compatibility between versions: a presenter and a viewer of different protocol versions
+refuse to connect, and the viewer shows `version mismatch: the presenter speaks protocol N, the
+viewer M; update the viewer …` (or presenter). Update both from the same `main` build.
+
 **Android viewer.** Install the APK, open BeamCraft, and either tap a presenter in the
 list (same Wi-Fi), type the 6-digit pairing code on the keypad the first time, or scan the
 presenter's QR code with the phone's camera app: the `beamcraft://` link opens BeamCraft
@@ -198,7 +203,7 @@ sends each move as a tiny datagram, and the viewer draws the cursor itself on to
 video. The cursor then moves as fast as the network allows instead of waiting for the next
 encoded frame. No extra permission is needed anywhere: the viewer only draws inside its own
 window. It falls back to `embedded` (cursor drawn into the video, the old way) when the
-screen-cast portal offers no metadata cursor, or for a viewer older than this feature.
+screen-cast portal offers no metadata cursor.
 The presenter window shows the active mode under *Cursor*; the viewer overlay shows
 `cursor separate (N updates/s)` or `cursor embedded (in video)`. Cursor and *Max fps* can be
 changed in the presenter's Quality panel (saved in `settings.json`; the capture restarts
@@ -209,7 +214,7 @@ few lost Wi-Fi packets without waiting for a keyframe. The viewer rebuilds a fra
 enough packets of it have arrived, with no round trip. With `--fec auto` (the default) parity is
 10 % of a delta frame's packets and 25 % of a keyframe's at no loss, and rises with the loss the
 viewer reports, and further while frames still can't be rebuilt (bursts; up to 35 % and 60 %). `--fec 20` fixes it at 20 % (30 % for keyframes); `--fec off`
-sends no parity. Parity is paid from the bitrate (the encoder gets the rest). Older viewers get plain packets.
+sends no parity. Parity is paid from the bitrate (the encoder gets the rest).
 FEC can be changed live in the presenter's Quality panel (saved in `settings.json`). The presenter
 window shows `FEC: auto · parity +N% delta / +M% keyframes · viewer loss … · rebuilt … packets/s ·
 unrecoverable frames …`; the viewer overlay shows `fec +N%  rebuilt N/s  loss N%  unrecoverable frames N`,

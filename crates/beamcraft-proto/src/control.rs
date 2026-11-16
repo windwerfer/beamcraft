@@ -7,22 +7,20 @@ pub const MAX_CONTROL_MESSAGE: usize = 64 * 1024;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Control {
     Hello {
+        /// Must equal [`crate::PROTOCOL_VERSION`]; checked (with
+        /// [`hello_protocol`]) before the rest of the message is parsed.
         protocol: u32,
         name: String,
         pairing_code: Option<String>,
-        /// Optional features this viewer supports, e.g.
-        /// [`crate::cursor::CAP_CURSOR_METADATA`]. Older viewers send none.
-        #[serde(default, skip_serializing_if = "Vec::is_empty")]
-        caps: Vec<String>,
     },
     Rejected { reason: String },
     StreamInfo(StreamInfo),
     RequestKeyframe { reason: String },
     Ping { t_viewer_us: u64 },
     Pong { t_viewer_us: u64, t_presenter_us: u64 },
-    /// Viewer -> presenter, about twice a second, only when the presenter's
-    /// `stream_info` has a `fec` field (older presenters would reject an
-    /// unknown message). Feeds the adaptive FEC overhead.
+    /// Viewer -> presenter, about twice a second: how the video packets of
+    /// the last window arrived. Feeds the FEC overhead and the adaptive
+    /// bitrate.
     LinkReport {
         /// Packet loss over the window, in 1/1000.
         loss_permille: u32,
@@ -32,19 +30,49 @@ pub enum Control {
         recovered: u32,
         /// Frames that could not be rebuilt.
         unrecoverable: u32,
-        /// Mean one-way queueing delay over the window (µs above the lowest
-        /// delay of the last 30 s; [`crate::delay`]). Absent from older viewers.
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        queue_us: Option<u32>,
-        /// Highest queueing delay of a frame in the window (µs).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        queue_max_us: Option<u32>,
-        /// Slope of the queueing delay over the window (µs per second;
-        /// positive = a queue is building up).
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        queue_trend_us_per_s: Option<i32>,
+        /// One-way queueing delay of the window's frames; `None` when no
+        /// frame arrived in the window.
+        queue: Option<QueueDelay>,
     },
     Bye,
+}
+
+/// One-way queueing delay over a report window (µs above the lowest delay
+/// of the last 30 s; [`crate::delay`]).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct QueueDelay {
+    pub mean_us: u32,
+    pub max_us: u32,
+    /// Least-squares slope over the window (µs per second; positive = a
+    /// queue is building up).
+    pub trend_us_per_s: i32,
+}
+
+impl QueueDelay {
+    pub fn mean_ms(&self) -> f32 {
+        self.mean_us as f32 / 1000.0
+    }
+
+    pub fn max_ms(&self) -> f32 {
+        self.max_us as f32 / 1000.0
+    }
+
+    pub fn trend_ms_per_s(&self) -> f32 {
+        self.trend_us_per_s as f32 / 1000.0
+    }
+}
+
+/// `queue 5 ms (max 12, -2 ms/s)`, as in the logs and the HUD.
+impl std::fmt::Display for QueueDelay {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "queue {:.0} ms (max {:.0}, {:+.0} ms/s)",
+            self.mean_ms(),
+            self.max_ms(),
+            self.trend_ms_per_s()
+        )
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -58,23 +86,52 @@ pub struct StreamInfo {
     /// The encoder heals losses by itself within about a second, so the viewer
     /// keeps decoding through a loss instead of waiting for a keyframe.
     pub intra_refresh: bool,
-    /// How the cursor reaches this viewer: [`CURSOR_SEPARATE`] (pointer
-    /// datagrams + image streams), [`CURSOR_EMBEDDED`] (in the video) or
-    /// [`CURSOR_HIDDEN`]. Absent from older presenters (= embedded).
-    /// The presenter may send `stream_info` again when this changes.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub cursor: Option<String>,
-    /// Forward error correction setting (`off`, `auto`, `20%`) of a presenter
-    /// that can send FEC packets and reads `link_report`. Absent from older
-    /// presenters. Whether this viewer gets FEC packets depends on its hello
-    /// listing [`crate::fec::CAP_FEC`].
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fec: Option<String>,
+    /// How the cursor reaches the viewer. The presenter sends `stream_info`
+    /// again when this changes.
+    pub cursor: CursorMode,
+    /// The presenter's forward error correction setting (`off`, `auto`,
+    /// `20%`), for display.
+    pub fec: String,
 }
 
-pub const CURSOR_SEPARATE: &str = "separate";
-pub const CURSOR_EMBEDDED: &str = "embedded";
-pub const CURSOR_HIDDEN: &str = "hidden";
+/// How the presenter delivers the mouse cursor.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum CursorMode {
+    /// As pointer datagrams and image streams, drawn by the viewer
+    /// ([`crate::cursor`]).
+    Separate,
+    /// Drawn into the video by the compositor.
+    #[default]
+    Embedded,
+    /// Not shown.
+    Hidden,
+}
+
+impl CursorMode {
+    /// The name on the wire, in the status and in the HUD.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CursorMode::Separate => "separate",
+            CursorMode::Embedded => "embedded",
+            CursorMode::Hidden => "hidden",
+        }
+    }
+}
+
+/// The `protocol` field of a `hello` body, read without parsing the rest, so
+/// a peer of another version is rejected with a readable message even when
+/// the message shapes differ. `None` if the body is not a `hello`.
+pub fn hello_protocol(body: &[u8]) -> Option<u32> {
+    #[derive(Deserialize)]
+    struct Peek {
+        #[serde(rename = "type")]
+        kind: String,
+        protocol: u32,
+    }
+    let p: Peek = serde_json::from_slice(body).ok()?;
+    (p.kind == "hello").then_some(p.protocol)
+}
 
 impl Control {
     pub fn encode(&self) -> Vec<u8> {
@@ -112,63 +169,49 @@ mod tests {
     }
 
     #[test]
-    fn hello_caps_are_backward_compatible() {
-        // An old viewer's hello (no caps) still parses, with empty caps.
-        let old = br#"{"type":"hello","protocol":1,"name":"imac","pairing_code":null}"#;
-        let Control::Hello { caps, .. } = Control::decode_body(old).unwrap() else { panic!() };
-        assert!(caps.is_empty());
-        // A new hello with caps parses for a presenter that ignores unknown fields.
-        let new = Control::Hello {
-            protocol: 1,
-            name: "imac".into(),
-            pairing_code: None,
-            caps: vec![crate::cursor::CAP_CURSOR_METADATA.into()],
-        };
-        let body = &new.encode()[4..];
-        assert!(std::str::from_utf8(body).unwrap().contains("cursor-metadata"));
-        assert_eq!(Control::decode_body(body).unwrap(), new);
-        // Old presenter stream_info (no cursor field) parses as None.
-        let info = br#"{"type":"stream_info","width":1,"height":1,"fps":60,"codec":"h264","encoder":"x","bitrate_kbps":1,"intra_refresh":false}"#;
-        let Control::StreamInfo(info) = Control::decode_body(info).unwrap() else { panic!() };
-        assert_eq!(info.cursor, None);
-        assert_eq!(info.fec, None);
-        let report = Control::LinkReport {
-            loss_permille: 20,
-            packets: 1000,
-            recovered: 18,
-            unrecoverable: 0,
-            queue_us: None,
-            queue_max_us: None,
-            queue_trend_us_per_s: None,
-        };
-        let body = report.encode();
-        assert!(!std::str::from_utf8(&body[4..]).unwrap().contains("queue"), "old shape on the wire");
-        assert_eq!(Control::decode_body(&body[4..]).unwrap(), report);
+    fn version_is_read_before_the_shape() {
+        // A version-1 hello (with its `caps` list) still shows its version.
+        let v1 = br#"{"type":"hello","protocol":1,"name":"imac","pairing_code":null,"caps":["fec-rs1"]}"#;
+        assert_eq!(hello_protocol(v1), Some(1));
+        // A future hello with a different shape, too.
+        assert_eq!(hello_protocol(br#"{"type":"hello","protocol":9,"other":[1]}"#), Some(9));
+        assert_eq!(hello_protocol(br#"{"type":"bye"}"#), None);
+        assert_eq!(hello_protocol(b"\xff garbage"), None);
+        let hello = Control::Hello { protocol: crate::PROTOCOL_VERSION, name: "imac".into(), pairing_code: None };
+        assert_eq!(hello_protocol(&hello.encode()[4..]), Some(crate::PROTOCOL_VERSION));
     }
 
     #[test]
-    fn link_report_queue_delay_is_optional() {
-        // An older viewer's report (no delay fields) parses with None.
-        let old = br#"{"type":"link_report","loss_permille":5,"packets":900,"recovered":2,"unrecoverable":0}"#;
-        let Control::LinkReport { queue_us, queue_max_us, queue_trend_us_per_s, .. } = Control::decode_body(old).unwrap()
-        else {
-            panic!()
-        };
-        assert_eq!((queue_us, queue_max_us, queue_trend_us_per_s), (None, None, None));
-        // The new fields round-trip, and their names are pinned.
-        let new = Control::LinkReport {
+    fn wire_names_are_pinned() {
+        let info = Control::StreamInfo(StreamInfo {
+            width: 1,
+            height: 1,
+            fps: 60,
+            codec: "h264".into(),
+            encoder: "x".into(),
+            bitrate_kbps: 1,
+            intra_refresh: false,
+            cursor: CursorMode::Separate,
+            fec: "auto".into(),
+        });
+        let body = info.encode();
+        let text = std::str::from_utf8(&body[4..]).unwrap();
+        assert!(text.contains(r#""cursor":"separate""#) && text.contains(r#""fec":"auto""#), "{text}");
+        assert_eq!(Control::decode_body(&body[4..]).unwrap(), info);
+
+        let report = Control::LinkReport {
             loss_permille: 5,
             packets: 900,
             recovered: 2,
             unrecoverable: 0,
-            queue_us: Some(12_000),
-            queue_max_us: Some(30_000),
-            queue_trend_us_per_s: Some(-4_500),
+            queue: Some(QueueDelay { mean_us: 12_000, max_us: 30_000, trend_us_per_s: -4_500 }),
         };
-        let body = new.encode();
+        let body = report.encode();
         let text = std::str::from_utf8(&body[4..]).unwrap();
-        assert!(text.contains(r#""queue_us":12000"#) && text.contains(r#""queue_max_us":30000"#), "{text}");
-        assert!(text.contains(r#""queue_trend_us_per_s":-4500"#), "{text}");
-        assert_eq!(Control::decode_body(&body[4..]).unwrap(), new);
+        assert!(
+            text.contains(r#""queue":{"mean_us":12000,"max_us":30000,"trend_us_per_s":-4500}"#),
+            "{text}"
+        );
+        assert_eq!(Control::decode_body(&body[4..]).unwrap(), report);
     }
 }

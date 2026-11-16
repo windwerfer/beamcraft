@@ -5,9 +5,8 @@ Everything here lives in `beamcraft-proto` (constants, framing) and `beamcraft-n
 
 ## 1. Connection
 
-- QUIC over UDP, default port **47800** (`DEFAULT_PORT`), ALPN **`beamcraft/1`** (`ALPN`).
-  (Before the 2026-11-15 rename it was `mirrorwire/1`; same protocol otherwise. Pre-rename
-  builds fail the TLS handshake against BeamCraft and are not supported, see decisions.md.)
+- QUIC over UDP, default port **47800** (`DEFAULT_PORT`), ALPN **`beamcraft/1`** (`ALPN`,
+  fixed; the protocol version is `hello.protocol`, §4).
   The presenter port is configurable (`--port`, `BEAMCRAFT_PORT`, saved `settings.json`).
   A changed port is advertised in mDNS (`ServiceInfo` port) and in the URI (`beamcraft://ip:port?…`);
   the viewer always uses the advertised port, never a hard-coded 47800.
@@ -29,16 +28,16 @@ followed by a JSON body (`serde`, `tag = "type"`, `snake_case`). Bodies over
 
 | `type` | Direction | Fields |
 |---|---|---|
-| `hello` | viewer → presenter | `protocol` (u32, must equal `PROTOCOL_VERSION`), `name`, `pairing_code` (optional), `caps` (optional list; `cursor-metadata` = can draw a separately sent cursor; `fec-rs1` = can rebuild FEC video packets, §3b) |
+| `hello` | viewer → presenter | `protocol` (u32, must equal `PROTOCOL_VERSION`, currently **2**; read first, §4), `name`, `pairing_code` (string or null) |
 | `rejected` | presenter → viewer | `reason` (shown to the user) |
-| `stream_info` | presenter → viewer | `width`, `height`, `fps`, `codec`, `encoder`, `bitrate_kbps`, `intra_refresh`, `cursor` (optional: `separate`, `embedded`, `hidden`; absent = embedded), `fec` (optional: the presenter's FEC setting `off`/`auto`/`20%`, informational; present = the presenter understands `link_report`). Sent after `hello`, and **again** whenever it changes (older viewers ignore the repeat) |
+| `stream_info` | presenter → viewer | `width`, `height`, `fps`, `codec`, `encoder`, `bitrate_kbps`, `intra_refresh`, `cursor` (`separate` = §3a, `embedded` = in the video, `hidden`), `fec` (the presenter's FEC setting `off`/`auto`/`20%`, for display). Sent after `hello`, and **again** whenever it changes |
 | `request_keyframe` | viewer → presenter | `reason`. The presenter forces at most one keyframe per 2 × RTT (500 ms–2 s) per viewer and ignores requests in between (the viewer keeps asking every ~100 ms while it waits, so a lost keyframe is still replaced) |
-| `link_report` | viewer → presenter | `loss_permille`, `packets`, `recovered`, `unrecoverable` over the last ~0.5 s; optional `queue_us`, `queue_max_us` (u32, µs) and `queue_trend_us_per_s` (i32): the one-way queueing delay of the window's frames (mean, max) and its least-squares slope, see §3c. Absent from older viewers; older presenters ignore them. Sent **only** if `stream_info.fec` is present: an older presenter fails on unknown message types |
+| `link_report` | viewer → presenter | `loss_permille`, `packets`, `recovered`, `unrecoverable` over the last ~0.5 s, and `queue`: `{mean_us, max_us, trend_us_per_s}` (u32, u32, i32), the one-way queueing delay of the window's frames (mean, max) and its least-squares slope (§3c), or null when no frame arrived. Not sent for a window without packets |
 | `ping` / `pong` | viewer ↔ presenter | `t_viewer_us`, `t_presenter_us` (clock offset + RTT) |
 | `bye` | either | — |
 
-Adding an **optional** field with `#[serde(default)]` is backward compatible. Removing or
-renaming a field, changing its meaning or unit, or adding a required field is not.
+Every field is required (a missing or mistyped one is a parse error that closes the session);
+unknown fields are ignored. Any change to a message bumps `PROTOCOL_VERSION` (§4).
 
 ## 3. Video datagrams
 
@@ -60,17 +59,14 @@ Each encoded frame (H.264 Annex B access unit) is split into fragments that fit
 The receiver reassembles by `frame_id`, drops incomplete frames that are overtaken, reports the
 loss, and asks for a keyframe unless the stream uses intra refresh.
 
-## 3a. Cursor as coordinates (capability `cursor-metadata`)
+## 3a. Cursor as coordinates (`stream_info.cursor` = `separate`)
 
-Only for viewers that listed `cursor-metadata` in `hello.caps`; older viewers never see these
-and get the cursor in the video (the presenter reopens the capture with an embedded cursor
-while such a viewer is connected). All in `beamcraft-proto/src/cursor.rs`. No
-`PROTOCOL_VERSION`/`WIRE_VERSION` bump: nothing an old peer receives changed.
+All in `beamcraft-proto/src/cursor.rs`.
 
 **Pointer datagram** (unreliable, one per change, not tied to video frames). The first byte
 `0xC1` can't collide with a video fragment (whose first byte is `WIRE_VERSION` = 1).
-32 bytes, big endian; receivers ignore extra trailing bytes (reserved for later tools such as
-a pen with pressure/tilt):
+Exactly 32 bytes, big endian (other lengths are dropped; a later tool such as a pen with
+pressure/tilt changes the layout and bumps `PROTOCOL_VERSION`):
 
 | Offset | Size | Field |
 |---|---|---|
@@ -96,12 +92,10 @@ viewer gets every cached image and the last position on connect.
 rectangle the video is drawn in (`video.w / frame_w`), so fit, letterbox and 1:1 modes all
 line up. The same message is meant to carry the future pen/Wacom mode.
 
-## 3b. Forward error correction (capability `fec-rs1`)
+## 3b. Forward error correction
 
-Only viewers that list `fec-rs1` in `hello.caps` get these packets, and only while the
-presenter's FEC setting isn't `off`; everyone else gets the version-1 fragments of §3. Code in
-`beamcraft-proto/src/fec.rs` (erasure code: `reed-solomon-simd`, MIT AND BSD-3-Clause). No
-`PROTOCOL_VERSION` bump: a new wire version is only sent to viewers that asked for it.
+Sent while the presenter's FEC setting isn't `off` (otherwise the version-1 fragments of §3).
+Code in `beamcraft-proto/src/fec.rs` (erasure code: `reed-solomon-simd`, MIT AND BSD-3-Clause).
 
 The frame is cut into `data_count` equal shards of `shard_len` bytes (even; the last data shard
 goes out unpadded and is zero-padded for coding). Data shard `i` belongs to block

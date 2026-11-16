@@ -6,17 +6,11 @@
 //! costs each block only a packet or two. Every block gets Reed-Solomon
 //! parity shards (`reed-solomon-simd`); the viewer rebuilds a block as soon as
 //! any `k` of its `k + m` shards have arrived, without a round trip.
-//!
-//! Only viewers that list [`CAP_FEC`] in their hello get version-2 packets;
-//! older viewers keep getting plain version-1 fragments.
 
 use crate::fragment::FrameTiming;
 use bytes::{BufMut, Bytes, BytesMut};
 use std::borrow::Cow;
 
-/// Hello capability: the viewer reassembles version-2 (FEC) video packets
-/// and sends `link_report` messages.
-pub const CAP_FEC: &str = "fec-rs1";
 pub const FEC_WIRE_VERSION: u8 = 2;
 pub const FEC_HEADER_LEN: usize = 44;
 /// Data shards per block before a frame is split into more blocks.
@@ -399,7 +393,7 @@ pub struct LinkHud {
     pub unrecoverable: u64,
     /// Queueing delay of the last window (set by the caller from
     /// [`crate::fragment::Reassembler::take_delay`]).
-    pub queue: Option<crate::delay::DelaySummary>,
+    pub queue: Option<crate::control::QueueDelay>,
 }
 
 impl LinkHud {
@@ -413,14 +407,7 @@ impl LinkHud {
         } else {
             "fec off".to_owned()
         };
-        let queue = self.queue.map_or(String::new(), |q| {
-            format!(
-                "  queue {:.0} ms (max {:.0}, {:+.0} ms/s)",
-                q.mean_us as f32 / 1000.0,
-                q.max_us as f32 / 1000.0,
-                q.trend_us_per_s as f32 / 1000.0
-            )
-        });
+        let queue = self.queue.map_or(String::new(), |q| format!("  {q}"));
         format!(
             "{fec}  loss {:.1}%  unrecoverable frames {}{queue}",
             self.loss_pct, self.unrecoverable

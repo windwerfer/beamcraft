@@ -20,23 +20,13 @@
 //! trend (least-squares slope over the window's frames, µs per second) in
 //! `link_report`.
 
+use crate::control::QueueDelay;
+
 /// Seconds of per-second minima kept for the baseline.
 pub const BASE_SECS: usize = 30;
 /// A queueing delay above this is taken as a clock step (NTP), not a queue:
 /// the baseline starts again.
 pub const CLOCK_STEP_US: i64 = 2_000_000;
-
-/// The window's queueing delay, for `link_report`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct DelaySummary {
-    /// Frames measured in the window.
-    pub frames: u32,
-    pub mean_us: u32,
-    pub max_us: u32,
-    /// Least-squares slope of the queueing delay over the window (µs of
-    /// delay per second); 0 with fewer than 3 frames.
-    pub trend_us_per_s: i32,
-}
 
 #[derive(Debug, Clone, Default)]
 pub struct DelayMeter {
@@ -100,7 +90,8 @@ impl DelayMeter {
     }
 
     /// The window since the previous call, or `None` if no frame arrived.
-    pub fn take(&mut self) -> Option<DelaySummary> {
+    /// The trend is 0 with fewer than 3 frames.
+    pub fn take(&mut self) -> Option<QueueDelay> {
         let w = std::mem::take(&mut self.window);
         if w.n == 0 {
             return None;
@@ -113,8 +104,7 @@ impl DelayMeter {
             0.0
         };
         let to_u32 = |v: f64| v.clamp(0.0, u32::MAX as f64) as u32;
-        Some(DelaySummary {
-            frames: w.n,
+        Some(QueueDelay {
             mean_us: to_u32(w.sum / n),
             max_us: to_u32(w.max as f64),
             trend_us_per_s: trend.clamp(i32::MIN as f64, i32::MAX as f64) as i32,
@@ -143,7 +133,6 @@ mod tests {
         let mut m = DelayMeter::default();
         run(&mut m, 0, 30, |i| 4_000 + (i as u64 % 3) * 100);
         let s = m.take().unwrap();
-        assert_eq!(s.frames, 30);
         assert!(s.mean_us <= 200 && s.max_us <= 200, "{s:?}");
         assert!(s.trend_us_per_s.abs() < 500, "{s:?}");
         assert_eq!(m.take(), None, "window was reset");

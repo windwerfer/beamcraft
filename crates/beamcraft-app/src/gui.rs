@@ -5,6 +5,7 @@ use crate::viewer::{self, viewer_ui, Picture, ViewerHandle, ViewerOptions, Viewe
 use crate::yuv_glow::{YuvPaint, YuvRenderer};
 use crate::{GuiLaunch, RendererChoice, ViewArgs};
 use anyhow::{anyhow, Result};
+use beamcraft_proto::control::CursorMode;
 use eframe::egui;
 use beamcraft_media::encode::{
     EncoderBackend, EncoderConfig, RateControl, DEFAULT_BITRATE_KBPS, DEFAULT_QP,
@@ -698,7 +699,7 @@ impl MirrorApp {
                     egui::Color32::WHITE,
                 );
             }
-            if status.cursor_mode == "separate" {
+            if status.cursor_mode == Some(CursorMode::Separate) {
                 if let Some(cursor) = &status.cursor {
                     let current = cursor.lock().expect("cursor lock").current();
                     if let Some((p, img)) = current {
@@ -726,10 +727,11 @@ impl MirrorApp {
         if elapsed >= 1.0 {
             self.cursor_rate = (Instant::now(), updates, updates.saturating_sub(self.cursor_rate.1) as f64 / elapsed);
         }
-        let cursor_line = match status.cursor_mode.as_str() {
-            "separate" => format!("cursor separate ({:.0} updates/s)", self.cursor_rate.2),
-            "" => "cursor ?".to_owned(),
-            other => format!("cursor {other} (in video)"),
+        let cursor_line = match status.cursor_mode {
+            Some(CursorMode::Separate) => format!("cursor separate ({:.0} updates/s)", self.cursor_rate.2),
+            Some(CursorMode::Embedded) => "cursor embedded (in video)".to_owned(),
+            Some(CursorMode::Hidden) => "cursor hidden".to_owned(),
+            None => "cursor ?".to_owned(),
         };
         if self.show_stats {
             let stream = status.stream.as_ref();
@@ -1180,7 +1182,6 @@ fn fec_status_line(fec: &beamcraft_net::transport::FecState, viewer_connected: b
         return format!("FEC: {mode}");
     }
     match fec.overheads() {
-        None if !fec.viewer_fec => format!("FEC: {mode}  ·  off for this viewer (older version)"),
         None => "FEC: off".into(),
         Some((delta, key)) => format!(
             "FEC: {mode}  ·  parity +{:.0}% delta / +{:.0}% keyframes{}  ·  viewer loss {:.1}%  ·  rebuilt {:.0} packets/s  ·  unrecoverable frames {}",

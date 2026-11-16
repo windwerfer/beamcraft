@@ -13,25 +13,19 @@
 //!   stream each time the shape changes. The viewer caches them by id; pointer
 //!   updates name the image to draw.
 //!
-//! Only viewers that list [`CAP_CURSOR_METADATA`] in their `hello` get these;
-//! older viewers keep the cursor drawn into the video.
+//! Used while `stream_info.cursor` is `separate`.
 //!
 //! The pointer message is the base for later input tools (a pen with pressure
-//! and tilt): the `tool` byte says what it is, and decoders ignore trailing
-//! bytes, so new optional fields can be appended without breaking old peers.
+//! and tilt): the `tool` byte says what it is. A tool that needs more fields
+//! changes the layout and bumps `PROTOCOL_VERSION`.
 
 use anyhow::{bail, ensure, Result};
 
-/// Capability string a viewer sends in `hello.caps` when it can draw a
-/// separately sent cursor.
-pub const CAP_CURSOR_METADATA: &str = "cursor-metadata";
-
-/// First byte of a pointer datagram. Video fragments start with their wire
-/// version (1), so the two can never be confused.
+/// First byte of a pointer datagram. Video packets start with their wire
+/// version (2), so the two can never be confused.
 pub const POINTER_DATAGRAM_KIND: u8 = 0xC1;
 pub const POINTER_VERSION: u8 = 1;
-/// Fixed part of a pointer datagram. Longer datagrams are accepted; the extra
-/// bytes are reserved for future tools.
+/// Length of a pointer datagram; other lengths are dropped.
 pub const POINTER_LEN: usize = 32;
 const FLAG_VISIBLE: u8 = 0b0000_0001;
 
@@ -119,7 +113,7 @@ impl PointerUpdate {
     }
 
     pub fn decode(d: &[u8]) -> Option<Self> {
-        if d.len() < POINTER_LEN || d[0] != POINTER_DATAGRAM_KIND || d[1] != POINTER_VERSION {
+        if d.len() != POINTER_LEN || d[0] != POINTER_DATAGRAM_KIND || d[1] != POINTER_VERSION {
             return None;
         }
         let u16_at = |o: usize| u16::from_be_bytes([d[o], d[o + 1]]);
@@ -357,17 +351,17 @@ mod tests {
     }
 
     #[test]
-    fn pointer_ignores_trailing_bytes_and_rejects_junk() {
+    fn pointer_rejects_junk() {
         let mut long = sample().encode().to_vec();
         long.extend_from_slice(&[9, 9, 9, 9]);
-        assert_eq!(PointerUpdate::decode(&long), Some(sample()));
+        assert!(PointerUpdate::decode(&long).is_none());
         assert!(PointerUpdate::decode(&long[..POINTER_LEN - 1]).is_none());
         let mut wrong_version = sample().encode();
         wrong_version[1] = 2;
         assert!(PointerUpdate::decode(&wrong_version).is_none());
         assert!(PointerUpdate::decode(&[]).is_none());
-        // A video fragment (version byte 1) is never taken for a pointer.
-        assert!(!is_pointer_datagram(&[1, 0, 0]));
+        // A video packet (version byte 2) is never taken for a pointer.
+        assert!(!is_pointer_datagram(&[2, 0, 0]));
         assert!(is_pointer_datagram(&sample().encode()));
     }
 

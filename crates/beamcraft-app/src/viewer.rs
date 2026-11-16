@@ -9,6 +9,7 @@ use beamcraft_net::diag::{ConnectStepId, ConnectTrace, HANDSHAKE_TIMEOUT};
 use beamcraft_net::transport::{ms, ViewerSession};
 use beamcraft_proto::clock::{now_us, ClockSync};
 use beamcraft_proto::control::StreamInfo;
+use beamcraft_proto::control::CursorMode;
 use beamcraft_proto::cursor::ViewerCursor;
 use beamcraft_proto::fec::{BandwidthSim, LinkHud, LinkStats, LinkWindow, LossSim};
 use beamcraft_proto::fragment::{AssembledFrame, Reassembler};
@@ -77,8 +78,8 @@ pub struct ViewerStatus {
     pub native_width: u32,
     pub native_height: u32,
     pub first_frame: bool,
-    /// How the presenter sends the cursor: `separate`, `embedded`, `hidden`.
-    pub cursor_mode: String,
+    /// How the presenter sends the cursor, once connected.
+    pub cursor_mode: Option<CursorMode>,
     /// Cursor sent as coordinates (position + cached images), once connected.
     pub cursor: Option<Arc<Mutex<ViewerCursor>>>,
     /// FEC overhead, packet loss, rebuilt packets (last ~0.5 s window).
@@ -96,7 +97,7 @@ pub struct Totals {
     pub marker_mismatch: u64,
     pub keyframe_requests: u64,
     pub decode_errors: u64,
-    pub cursor_mode: String,
+    pub cursor_mode: Option<CursorMode>,
     pub cursor_updates: u64,
     pub cursor_stale: u64,
     pub cursor_images: u64,
@@ -224,10 +225,10 @@ async fn session(
         s.stream = Some(session.stream_info.clone());
         s.native_width = session.stream_info.width;
         s.native_height = session.stream_info.height;
-        s.cursor_mode = session.cursor_mode();
+        s.cursor_mode = Some(session.cursor_mode());
         s.cursor = Some(session.cursor.clone());
     }
-    tracing::info!("cursor from presenter: {}", session.cursor_mode());
+    tracing::info!("cursor from presenter: {}", session.cursor_mode().as_str());
     let mut stream_updates = session.stream_updates.clone();
     let repaint = on_frame.clone();
 
@@ -305,7 +306,7 @@ async fn session(
         if stream_updates.has_changed().unwrap_or(false) {
             let info = stream_updates.borrow_and_update().clone();
             let mut s = status.lock().expect("status lock");
-            s.cursor_mode = info.cursor.clone().unwrap_or_else(|| "embedded".into());
+            s.cursor_mode = Some(info.cursor);
             s.stream = Some(info);
         }
         if session.handle_pointer_datagram(&datagram) {
@@ -366,7 +367,7 @@ async fn session(
     totals.skipped_waiting_keyframe = skipped;
     totals.keyframe_requests += requests;
     (totals.cursor_updates, totals.cursor_stale, totals.cursor_images) = cursor_summary;
-    totals.cursor_mode = session.cursor_mode();
+    totals.cursor_mode = Some(session.cursor_mode());
     if let Some(reason) = close_reason {
         tracing::info!("connection closed: {reason}");
     }
@@ -651,7 +652,7 @@ fn print_summary((totals, stats, secs): &(Totals, StageStats, f64)) {
     );
     println!(
         "cursor {}  pointer updates {} ({:.1}/s)  stale {}  images {}",
-        totals.cursor_mode,
+        totals.cursor_mode.map_or("?", |m| m.as_str()),
         totals.cursor_updates,
         totals.cursor_updates as f64 / secs,
         totals.cursor_stale,

@@ -1,5 +1,6 @@
 use crate::frame::RawFrame;
 use anyhow::Result;
+use beamcraft_proto::control::CursorMode;
 use beamcraft_proto::cursor::CursorEvent;
 use std::sync::Arc;
 use std::time::Duration;
@@ -17,13 +18,18 @@ pub enum CursorCapture {
 }
 
 impl CursorCapture {
-    /// The name used in `stream_info.cursor`, the status and the HUD.
-    pub fn as_str(self) -> &'static str {
+    /// How the viewer gets the cursor (`stream_info.cursor`).
+    pub fn mode(self) -> CursorMode {
         match self {
-            CursorCapture::Hidden => beamcraft_proto::control::CURSOR_HIDDEN,
-            CursorCapture::Embedded => beamcraft_proto::control::CURSOR_EMBEDDED,
-            CursorCapture::Metadata => beamcraft_proto::control::CURSOR_SEPARATE,
+            CursorCapture::Hidden => CursorMode::Hidden,
+            CursorCapture::Embedded => CursorMode::Embedded,
+            CursorCapture::Metadata => CursorMode::Separate,
         }
+    }
+
+    /// The name used in the status and the HUD.
+    pub fn as_str(self) -> &'static str {
+        self.mode().as_str()
     }
 }
 

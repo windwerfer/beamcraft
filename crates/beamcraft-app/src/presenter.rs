@@ -422,8 +422,6 @@ impl VideoSink for QuicSink {
 pub struct CaptureCtl {
     /// What the user asked for.
     pub prefs: CapturePrefs,
-    /// The connected viewer cannot draw a separate cursor (older build).
-    pub legacy_viewer: bool,
     /// What the current source was opened with (before portal fallback).
     asked_cursor: CursorCapture,
     asked_fps: u32,
@@ -443,7 +441,6 @@ impl CaptureCtl {
         Self {
             fec,
             prefs,
-            legacy_viewer: false,
             asked_cursor: CursorCapture::Embedded,
             asked_fps: 0,
             active_cursor: CursorCapture::Embedded,
@@ -456,7 +453,6 @@ impl CaptureCtl {
     /// The cursor mode to ask the capture source for right now.
     fn wanted_cursor(&self) -> CursorCapture {
         match self.prefs.cursor {
-            CursorPref::Separate if self.legacy_viewer => CursorCapture::Embedded,
             CursorPref::Separate => CursorCapture::Metadata,
             CursorPref::Embedded => CursorCapture::Embedded,
             CursorPref::Hidden => CursorCapture::Hidden,
@@ -469,14 +465,10 @@ impl CaptureCtl {
 
     #[cfg_attr(not(feature = "gui"), allow(dead_code))]
     fn status(&self) -> CaptureStatus {
-        let mut note = self.cursor_note.clone();
-        if self.legacy_viewer && self.prefs.cursor == CursorPref::Separate {
-            note = Some("the connected viewer is an older version: cursor drawn into the video for it".into());
-        }
         CaptureStatus {
             prefs: self.prefs,
             cursor_mode: self.active_cursor.as_str().to_owned(),
-            cursor_note: note,
+            cursor_note: self.cursor_note.clone(),
             fps_requested: self.asked_fps,
             fps_negotiated: self.negotiated_fps,
             fec: self.fec.snapshot(),
@@ -634,9 +626,9 @@ fn stream_info_from(encoder: &Encoder, fps: u32, cursor: CursorCapture) -> Strea
         encoder: encoder.name().into(),
         bitrate_kbps: encoder.config().bitrate_kbps,
         intra_refresh: encoder.config().intra_refresh,
-        cursor: Some(cursor.as_str().to_owned()),
+        cursor: cursor.mode(),
         // Filled in by `Presenter::start` from the FEC setting.
-        fec: None,
+        fec: String::new(),
     }
 }
 
@@ -680,8 +672,6 @@ fn present_session(
         Some(random_pairing_code()?)
     };
     let keyframe_controls = controls.clone();
-    let viewer_ctl = ctl.clone();
-    let viewer_controls = controls.clone();
     let presenter = Presenter::start(
         &identity,
         PresenterConfig {
@@ -693,20 +683,6 @@ fn present_session(
             pairing_code: pairing_code.clone(),
             config_dir: config_dir.clone(),
             attempts: attempts.clone(),
-            // An older viewer can't draw a separate cursor: reopen the
-            // capture with the cursor in the video while it is connected.
-            on_viewer: Some(Arc::new(move |cursor_ok| {
-                let mut c = viewer_ctl.lock().expect("capture ctl");
-                c.legacy_viewer = !cursor_ok;
-                if c.needs_restart() {
-                    tracing::info!(
-                        "viewer {} draw a separate cursor; reopening the capture with cursor {}",
-                        if cursor_ok { "can" } else { "cannot" },
-                        c.wanted_cursor().as_str()
-                    );
-                    viewer_controls.request_source_restart();
-                }
-            })),
             cursor_events: Some(cursor_rx),
             fec: fec.clone(),
         },
@@ -834,7 +810,7 @@ fn present_session(
                 let cursor = ctl.lock().expect("capture ctl").active_cursor;
                 presenter.update_stream_info(|info| {
                     info.fps = fps;
-                    info.cursor = Some(cursor.as_str().to_owned());
+                    info.cursor = cursor.mode();
                 });
             }
         }
@@ -1206,15 +1182,14 @@ mod tests {
     }
 
     #[test]
-    fn old_viewer_forces_embedded_cursor() {
+    fn capture_restarts_only_for_changed_settings() {
         let mut c = CaptureCtl::new(CapturePrefs::default());
         c.asked_cursor = CursorCapture::Metadata;
         c.asked_fps = 60;
         assert!(!c.needs_restart());
-        c.legacy_viewer = true;
+        c.prefs.cursor = CursorPref::Embedded;
         assert_eq!(c.wanted_cursor(), CursorCapture::Embedded);
         assert!(c.needs_restart());
-        // A portal without metadata already falls back; no restart loop.
         c.asked_cursor = CursorCapture::Embedded;
         assert!(!c.needs_restart());
         c.prefs.fps = FpsPref::Max;
@@ -1295,7 +1270,6 @@ mod tests {
         assert!(status.viewer_connected);
         assert_eq!(status.phase, PresentPhase::Streaming);
         assert_eq!(status.capture.cursor_mode, "separate");
-        assert!(status.capture.fec.viewer_fec);
         assert!(status.attempts.iter().any(|a| a.ok), "{:?}", status.attempts);
         // Live changes: fixed FEC (no restart), a lower bitrate (encoder
         // reopens with an IDR), embedded cursor (capture restarts).

@@ -12,15 +12,13 @@ use crate::tls;
 use anyhow::{anyhow, bail, Context, Result};
 use bytes::Bytes;
 use beamcraft_proto::clock::{now_us, ClockSync};
-use beamcraft_proto::control::{Control, StreamInfo};
+use beamcraft_proto::control::{hello_protocol, Control, CursorMode, QueueDelay, StreamInfo};
 use beamcraft_proto::cursor::{
-    is_pointer_datagram, CursorEvent, CursorImage, PointerUpdate, ViewerCursor, CAP_CURSOR_METADATA,
-    MAX_IMAGE_STREAM,
+    is_pointer_datagram, CursorEvent, CursorImage, PointerUpdate, ViewerCursor, MAX_IMAGE_STREAM,
 };
-use beamcraft_proto::fec::{fec_fragment, FecHeader, FecMode, LinkStats, CAP_FEC};
+use beamcraft_proto::fec::{fec_fragment, FecHeader, FecMode, LinkStats};
 use beamcraft_proto::fragment::{fragment, FrameTiming};
-use beamcraft_proto::delay::DelaySummary;
-use beamcraft_proto::rate::{AdaptiveBitrate, Queue, Sample};
+use beamcraft_proto::rate::{AdaptiveBitrate, Sample};
 use beamcraft_proto::stats::StageStats;
 use beamcraft_proto::PROTOCOL_VERSION;
 use quinn::crypto::rustls::{QuicClientConfig, QuicServerConfig};
@@ -86,8 +84,6 @@ pub struct FecControl {
 #[derive(Debug, Clone, Copy)]
 pub struct FecState {
     pub mode: FecMode,
-    /// The connected viewer can rebuild FEC packets.
-    pub viewer_fec: bool,
     /// Smoothed packet loss the viewer reports (percent); drives auto mode.
     pub loss_pct: f32,
     /// Data packets the viewer rebuilt from parity, per second.
@@ -110,15 +106,14 @@ pub struct FecState {
     /// What the presenter sent on the wire (video + parity, kbit/s) in the
     /// last send window; the budget only grows while it is used.
     pub sent_kbps: Option<f32>,
-    /// The viewer's latest one-way queueing delay (newer viewers only).
-    pub queue: Option<Queue>,
+    /// The viewer's latest one-way queueing delay.
+    pub queue: Option<QueueDelay>,
 }
 
 impl Default for FecState {
     fn default() -> Self {
         Self {
             mode: FecMode::default(),
-            viewer_fec: false,
             loss_pct: 0.0,
             recovered_per_s: 0.0,
             unrecoverable: 0,
@@ -135,12 +130,9 @@ impl Default for FecState {
 }
 
 impl FecState {
-    /// Overhead currently applied to (delta, key) frames, or `None` when no
-    /// FEC is sent (setting off, or an older viewer).
+    /// Overhead currently applied to (delta, key) frames, or `None` when FEC
+    /// is off.
     pub fn overheads(&self) -> Option<(f32, f32)> {
-        if !self.viewer_fec {
-            return None;
-        }
         Some((
             self.mode.overhead(self.loss_pct, self.boost_pct, false)?,
             self.mode.overhead(self.loss_pct, self.boost_pct, true)?,
@@ -225,18 +217,15 @@ impl FecControl {
         self.lock().encoder_kbps()
     }
 
-    fn viewer_connected(&self, fec: bool) {
+    fn viewer_connected(&self) {
         let mut s = self.lock();
         let (mode, adaptive, mut rate) = (s.mode, s.adaptive, s.rate);
         rate.reset();
-        *s = FecState { mode, viewer_fec: fec, adaptive, rate, ..Default::default() };
+        *s = FecState { mode, adaptive, rate, ..Default::default() };
     }
 
     fn overhead(&self, keyframe: bool) -> Option<f32> {
         let s = self.lock();
-        if !s.viewer_fec {
-            return None;
-        }
         s.mode.overhead(s.loss_pct, s.boost_pct, keyframe)
     }
 
@@ -245,7 +234,7 @@ impl FecControl {
         loss_permille: u32,
         recovered: u32,
         unrecoverable: u32,
-        queue: Option<Queue>,
+        queue: Option<QueueDelay>,
         rtt: Option<Duration>,
     ) {
         let now_ms = self.now_ms();
@@ -331,13 +320,25 @@ async fn write_msg(send: &mut SendStream, msg: &Control) -> Result<()> {
     Ok(())
 }
 
-async fn read_msg(recv: &mut RecvStream) -> Result<Control> {
+async fn read_body(recv: &mut RecvStream) -> Result<Vec<u8>> {
     let mut len = [0u8; 4];
     recv.read_exact(&mut len).await?;
     let len = Control::check_len(u32::from_be_bytes(len))?;
     let mut body = vec![0u8; len];
     recv.read_exact(&mut body).await?;
-    Control::decode_body(&body)
+    Ok(body)
+}
+
+async fn read_msg(recv: &mut RecvStream) -> Result<Control> {
+    Control::decode_body(&read_body(recv).await?)
+}
+
+/// What a viewer of `protocol` is told (and the presenter window lists).
+fn version_mismatch(protocol: u32) -> String {
+    let side = if protocol < PROTOCOL_VERSION { "viewer" } else { "presenter" };
+    format!(
+        "version mismatch: the presenter speaks protocol {PROTOCOL_VERSION}, the viewer {protocol}; update the {side} to the same BeamCraft release"
+    )
 }
 
 #[derive(Debug, Clone)]
@@ -358,12 +359,8 @@ pub struct PresenterConfig {
     pub config_dir: PathBuf,
     /// Incoming handshake / pairing attempts for the presenter GUI.
     pub attempts: std::sync::Arc<Mutex<Vec<IncomingAttempt>>>,
-    /// Called when a viewer is accepted, with whether it can draw a
-    /// separately sent cursor ([`CAP_CURSOR_METADATA`]).
-    pub on_viewer: Option<Arc<dyn Fn(bool) + Send + Sync>>,
     /// Cursor position and image changes from the capture source (the
-    /// sending half lives with the capture thread). Sent only to viewers that
-    /// can draw them.
+    /// sending half lives with the capture thread).
     pub cursor_events: Option<mpsc::Receiver<CursorEvent>>,
     /// FEC setting and link feedback (see [`FecControl`]).
     pub fec: Arc<FecControl>,
@@ -375,10 +372,6 @@ type Callback = Arc<dyn Fn() + Send + Sync>;
 #[derive(Clone)]
 struct ActiveViewer {
     conn: Connection,
-    /// Listed [`CAP_CURSOR_METADATA`] in its hello.
-    cursor: bool,
-    /// Listed [`CAP_FEC`] in its hello.
-    fec: bool,
 }
 
 pub struct Presenter {
@@ -403,7 +396,7 @@ impl Presenter {
         let (connected_tx, viewer_connected) = watch::channel(false);
         let current_tx = Arc::new(current_tx);
         let mut info = cfg.stream_info;
-        info.fec = Some(cfg.fec.snapshot().mode.as_string());
+        info.fec = cfg.fec.snapshot().mode.as_string();
         let stream_info = Arc::new(watch::channel(info).0);
 
         tokio::spawn(send_loop(frames_rx, current_rx.clone(), on_keyframe_request.clone(), cfg.fec.clone()));
@@ -418,7 +411,6 @@ impl Presenter {
             current: current_tx,
             connected: connected_tx,
             on_keyframe_request,
-            on_viewer: cfg.on_viewer,
             attempts: cfg.attempts,
             fec: cfg.fec.clone(),
         });
@@ -438,7 +430,7 @@ impl Presenter {
     }
 
     /// Change the stream description; connected viewers get a fresh
-    /// `stream_info` (older viewers ignore it), new viewers get the new one.
+    /// `stream_info`, new viewers get the new one.
     pub fn update_stream_info(&self, f: impl FnOnce(&mut StreamInfo)) {
         self.stream_info.send_if_modified(|info| {
             let before = info.clone();
@@ -450,7 +442,7 @@ impl Presenter {
     /// Change the FEC setting live; viewers see it in `stream_info.fec`.
     pub fn set_fec_mode(&self, mode: FecMode) {
         self.fec.set_mode(mode);
-        self.update_stream_info(|i| i.fec = Some(mode.as_string()));
+        self.update_stream_info(|i| i.fec = mode.as_string());
     }
 
     pub fn close(&self) {
@@ -465,7 +457,6 @@ struct SessionShared {
     current: Arc<watch::Sender<Option<ActiveViewer>>>,
     connected: watch::Sender<bool>,
     on_keyframe_request: Callback,
-    on_viewer: Option<Arc<dyn Fn(bool) + Send + Sync>>,
     attempts: Arc<Mutex<Vec<IncomingAttempt>>>,
     fec: Arc<FecControl>,
 }
@@ -495,22 +486,31 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
     };
     let (mut send, mut recv) = conn.accept_bi().await?;
 
-    let Control::Hello { protocol, name, pairing_code, caps } = read_msg(&mut recv).await? else {
-        push_attempt(
-            &shared.attempts,
-            IncomingAttempt::new(remote, None, false, "expected hello on control stream"),
-        );
+    // The version is checked before the rest of the hello is parsed, so a
+    // viewer of another version gets a readable answer even if the hello
+    // itself changed shape.
+    let body = read_body(&mut recv).await?;
+    match hello_protocol(&body) {
+        Some(PROTOCOL_VERSION) => {}
+        Some(protocol) => {
+            let reason = version_mismatch(protocol);
+            write_msg(&mut send, &Control::Rejected { reason: reason.clone() }).await?;
+            send.finish()?;
+            push_attempt(&shared.attempts, IncomingAttempt::new(remote, None, false, reason));
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            bail!("viewer {remote} speaks protocol {protocol}");
+        }
+        None => {
+            push_attempt(
+                &shared.attempts,
+                IncomingAttempt::new(remote, None, false, "expected hello on control stream"),
+            );
+            bail!("expected hello from {remote}");
+        }
+    }
+    let Control::Hello { name, pairing_code, .. } = Control::decode_body(&body)? else {
         bail!("expected hello from {remote}");
     };
-    if protocol != PROTOCOL_VERSION {
-        let reason = format!("protocol {protocol} unsupported");
-        write_msg(&mut send, &Control::Rejected { reason: reason.clone() }).await?;
-        push_attempt(
-            &shared.attempts,
-            IncomingAttempt::new(remote, Some(name.clone()), false, reason),
-        );
-        bail!("viewer {remote} speaks protocol {protocol}");
-    }
     let authorized = match &shared.pairing_code {
         None => true,
         Some(code) => {
@@ -538,8 +538,6 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
         bail!("rejected unpaired viewer {name} at {remote}");
     }
 
-    let viewer_cursor = caps.iter().any(|c| c == CAP_CURSOR_METADATA);
-    let viewer_fec = caps.iter().any(|c| c == CAP_FEC);
     let mut info_rx = shared.stream_info.subscribe();
     let stream_info = info_rx.borrow_and_update().clone();
     write_msg(&mut send, &Control::StreamInfo(stream_info)).await?;
@@ -547,20 +545,13 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
         &shared.attempts,
         IncomingAttempt::new(remote, Some(name.clone()), true, "connected"),
     );
-    tracing::info!(
-        "viewer {name} connected from {remote} (cursor as coordinates: {}, FEC: {})",
-        if viewer_cursor { "supported" } else { "not supported, older viewer" },
-        if viewer_fec { "supported" } else { "not supported, older viewer" }
-    );
-    shared.fec.viewer_connected(viewer_fec);
-    let active = ActiveViewer { conn: conn.clone(), cursor: viewer_cursor, fec: viewer_fec };
+    tracing::info!("viewer {name} connected from {remote}");
+    shared.fec.viewer_connected();
+    let active = ActiveViewer { conn: conn.clone() };
     if let Some(old) = shared.current.send_replace(Some(active)) {
         old.conn.close(1u32.into(), b"replaced by another viewer");
     }
     shared.connected.send_replace(true);
-    if let Some(cb) = &shared.on_viewer {
-        cb(viewer_cursor);
-    }
     (shared.on_keyframe_request)();
 
     // One writer owns the send half: pongs from the reader below, and a
@@ -612,20 +603,7 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
                         );
                     }
                 }
-                Control::LinkReport {
-                    loss_permille,
-                    packets,
-                    recovered,
-                    unrecoverable,
-                    queue_us,
-                    queue_max_us,
-                    queue_trend_us_per_s,
-                } => {
-                    let queue = queue_us.map(|mean_us| Queue {
-                        mean_ms: mean_us as f32 / 1000.0,
-                        max_ms: queue_max_us.unwrap_or(mean_us) as f32 / 1000.0,
-                        trend_ms_per_s: queue_trend_us_per_s.unwrap_or(0) as f32 / 1000.0,
-                    });
+                Control::LinkReport { loss_permille, packets, recovered, unrecoverable, queue } => {
                     tracing::debug!(
                         "viewer link: loss {:.1}% of {packets} packets, {recovered} rebuilt, {unrecoverable} frames lost{}",
                         loss_permille as f32 / 10.0,
@@ -666,7 +644,7 @@ async fn cursor_loop(mut events: mpsc::Receiver<CursorEvent>, mut current: watch
     let mut last: Option<PointerUpdate> = None;
     let mut images: std::collections::VecDeque<Arc<CursorImage>> = Default::default();
     let target = |current: &watch::Receiver<Option<ActiveViewer>>| {
-        current.borrow().as_ref().filter(|v| v.cursor).map(|v| v.conn.clone())
+        current.borrow().as_ref().map(|v| v.conn.clone())
     };
     loop {
         tokio::select! {
@@ -743,7 +721,7 @@ async fn send_loop(
     let mut quic_prev = (0usize, 0u64, 0u64);
 
     while let Some(frame) = frames.recv().await {
-        let Some((conn, viewer_fec)) = current.borrow().as_ref().map(|v| (v.conn.clone(), v.fec)) else { continue };
+        let Some(conn) = current.borrow().as_ref().map(|v| v.conn.clone()) else { continue };
         let Some(max) = conn.max_datagram_size() else { continue };
         let sent_us = now_us();
         let timing = FrameTiming {
@@ -751,7 +729,7 @@ async fn send_loop(
             encoded_us: frame.encoded_us,
             sent_us,
         };
-        let overhead = if viewer_fec { fec.overhead(frame.keyframe) } else { None };
+        let overhead = fec.overhead(frame.keyframe);
         let packets = match overhead {
             Some(o) => fec_fragment(frame.frame_id, frame.keyframe, timing, &frame.data, max, o),
             None => fragment(frame.frame_id, frame.keyframe, timing, &frame.data, max),
@@ -863,7 +841,6 @@ pub fn rate_summary(s: &FecState) -> String {
 
 fn fec_part(s: &FecState, parity: usize, packets: usize) -> String {
     match s.overheads() {
-        None if !s.viewer_fec => "fec off (viewer without FEC)".into(),
         None => "fec off".into(),
         Some(_) => format!(
             "fec {} ~{:.0}% parity packets (boost +{:.0}), viewer loss {:.1}%, rebuilt {:.0}/s, unrecoverable {}",
@@ -968,26 +945,15 @@ impl ViewerSession {
         true
     }
 
-    /// The cursor mode the presenter currently reports (`separate`,
-    /// `embedded`, `hidden`); older presenters report nothing (= embedded).
-    pub fn cursor_mode(&self) -> String {
-        self.stream_updates
-            .borrow()
-            .cursor
-            .clone()
-            .unwrap_or_else(|| beamcraft_proto::control::CURSOR_EMBEDDED.to_owned())
-    }
-
-    /// The presenter's FEC setting, or `None` for an older presenter (which
-    /// must not get `link_report` messages).
-    pub fn presenter_fec(&self) -> Option<String> {
-        self.stream_updates.borrow().fec.clone()
+    /// How the presenter currently sends the cursor.
+    pub fn cursor_mode(&self) -> CursorMode {
+        self.stream_updates.borrow().cursor
     }
 
     /// Tell the presenter how the link did over `window` (a difference of
-    /// [`LinkStats`] snapshots). No-op for older presenters.
-    pub fn report_link(&self, window: &LinkStats, delay: Option<DelaySummary>) {
-        if self.presenter_fec().is_none() || window.expected == 0 {
+    /// [`LinkStats`] snapshots) and the queueing delay its frames saw.
+    pub fn report_link(&self, window: &LinkStats, queue: Option<QueueDelay>) {
+        if window.expected == 0 {
             return;
         }
         let loss = window.expected.saturating_sub(window.received);
@@ -996,9 +962,7 @@ impl ViewerSession {
             packets: window.expected.min(u32::MAX as u64) as u32,
             recovered: window.recovered.min(u32::MAX as u64) as u32,
             unrecoverable: window.unrecoverable_frames.min(u32::MAX as u64) as u32,
-            queue_us: delay.map(|d| d.mean_us),
-            queue_max_us: delay.map(|d| d.max_us),
-            queue_trend_us_per_s: delay.map(|d| d.trend_us_per_s),
+            queue,
         });
     }
 
@@ -1097,7 +1061,6 @@ async fn connect_one(
             protocol: PROTOCOL_VERSION,
             name: viewer_name.to_owned(),
             pairing_code: target.pairing_code.clone(),
-            caps: vec![CAP_CURSOR_METADATA.to_owned(), CAP_FEC.to_owned()],
         },
     )
     .await?;
@@ -1254,14 +1217,12 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-    async fn cursor_reaches_a_capable_viewer() {
+    async fn cursor_video_and_link_reports_reach_the_other_side() {
         use beamcraft_proto::cursor::PointerTool;
         let dir = std::env::temp_dir().join(format!("beamcraft-cursor-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let presenter_id = Identity::generate().unwrap();
         let (cursor_tx, cursor_rx) = mpsc::channel(16);
-        let seen_caps = Arc::new(Mutex::new(None));
-        let caps_slot = seen_caps.clone();
         let presenter = Presenter::start(
             &presenter_id,
             PresenterConfig {
@@ -1274,13 +1235,12 @@ mod tests {
                     encoder: "test".into(),
                     bitrate_kbps: 1,
                     intra_refresh: false,
-                    cursor: Some("separate".into()),
-                    fec: None,
+                    cursor: CursorMode::Separate,
+                    fec: String::new(),
                 },
                 pairing_code: None,
                 config_dir: dir.clone(),
                 attempts: Default::default(),
-                on_viewer: Some(Arc::new(move |ok| *caps_slot.lock().unwrap() = Some(ok))),
                 cursor_events: Some(cursor_rx),
                 fec: FecControl::new(FecMode::Auto),
             },
@@ -1311,7 +1271,7 @@ mod tests {
             name: None,
         };
         let viewer = ViewerSession::connect(&Identity::generate().unwrap(), &target, "test").await.unwrap();
-        assert_eq!(viewer.cursor_mode(), "separate");
+        assert_eq!(viewer.cursor_mode(), CursorMode::Separate);
         let deadline = Instant::now() + Duration::from_secs(5);
         while viewer.cursor.lock().unwrap().current().is_none() {
             assert!(Instant::now() < deadline, "cursor never arrived");
@@ -1322,11 +1282,10 @@ mod tests {
         let (p, img) = viewer.cursor.lock().unwrap().current().unwrap();
         assert_eq!((p.x, p.y, p.image_id), (10, 20, 5));
         assert_eq!(*img, image);
-        assert_eq!(*seen_caps.lock().unwrap(), Some(true));
 
-        // Video goes out as FEC packets to a viewer that lists the cap, and
-        // its link report reaches the presenter's FEC state.
-        assert_eq!(viewer.presenter_fec().as_deref(), Some("auto"));
+        // Video goes out as FEC packets, and the viewer's link report
+        // reaches the presenter's FEC state.
+        assert_eq!(viewer.stream_info.fec, "auto");
         let payload = Bytes::from(vec![7u8; 20_000]);
         presenter
             .frames
@@ -1355,7 +1314,6 @@ mod tests {
         .expect("FEC frame");
         assert_eq!(frame.0.data, payload);
         assert_eq!(frame.1.recovered, 1);
-        assert!(presenter.fec.snapshot().viewer_fec);
         viewer.report_link(&LinkStats { expected: 1000, received: 950, recovered: 40, ..Default::default() }, None);
         let deadline = Instant::now() + Duration::from_secs(5);
         while presenter.fec.snapshot().reports == 0 {
@@ -1367,7 +1325,7 @@ mod tests {
         assert_eq!(fec.overheads(), Some((0.25, 0.5)));
         // Lost frames on a link that is not congested: more parity.
         // With the viewer's queueing delay (a small, falling queue).
-        let delay = DelaySummary { frames: 30, mean_us: 5_000, max_us: 12_000, trend_us_per_s: -1_500 };
+        let delay = QueueDelay { mean_us: 5_000, max_us: 12_000, trend_us_per_s: -1_500 };
         viewer.report_link(&LinkStats { expected: 1000, received: 990, unrecoverable_frames: 1, ..Default::default() }, Some(delay));
         while presenter.fec.snapshot().reports < 2 {
             assert!(Instant::now() < deadline, "second link report never arrived");
@@ -1375,7 +1333,7 @@ mod tests {
         }
         let fec = presenter.fec.snapshot();
         assert_eq!((fec.boost_pct, fec.unrecoverable), (5.0, 1));
-        assert_eq!(fec.queue, Some(Queue { mean_ms: 5.0, max_ms: 12.0, trend_ms_per_s: -1.5 }));
+        assert_eq!(fec.queue, Some(delay));
         assert!(rate_summary(&fec).ends_with("viewer queue 5 ms (max 12, -2 ms/s)"), "{}", rate_summary(&fec));
         assert!(!fec.rate.congested());
         // Sustained heavy loss is congestion: the budget is cut and parity
@@ -1409,11 +1367,10 @@ mod tests {
         assert_eq!(presenter.fec.snapshot().overheads(), None);
 
         // A changed cursor mode reaches the connected viewer.
-        presenter.update_stream_info(|i| i.cursor = Some("embedded".into()));
+        presenter.update_stream_info(|i| i.cursor = CursorMode::Embedded);
         let mut updates = viewer.stream_updates.clone();
         tokio::time::timeout(Duration::from_secs(5), async {
-            while updates.borrow_and_update().cursor.as_deref() != Some("embedded")
-                || updates.borrow().fec.as_deref() != Some("off")
+            while updates.borrow_and_update().cursor != CursorMode::Embedded || updates.borrow().fec != "off"
             {
                 updates.changed().await.unwrap();
             }
@@ -1446,6 +1403,14 @@ mod tests {
         assert!(g.allow(3_300_000, huge));
         // A clock step back counts as "just sent", not a panic.
         assert!(!g.allow(0, lan));
+    }
+
+    #[test]
+    fn version_mismatch_says_which_side_to_update() {
+        let old_viewer = version_mismatch(PROTOCOL_VERSION - 1);
+        assert!(old_viewer.contains("update the viewer"), "{old_viewer}");
+        assert!(old_viewer.contains(&format!("presenter speaks protocol {PROTOCOL_VERSION}")), "{old_viewer}");
+        assert!(version_mismatch(PROTOCOL_VERSION + 1).contains("update the presenter"));
     }
 
     #[test]

@@ -41,6 +41,8 @@
 //!
 //! Time comes in as milliseconds so the logic is testable without a clock.
 
+use crate::control::QueueDelay;
+
 /// Lowest budget the controller goes to (kbit/s), or the ceiling if lower.
 pub const FLOOR_KBPS: u32 = 3_000;
 /// Budget a new viewer starts with (kbit/s), or the ceiling if lower.
@@ -88,27 +90,7 @@ pub struct Sample {
     pub sent_kbps: Option<f32>,
     /// The viewer's one-way queueing delay over its report window; `None`
     /// from older viewers and in the presenter's own samples.
-    pub queue: Option<Queue>,
-}
-
-/// One-way queueing delay as the viewer measured it (`link_report`,
-/// [`crate::delay`]).
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
-pub struct Queue {
-    pub mean_ms: f32,
-    pub max_ms: f32,
-    /// Slope over the window: positive = a queue is building up.
-    pub trend_ms_per_s: f32,
-}
-
-impl std::fmt::Display for Queue {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "queue {:.0} ms (max {:.0}, {:+.0} ms/s)",
-            self.mean_ms, self.max_ms, self.trend_ms_per_s
-        )
-    }
+    pub queue: Option<QueueDelay>,
 }
 
 /// What triggered a cut (the first that applies, in this order).
@@ -141,7 +123,7 @@ pub struct Cut {
     pub rtt_ms: Option<f32>,
     pub min_rtt_ms: Option<f32>,
     /// The viewer's queueing delay, if it reports one.
-    pub queue: Option<Queue>,
+    pub queue: Option<QueueDelay>,
 }
 
 impl Cut {
@@ -321,9 +303,7 @@ impl AdaptiveBitrate {
         };
         // The viewer's one-way queue, when it reports one, replaces the RTT
         // rule: it reacts within one report and has no ack delay in it.
-        let queue = s.queue.filter(|q| {
-            q.mean_ms.is_finite() && q.max_ms.is_finite() && q.trend_ms_per_s.is_finite()
-        });
+        let queue = s.queue;
         let queue_growing = match queue {
             Some(q) => {
                 // Right after a cut the queue takes a while to drain (the
@@ -332,15 +312,15 @@ impl AdaptiveBitrate {
                 let draining = self
                     .last_cut_ms
                     .is_some_and(|t| now_ms.saturating_sub(t) < QUEUE_DRAIN_MS);
-                (q.mean_ms >= QUEUE_STANDING_MS && !draining)
-                    || ((q.mean_ms >= QUEUE_MS || q.max_ms >= QUEUE_MAX_MS)
-                        && q.trend_ms_per_s >= QUEUE_TREND_MS_PER_S)
+                (q.mean_ms() >= QUEUE_STANDING_MS && !draining)
+                    || ((q.mean_ms() >= QUEUE_MS || q.max_ms() >= QUEUE_MAX_MS)
+                        && q.trend_ms_per_s() >= QUEUE_TREND_MS_PER_S)
             }
             None => rtt_high,
         };
         // Loss with a flat queue is random (Wi-Fi retries, interference):
         // cutting would not reduce it.
-        let queue_high = queue.is_some_and(|q| q.max_ms >= QUEUE_LOSS_MS);
+        let queue_high = queue.is_some_and(|q| q.max_ms() >= QUEUE_LOSS_MS);
         let delay_says_random = queue.is_some() && !queue_high && !self.queue_was_high;
         if queue.is_some() {
             self.queue_was_high = queue_high;
@@ -774,10 +754,10 @@ mod tests {
             rtt_ms: Some(5.0),
             backlog_drops: 0,
             sent_kbps: sent,
-            queue: Some(Queue {
-                mean_ms,
-                max_ms,
-                trend_ms_per_s: trend,
+            queue: Some(QueueDelay {
+                mean_us: (mean_ms * 1000.0) as u32,
+                max_us: (max_ms * 1000.0) as u32,
+                trend_us_per_s: (trend * 1000.0) as i32,
             }),
         }
     }
@@ -847,15 +827,6 @@ mod tests {
         let mut s = at_ceiling(40_000);
         feed(&mut s, queued(25.0, 2.0, 10.0, 0.0, None), 1, &mut t);
         assert_eq!(s.budget_kbps(), 24_000);
-        // Garbage queue values are ignored (then the RTT rule applies).
-        let mut g = at_ceiling(40_000);
-        feed(
-            &mut g,
-            queued(0.0, f32::NAN, f32::INFINITY, f32::NAN, None),
-            4,
-            &mut t,
-        );
-        assert_eq!(g.budget_kbps(), 40_000);
     }
 
     /// Closed-loop simulation without QUIC: encoder model -> FEC parity ->
@@ -1004,11 +975,7 @@ mod tests {
                 };
                 reports += 1;
                 let now_ms = (t_us + frame_us) / 1000;
-                let queue = meter.take().filter(|_| link.reports_queue).map(|d| Queue {
-                    mean_ms: d.mean_us as f32 / 1000.0,
-                    max_ms: d.max_us as f32 / 1000.0,
-                    trend_ms_per_s: d.trend_us_per_s as f32 / 1000.0,
-                });
+                let queue = meter.take().filter(|_| link.reports_queue);
                 c.on_sample(
                     Sample {
                         loss_pct: Some(l),
