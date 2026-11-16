@@ -172,8 +172,18 @@ fn main() -> Result<()> {
         ),
         Some(Command::Present(mut args)) => {
             args.port = port;
-            let cli_cursor = if args.hide_cursor { Some(capture_prefs::CursorPref::Hidden) } else { args.cursor };
-            args.capture = capture_prefs::resolve(cli_cursor, args.fps, args.fec, args.adaptive_bitrate, &config_dir);
+            let cli_cursor = if args.hide_cursor {
+                Some(capture_prefs::CursorPref::Hidden)
+            } else {
+                args.cursor
+            };
+            args.capture = capture_prefs::resolve(
+                cli_cursor,
+                args.fps,
+                args.fec,
+                args.adaptive_bitrate,
+                &config_dir,
+            );
             presenter::run(args, &config_dir)
         }
         Some(Command::View(args)) if args.headless => viewer::run_headless(args, &config_dir),
@@ -295,15 +305,22 @@ mod tests {
 
     #[test]
     fn present_flags_reach_the_capture_preferences() {
-        let cli = parse(&["--port", "0", "present", "--source", "test", "--fec", "20%", "--fps", "max", "--cursor", "embedded"]).unwrap();
+        let cli = parse(&[
+            "--port", "0", "present", "--source", "test", "--fec", "20%", "--fps", "max",
+            "--cursor", "embedded",
+        ])
+        .unwrap();
         assert_eq!(cli.port, Some(0));
-        let Some(Command::Present(args)) = cli.command else { panic!("not present") };
+        let Some(Command::Present(args)) = cli.command else {
+            panic!("not present")
+        };
         assert_eq!(args.fec, Some(beamcraft_proto::fec::FecMode::Fixed(20)));
         assert_eq!(args.fps, Some(capture_prefs::FpsPref::Max));
         assert_eq!(args.cursor, Some(capture_prefs::CursorPref::Embedded));
         // CLI values beat whatever is saved (empty config dir here).
         let dir = std::env::temp_dir().join(format!("beamcraft-cli-{}", std::process::id()));
-        let prefs = capture_prefs::resolve(args.cursor, args.fps, args.fec, args.adaptive_bitrate, &dir);
+        let prefs =
+            capture_prefs::resolve(args.cursor, args.fps, args.fec, args.adaptive_bitrate, &dir);
         assert_eq!(prefs.fec, beamcraft_proto::fec::FecMode::Fixed(20));
         assert_eq!(prefs.cursor, capture_prefs::CursorPref::Embedded);
     }
@@ -318,15 +335,42 @@ mod tests {
 
     #[test]
     fn view_flags_and_hwdec() {
-        let cli = parse(&["view", "--headless", "--duration", "5", "--simulate-loss", "2", "--simulate-burst", "4", "--software-decode", "beamcraft://x"]).unwrap();
-        let Some(Command::View(args)) = cli.command else { panic!("not view") };
+        let cli = parse(&[
+            "view",
+            "--headless",
+            "--duration",
+            "5",
+            "--simulate-loss",
+            "2",
+            "--simulate-burst",
+            "4",
+            "--software-decode",
+            "beamcraft://x",
+        ])
+        .unwrap();
+        let Some(Command::View(args)) = cli.command else {
+            panic!("not view")
+        };
         assert!(args.headless);
-        assert_eq!((args.duration, args.simulate_loss, args.simulate_burst), (Some(5.0), 2.0, 4.0));
+        assert_eq!(
+            (args.duration, args.simulate_loss, args.simulate_burst),
+            (Some(5.0), 2.0, 4.0)
+        );
         assert!(!args.want_hwdec(), "--software-decode wins over --hwdec");
-        assert!(ViewArgs { hwdec: true, ..ViewArgs::default() }.want_hwdec());
-        assert_eq!(resolve_renderer(Some(RendererChoice::Wgpu)), RendererChoice::Wgpu);
+        assert!(ViewArgs {
+            hwdec: true,
+            ..ViewArgs::default()
+        }
+        .want_hwdec());
+        assert_eq!(
+            resolve_renderer(Some(RendererChoice::Wgpu)),
+            RendererChoice::Wgpu
+        );
         let cli = parse(&["--renderer", "glow"]).unwrap();
         assert_eq!(cli.renderer, Some(RendererChoice::Gl));
-        assert!(cli.command.is_none(), "no subcommand opens the start screen");
+        assert!(
+            cli.command.is_none(),
+            "no subcommand opens the start screen"
+        );
     }
 }

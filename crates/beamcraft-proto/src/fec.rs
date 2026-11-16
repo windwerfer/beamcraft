@@ -319,7 +319,12 @@ impl BandwidthSim {
         }
         let bytes_per_us = kbps as f64 * 1000.0 / 8.0 / 1e6;
         let depth = (bytes_per_us * depth_ms.max(1) as f64 * 1000.0).max(1500.0);
-        Some(Self { bytes_per_us, depth, tokens: depth, last_us: None })
+        Some(Self {
+            bytes_per_us,
+            depth,
+            tokens: depth,
+            last_us: None,
+        })
     }
 
     /// Whether a packet of `len` bytes arriving at `now_us` gets through.
@@ -353,14 +358,17 @@ mod tests {
     fn bandwidth_sim_passes_the_capacity_and_drops_the_rest() {
         assert!(BandwidthSim::new(0, 30).is_none());
         let mut bw = BandwidthSim::new(8_000, 30).unwrap(); // 1 byte/us
-        // 2 s of 1200-byte packets offered at 16 Mbit/s: about half get through.
+                                                            // 2 s of 1200-byte packets offered at 16 Mbit/s: about half get through.
         let (mut ok, mut t) = (0usize, 0u64);
         for _ in 0..3_333 {
             t += 600;
             ok += usize::from(bw.admit(1200, t));
         }
         let delivered_kbps = ok as f64 * 1200.0 * 8.0 / 2.0 / 1000.0;
-        assert!((7_500.0..8_600.0).contains(&delivered_kbps), "{delivered_kbps}");
+        assert!(
+            (7_500.0..8_600.0).contains(&delivered_kbps),
+            "{delivered_kbps}"
+        );
         // Below the capacity nothing is lost.
         let mut bw = BandwidthSim::new(8_000, 30).unwrap();
         assert!((1..=1000u64).all(|i| bw.admit(1200, i * 2_400)));

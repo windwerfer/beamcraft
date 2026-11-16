@@ -1,9 +1,9 @@
 //! YUV→RGB conversion in an OpenGL shader so the viewer does not spend tens
 //! of milliseconds in CPU swscale on older machines.
 
+use beamcraft_media::decode::{YuvImage, YuvLayout};
 use eframe::egui;
 use eframe::glow::{self, HasContext};
-use beamcraft_media::decode::{YuvImage, YuvLayout};
 use std::sync::{Arc, Mutex};
 
 pub struct YuvPaint {

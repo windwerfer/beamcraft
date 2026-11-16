@@ -6,7 +6,9 @@ use crate::identity::{fingerprint, Identity};
 use anyhow::Result;
 use beamcraft_proto::ALPN;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::crypto::{verify_tls12_signature, verify_tls13_signature, CryptoProvider, WebPkiSupportedAlgorithms};
+use rustls::crypto::{
+    verify_tls12_signature, verify_tls13_signature, CryptoProvider, WebPkiSupportedAlgorithms,
+};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
 use rustls::{DigitallySignedStruct, DistinguishedName, Error, SignatureScheme};
@@ -120,7 +122,10 @@ pub fn server_config(identity: &Identity) -> Result<rustls::ServerConfig> {
     Ok(cfg)
 }
 
-pub fn client_config(identity: &Identity, presenter_fingerprint: &str) -> Result<rustls::ClientConfig> {
+pub fn client_config(
+    identity: &Identity,
+    presenter_fingerprint: &str,
+) -> Result<rustls::ClientConfig> {
     let mut cfg = rustls::ClientConfig::builder_with_provider(provider())
         .with_protocol_versions(&[&rustls::version::TLS13])?
         .dangerous()

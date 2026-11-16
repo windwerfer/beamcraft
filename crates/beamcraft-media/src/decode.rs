@@ -83,8 +83,13 @@ pub fn open_decoder(hw: HwDecode, software: SoftwareDecoder) -> Result<Box<dyn V
             Ok((dev, label)) => match Decoder::open(Some((dev, label))) {
                 Ok(d) => return Ok(Box::new(d)),
                 Err(e) => {
-                    tracing::warn!("{label} H.264 decode failed to open ({e:#}); falling back to software");
-                    return open_software(software, &format!("{label} could not open the H.264 decoder"));
+                    tracing::warn!(
+                        "{label} H.264 decode failed to open ({e:#}); falling back to software"
+                    );
+                    return open_software(
+                        software,
+                        &format!("{label} could not open the H.264 decoder"),
+                    );
                 }
             },
             Err(e) => {
@@ -125,7 +130,8 @@ impl Decoder {
                             "{label} H.264 decode failed to open ({e:#}); falling back to software"
                         );
                         let mut d = Self::open(None)?;
-                        d.name = format!("h264 (software: {label} could not open the H.264 decoder)");
+                        d.name =
+                            format!("h264 (software: {label} could not open the H.264 decoder)");
                         Ok(d)
                     }
                 },
@@ -165,7 +171,9 @@ impl Decoder {
                 (*raw).get_format = Some(select_hw_pixel_format);
             }
         }
-        tracing::info!("H.264 decoder threads={threads} type=slice low_delay,fast skip_loop_filter=nonref");
+        tracing::info!(
+            "H.264 decoder threads={threads} type=slice low_delay,fast skip_loop_filter=nonref"
+        );
 
         let (name, device) = if let Some((dev, label)) = hw {
             unsafe { (*ctx.as_mut_ptr()).hw_device_ctx = dev.new_ref() };
@@ -335,13 +343,20 @@ impl YuvImage {
     }
 }
 
-fn copy_plane(src: &frame::Video, plane: usize, width: usize, height: usize) -> Result<(Vec<u8>, usize)> {
+fn copy_plane(
+    src: &frame::Video,
+    plane: usize,
+    width: usize,
+    height: usize,
+) -> Result<(Vec<u8>, usize)> {
     let stride = src.stride(plane);
     if stride == 0 || width == 0 {
         bail!("decoded plane {plane} is empty");
     }
     let data = src.data(plane);
-    let need = stride.saturating_mul(height.saturating_sub(1)).saturating_add(width);
+    let need = stride
+        .saturating_mul(height.saturating_sub(1))
+        .saturating_add(width);
     if data.len() < need {
         bail!("decoded plane {plane} is short");
     }
@@ -400,7 +415,10 @@ impl RgbaConverter {
                 (&img.u, img.u_stride, cw, ch),
                 (&img.v, img.v_stride, cw, ch),
             ],
-            YuvLayout::Nv12 => vec![(&img.y, img.y_stride, w, h), (&img.u, img.u_stride, cw * 2, ch)],
+            YuvLayout::Nv12 => vec![
+                (&img.y, img.y_stride, w, h),
+                (&img.u, img.u_stride, cw * 2, ch),
+            ],
         };
         for (i, (src, stride, width, rows)) in planes.into_iter().enumerate() {
             let dst_stride = frame.stride(i);
@@ -445,12 +463,8 @@ impl RgbaConverter {
                 .unwrap_or(4)
                 .clamp(1, 8);
             unsafe {
-                let _ = ffi::av_opt_set_int(
-                    ctx.as_mut_ptr().cast(),
-                    c"threads".as_ptr(),
-                    threads,
-                    0,
-                );
+                let _ =
+                    ffi::av_opt_set_int(ctx.as_mut_ptr().cast(), c"threads".as_ptr(), threads, 0);
             }
             self.ctx = Some((ctx, key.0, key.1, key.2));
             self.out = frame::Video::new(Pixel::RGBA, key.1, key.2);

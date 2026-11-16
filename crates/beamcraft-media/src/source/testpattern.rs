@@ -58,7 +58,14 @@ impl TestPattern {
                 rgba[i..i + 4].copy_from_slice(&[255, 255, 255, 255]);
             }
         }
-        sink(CursorEvent::Image(CursorImage { id: 1, width: w, height: h, hotspot_x: 0, hotspot_y: 0, rgba }));
+        sink(CursorEvent::Image(CursorImage {
+            id: 1,
+            width: w,
+            height: h,
+            hotspot_x: 0,
+            hotspot_y: 0,
+            rgba,
+        }));
         self.cursor = Some(sink);
         self
     }
@@ -95,7 +102,11 @@ impl TestPattern {
         let span_y = (h - size - MARKER_BLOCK).max(1);
         let bounce = |pos: usize, span: usize| {
             let p = pos % (2 * span);
-            if p < span { p } else { 2 * span - p }
+            if p < span {
+                p
+            } else {
+                2 * span - p
+            }
         };
         let bx = bounce(seq as usize * 9, span_x);
         let by = MARKER_BLOCK + bounce(seq as usize * 5, span_y);
@@ -118,7 +129,11 @@ impl FrameSource for TestPattern {
         }
         let capture_us = now_us();
         let len = self.width as usize * self.height as usize * 4;
-        let mut data = self.spare.take().filter(|b| b.len() == len).unwrap_or_else(|| vec![0; len]);
+        let mut data = self
+            .spare
+            .take()
+            .filter(|b| b.len() == len)
+            .unwrap_or_else(|| vec![0; len]);
         self.render(&mut data, self.seq);
         self.send_cursor(self.seq, capture_us);
         let frame = RawFrame {

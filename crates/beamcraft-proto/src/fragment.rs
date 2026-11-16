@@ -283,7 +283,11 @@ impl Partial {
             return false;
         }
         let (i, k) = (h.index as usize, self.data.len());
-        let slot = if i < k { &mut self.data[i] } else { &mut self.parity[i - k] };
+        let slot = if i < k {
+            &mut self.data[i]
+        } else {
+            &mut self.parity[i - k]
+        };
         if slot.is_some() {
             return false;
         }
@@ -311,7 +315,9 @@ impl Partial {
         if !missing {
             return;
         }
-        for (i, bytes) in recover_block(&self.layout, b, &self.data, &self.parity).unwrap_or_default() {
+        for (i, bytes) in
+            recover_block(&self.layout, b, &self.data, &self.parity).unwrap_or_default()
+        {
             if self.data[i].is_none() {
                 self.bytes += bytes.len();
                 self.data[i] = Some(bytes);
@@ -359,7 +365,11 @@ impl Reassembler {
         }
     }
 
-    pub fn push(&mut self, datagram: Bytes, now_us: u64) -> Option<(AssembledFrame, ReassemblyEvent)> {
+    pub fn push(
+        &mut self,
+        datagram: Bytes,
+        now_us: u64,
+    ) -> Option<(AssembledFrame, ReassemblyEvent)> {
         let (h, payload) = PacketHeader::parse(&datagram)?;
         let body = datagram.slice(datagram.len() - payload.len()..);
         self.meter(&h);
@@ -374,7 +384,10 @@ impl Reassembler {
             self.partial.pop_first();
         }
         let frame_id = h.frame_id;
-        let entry = self.partial.entry(frame_id).or_insert_with(|| Partial::new(&h, now_us));
+        let entry = self
+            .partial
+            .entry(frame_id)
+            .or_insert_with(|| Partial::new(&h, now_us));
         let before = entry.recovered;
         if !entry.add(&h, body) {
             return None;
@@ -407,7 +420,10 @@ impl Reassembler {
                 first_fragment_us: done.first_us,
                 completed_us: now_us,
             },
-            ReassemblyEvent { lost_frames, recovered: done.recovered },
+            ReassemblyEvent {
+                lost_frames,
+                recovered: done.recovered,
+            },
         ))
     }
 
@@ -431,13 +447,18 @@ impl Reassembler {
         if h.frame_id.saturating_add(METER_LAG) < self.newest {
             return; // already finalized
         }
-        let e = self.meter.entry(h.frame_id).or_insert((total, h.data_count as u32, 0));
+        let e = self
+            .meter
+            .entry(h.frame_id)
+            .or_insert((total, h.data_count as u32, 0));
         e.2 = e.2.saturating_add(1);
         if h.frame_id > self.newest {
             self.newest = h.frame_id;
         }
         while let Some((&id, _)) = self.meter.first_key_value() {
-            if id.saturating_add(METER_LAG) >= self.newest && self.meter.len() <= 4 * METER_LAG as usize {
+            if id.saturating_add(METER_LAG) >= self.newest
+                && self.meter.len() <= 4 * METER_LAG as usize
+            {
                 break;
             }
             let (_, (total, data, got)) = self.meter.pop_first().expect("non-empty");
@@ -476,7 +497,9 @@ mod tests {
         // FEC off: data packets only, in the one packet format.
         let (h, _) = PacketHeader::parse(&frags[0]).unwrap();
         assert_eq!((h.parity_count, frags.len()), (0, h.data_count as usize));
-        assert!(frags.iter().all(|p| p[0] == WIRE_VERSION && p.len() <= 1200));
+        assert!(frags
+            .iter()
+            .all(|p| p[0] == WIRE_VERSION && p.len() <= 1200));
         frags.reverse();
         let mut r = Reassembler::new(1_000_000);
         let mut out = None;
@@ -526,7 +549,11 @@ mod meter_tests {
 
     #[test]
     fn link_stats_count_loss_after_lag() {
-        let t = FrameTiming { capture_us: 0, encoded_us: 0, sent_us: 0 };
+        let t = FrameTiming {
+            capture_us: 0,
+            encoded_us: 0,
+            sent_us: 0,
+        };
         let mut r = Reassembler::new(u64::MAX);
         for id in 0..100u32 {
             let pkts = fragment(id, false, t, &vec![1u8; 11_000], 1200, Some(0.2));

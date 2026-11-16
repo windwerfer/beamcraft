@@ -205,11 +205,25 @@ pub fn resolve_with(
 }
 
 fn resolve_fec_with(cli: Option<FecMode>, env: Option<&str>, saved: Option<&str>) -> FecMode {
-    pick(cli, env, saved, FecMode::parse, "BEAMCRAFT_FEC", FecMode::Auto)
+    pick(
+        cli,
+        env,
+        saved,
+        FecMode::parse,
+        "BEAMCRAFT_FEC",
+        FecMode::Auto,
+    )
 }
 
 fn resolve_adaptive_with(cli: Option<bool>, env: Option<&str>, saved: Option<&str>) -> bool {
-    pick(cli, env, saved, parse_on_off, "BEAMCRAFT_ADAPTIVE_BITRATE", true)
+    pick(
+        cli,
+        env,
+        saved,
+        parse_on_off,
+        "BEAMCRAFT_ADAPTIVE_BITRATE",
+        true,
+    )
 }
 
 pub fn resolve(
@@ -264,9 +278,18 @@ mod tests {
     fn fec_precedence() {
         assert_eq!(resolve_fec_with(None, None, None), FecMode::Auto);
         assert_eq!(resolve_fec_with(None, None, Some("off")), FecMode::Off);
-        assert_eq!(resolve_fec_with(None, Some("30%"), Some("off")), FecMode::Fixed(30));
-        assert_eq!(resolve_fec_with(None, Some("lots"), Some("off")), FecMode::Off);
-        assert_eq!(resolve_fec_with(Some(FecMode::Fixed(5)), Some("30"), None), FecMode::Fixed(5));
+        assert_eq!(
+            resolve_fec_with(None, Some("30%"), Some("off")),
+            FecMode::Fixed(30)
+        );
+        assert_eq!(
+            resolve_fec_with(None, Some("lots"), Some("off")),
+            FecMode::Off
+        );
+        assert_eq!(
+            resolve_fec_with(Some(FecMode::Fixed(5)), Some("30"), None),
+            FecMode::Fixed(5)
+        );
         assert_eq!(parse_fec_arg("auto"), Ok(FecMode::Auto));
         assert!(parse_fec_arg("200").is_err());
     }

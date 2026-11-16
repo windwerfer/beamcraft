@@ -1,19 +1,19 @@
 use crate::ViewArgs;
 use anyhow::{anyhow, Result};
-use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 use beamcraft_media::decode::{self, HwDecode, RgbaConverter, SoftwareDecoder, YuvImage};
 use beamcraft_media::pattern::read_marker;
+use beamcraft_net::diag::{ConnectStepId, ConnectTrace, HANDSHAKE_TIMEOUT};
 use beamcraft_net::identity::Identity;
 use beamcraft_net::pairing::ConnectInfo;
-use beamcraft_net::diag::{ConnectStepId, ConnectTrace, HANDSHAKE_TIMEOUT};
 use beamcraft_net::transport::{ms, ViewerSession};
 use beamcraft_proto::clock::{now_us, ClockSync};
-use beamcraft_proto::control::StreamInfo;
 use beamcraft_proto::control::CursorMode;
+use beamcraft_proto::control::StreamInfo;
 use beamcraft_proto::cursor::ViewerCursor;
 use beamcraft_proto::fec::{BandwidthSim, LinkHud, LinkStats, LinkWindow, LossSim};
 use beamcraft_proto::fragment::{AssembledFrame, Reassembler};
 use beamcraft_proto::stats::StageStats;
+use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -201,14 +201,9 @@ async fn session(
         let s = status.lock().expect("status lock");
         s.trace.clone()
     };
-    let session = ViewerSession::connect_traced(
-        &identity,
-        &target,
-        &opts.name,
-        &trace,
-        HANDSHAKE_TIMEOUT,
-    )
-    .await?;
+    let session =
+        ViewerSession::connect_traced(&identity, &target, &opts.name, &trace, HANDSHAKE_TIMEOUT)
+            .await?;
     tracing::info!(
         "connected to {} ({}x{}@{} {} via {})",
         target.addr,
@@ -341,7 +336,10 @@ async fn session(
             Ok(()) => {}
             Err(TrySendError::Full(_)) => {
                 let flushed = flush_backlog(&decode_flush);
-                tracing::info!("decoder behind: dropped {} queued frames + this one, waiting for a keyframe", flushed);
+                tracing::info!(
+                    "decoder behind: dropped {} queued frames + this one, waiting for a keyframe",
+                    flushed
+                );
                 need_keyframe.store(true, Ordering::Release);
                 if last_request.elapsed() > Duration::from_millis(100) {
                     session.request_keyframe("decoder backlog");
@@ -366,7 +364,11 @@ async fn session(
     totals.link = reassembler.link_stats();
     totals.skipped_waiting_keyframe = skipped;
     totals.keyframe_requests += requests;
-    (totals.cursor_updates, totals.cursor_stale, totals.cursor_images) = cursor_summary;
+    (
+        totals.cursor_updates,
+        totals.cursor_stale,
+        totals.cursor_images,
+    ) = cursor_summary;
     totals.cursor_mode = Some(session.cursor_mode());
     if let Some(reason) = close_reason {
         tracing::info!("connection closed: {reason}");
@@ -388,7 +390,11 @@ fn decode_loop(
     on_frame: Option<Arc<dyn Fn() + Send + Sync>>,
 ) -> Result<(Totals, StageStats)> {
     let mut decoder = decode::open_decoder(
-        if opts.hwdec { HwDecode::Auto } else { HwDecode::None },
+        if opts.hwdec {
+            HwDecode::Auto
+        } else {
+            HwDecode::None
+        },
         opts.software_decoder,
     )?;
     let mut decoder_name = decoder.name().to_owned();
@@ -446,7 +452,12 @@ fn decode_loop(
             }
         };
         let decoded_us = now_us();
-        if let Some(marker) = read_marker(&img.y, img.y_stride, img.width as usize, img.height as usize) {
+        if let Some(marker) = read_marker(
+            &img.y,
+            img.y_stride,
+            img.width as usize,
+            img.height as usize,
+        ) {
             if let Some((prev_marker, prev_id)) = last_marker {
                 totals.marker_checked += 1;
                 if marker.wrapping_sub(prev_marker) != frame.frame_id.wrapping_sub(prev_id) {
@@ -523,7 +534,10 @@ fn decode_loop(
             "reassembly",
             ms(frame.completed_us, frame.first_fragment_us),
         );
-        record("decode_wait", ms(decode_started, frame.completed_us).max(0.0));
+        record(
+            "decode_wait",
+            ms(decode_started, frame.completed_us).max(0.0),
+        );
         record("decode", ms(decoded_us, decode_started).max(0.0));
         if let Some(c) = convert_ms {
             record("convert", c);

@@ -37,7 +37,10 @@ pub(crate) fn create_device(kind: ffi::AVHWDeviceType, device: Option<&str>) -> 
         )
     };
     if ret < 0 || buf.is_null() {
-        bail!("creating {kind:?} device failed: {}", ffmpeg_next::Error::from(ret));
+        bail!(
+            "creating {kind:?} device failed: {}",
+            ffmpeg_next::Error::from(ret)
+        );
     }
     Ok(HwRef(buf))
 }
@@ -76,7 +79,10 @@ pub(crate) fn create_frames_sized(
         (*ctx).initial_pool_size = pool;
         let ret = ffi::av_hwframe_ctx_init(buf);
         if ret < 0 {
-            bail!("av_hwframe_ctx_init failed: {}", ffmpeg_next::Error::from(ret));
+            bail!(
+                "av_hwframe_ctx_init failed: {}",
+                ffmpeg_next::Error::from(ret)
+            );
         }
         Ok(frames)
     }

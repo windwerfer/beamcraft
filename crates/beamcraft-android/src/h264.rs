@@ -72,7 +72,13 @@ mod tests {
 
     #[test]
     fn garbage_does_not_panic() {
-        for au in [&[][..], &[0], &[0, 0, 1], &[0, 0, 1, 0, 0, 1], &[1, 2, 3, 4]] {
+        for au in [
+            &[][..],
+            &[0],
+            &[0, 0, 1],
+            &[0, 0, 1, 0, 0, 1],
+            &[1, 2, 3, 4],
+        ] {
             let _ = parameter_sets(au);
         }
     }

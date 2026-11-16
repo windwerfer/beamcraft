@@ -13,11 +13,20 @@ pub enum Control {
         name: String,
         pairing_code: Option<String>,
     },
-    Rejected { reason: String },
+    Rejected {
+        reason: String,
+    },
     StreamInfo(StreamInfo),
-    RequestKeyframe { reason: String },
-    Ping { t_viewer_us: u64 },
-    Pong { t_viewer_us: u64, t_presenter_us: u64 },
+    RequestKeyframe {
+        reason: String,
+    },
+    Ping {
+        t_viewer_us: u64,
+    },
+    Pong {
+        t_viewer_us: u64,
+        t_presenter_us: u64,
+    },
     /// Viewer -> presenter, about twice a second: how the video packets of
     /// the last window arrived. Feeds the FEC overhead and the adaptive
     /// bitrate.
@@ -174,11 +183,21 @@ mod tests {
         let v1 = br#"{"type":"hello","protocol":1,"name":"imac","pairing_code":null,"caps":["fec-rs1"]}"#;
         assert_eq!(hello_protocol(v1), Some(1));
         // A future hello with a different shape, too.
-        assert_eq!(hello_protocol(br#"{"type":"hello","protocol":9,"other":[1]}"#), Some(9));
+        assert_eq!(
+            hello_protocol(br#"{"type":"hello","protocol":9,"other":[1]}"#),
+            Some(9)
+        );
         assert_eq!(hello_protocol(br#"{"type":"bye"}"#), None);
         assert_eq!(hello_protocol(b"\xff garbage"), None);
-        let hello = Control::Hello { protocol: crate::PROTOCOL_VERSION, name: "imac".into(), pairing_code: None };
-        assert_eq!(hello_protocol(&hello.encode()[4..]), Some(crate::PROTOCOL_VERSION));
+        let hello = Control::Hello {
+            protocol: crate::PROTOCOL_VERSION,
+            name: "imac".into(),
+            pairing_code: None,
+        };
+        assert_eq!(
+            hello_protocol(&hello.encode()[4..]),
+            Some(crate::PROTOCOL_VERSION)
+        );
     }
 
     #[test]
@@ -196,7 +215,10 @@ mod tests {
         });
         let body = info.encode();
         let text = std::str::from_utf8(&body[4..]).unwrap();
-        assert!(text.contains(r#""cursor":"separate""#) && text.contains(r#""fec":"auto""#), "{text}");
+        assert!(
+            text.contains(r#""cursor":"separate""#) && text.contains(r#""fec":"auto""#),
+            "{text}"
+        );
         assert_eq!(Control::decode_body(&body[4..]).unwrap(), info);
 
         let report = Control::LinkReport {
@@ -204,7 +226,11 @@ mod tests {
             packets: 900,
             recovered: 2,
             unrecoverable: 0,
-            queue: Some(QueueDelay { mean_us: 12_000, max_us: 30_000, trend_us_per_s: -4_500 }),
+            queue: Some(QueueDelay {
+                mean_us: 12_000,
+                max_us: 30_000,
+                trend_us_per_s: -4_500,
+            }),
         };
         let body = report.encode();
         let text = std::str::from_utf8(&body[4..]).unwrap();

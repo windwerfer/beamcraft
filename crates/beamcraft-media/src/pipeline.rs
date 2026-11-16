@@ -92,7 +92,13 @@ pub fn run_capture_encode(
     while !controls.stopped() {
         match source.poll_frame(poll)? {
             Some(raw) => {
-                maybe_reopen(&mut encoder, &raw, &settings, &mut on_ready, &mut first_for_viewer)?;
+                maybe_reopen(
+                    &mut encoder,
+                    &raw,
+                    &settings,
+                    &mut on_ready,
+                    &mut first_for_viewer,
+                )?;
                 if sink.wants_frames() {
                     if let Some(old) = held.take() {
                         source.recycle(old.data);
@@ -329,13 +335,28 @@ pub fn continue_capture_encode(
             .clamp(Duration::from_millis(5), Duration::from_millis(50));
         match source.poll_frame(poll)? {
             Some(raw) => {
-                maybe_replace_encoder(&mut encoder, &raw, &settings, controls, &mut track, &mut on_reopen, &mut first_for_viewer)?;
+                maybe_replace_encoder(
+                    &mut encoder,
+                    &raw,
+                    &settings,
+                    controls,
+                    &mut track,
+                    &mut on_reopen,
+                    &mut first_for_viewer,
+                )?;
                 if sink.wants_frames() {
                     if let Some(old) = held.take() {
                         source.recycle(old.data);
                     }
                     let (cw, ch) = (raw.width, raw.height);
-                    if encode_one(&mut encoder, raw, source, sink, controls, &mut first_for_viewer)? {
+                    if encode_one(
+                        &mut encoder,
+                        raw,
+                        source,
+                        sink,
+                        controls,
+                        &mut first_for_viewer,
+                    )? {
                         last_sent = Instant::now();
                         last_size = (cw, ch);
                         on_tick(&encoder, cw, ch, Tick::Captured);
@@ -357,9 +378,24 @@ pub fn continue_capture_encode(
                 }
                 if first_for_viewer {
                     if let Some(raw) = held.take() {
-                        maybe_replace_encoder(&mut encoder, &raw, &settings, controls, &mut track, &mut on_reopen, &mut first_for_viewer)?;
+                        maybe_replace_encoder(
+                            &mut encoder,
+                            &raw,
+                            &settings,
+                            controls,
+                            &mut track,
+                            &mut on_reopen,
+                            &mut first_for_viewer,
+                        )?;
                         let (cw, ch) = (raw.width, raw.height);
-                        if encode_one(&mut encoder, raw, source, sink, controls, &mut first_for_viewer)? {
+                        if encode_one(
+                            &mut encoder,
+                            raw,
+                            source,
+                            sink,
+                            controls,
+                            &mut first_for_viewer,
+                        )? {
                             last_sent = Instant::now();
                             last_size = (cw, ch);
                             on_tick(&encoder, cw, ch, Tick::Captured);
@@ -406,7 +442,11 @@ pub fn bitrate_action(
         return BitrateAction::Keep;
     }
     if user_changed {
-        return if live_ok { BitrateAction::Live } else { BitrateAction::Reopen };
+        return if live_ok {
+            BitrateAction::Live
+        } else {
+            BitrateAction::Reopen
+        };
     }
     if live_ok {
         return BitrateAction::Live;
@@ -477,12 +517,18 @@ fn maybe_replace_encoder(
             BitrateAction::Keep => return Ok(false),
             BitrateAction::Live => {
                 if encoder.set_bitrate_live(want.bitrate_kbps) {
-                    tracing::debug!("encoder bitrate {current} -> {} kbit/s (live)", want.bitrate_kbps);
+                    tracing::debug!(
+                        "encoder bitrate {current} -> {} kbit/s (live)",
+                        want.bitrate_kbps
+                    );
                     return Ok(false);
                 }
             }
             BitrateAction::Reopen => {
-                tracing::info!("encoder bitrate {current} -> {} kbit/s (reopen)", want.bitrate_kbps);
+                tracing::info!(
+                    "encoder bitrate {current} -> {} kbit/s (reopen)",
+                    want.bitrate_kbps
+                );
             }
         }
     }
@@ -588,18 +634,36 @@ mod tests {
             ..EncoderConfig::default()
         };
         let settings = Arc::new(Mutex::new(cfg.clone()));
-        let mut source = OneShot { sent: false, until: Instant::now() };
+        let mut source = OneShot {
+            sent: false,
+            until: Instant::now(),
+        };
         let raw = source.poll_frame(Duration::ZERO).unwrap().unwrap();
         let mut encoder = open_encoder_for(&raw, &cfg).unwrap();
         let controls = Controls::default();
         let mut track = BitrateTrack::default();
         let (mut reopened, mut first) = (0, false);
         let mut step = |enc: &mut Encoder, track: &mut BitrateTrack| {
-            maybe_replace_encoder(enc, &raw, &settings, &controls, track, &mut |_| { reopened += 1; Ok(()) }, &mut first).unwrap()
+            maybe_replace_encoder(
+                enc,
+                &raw,
+                &settings,
+                &controls,
+                track,
+                &mut |_| {
+                    reopened += 1;
+                    Ok(())
+                },
+                &mut first,
+            )
+            .unwrap()
         };
         assert!(!step(&mut encoder, &mut track));
         controls.set_bitrate_cap(3000);
-        assert!(!step(&mut encoder, &mut track), "no reopen for a network change");
+        assert!(
+            !step(&mut encoder, &mut track),
+            "no reopen for a network change"
+        );
         assert_eq!(encoder.config().bitrate_kbps, 3000);
         // The user's new maximum still applies (and is capped by the network).
         settings.lock().unwrap().bitrate_kbps = 2000;
@@ -642,7 +706,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(captured, 1, "the held frame is sent once as a real frame");
-        assert!(repeated >= 2, "expected repeats every {REPEAT_AFTER:?}, got {repeated}");
+        assert!(
+            repeated >= 2,
+            "expected repeats every {REPEAT_AFTER:?}, got {repeated}"
+        );
         assert_eq!(sink.0, captured + repeated);
     }
 }

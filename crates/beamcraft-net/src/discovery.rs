@@ -1,7 +1,7 @@
 use crate::pairing::lan_ipv4s;
 use anyhow::Result;
-use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use beamcraft_proto::MDNS_SERVICE;
+use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
@@ -82,7 +82,11 @@ impl Browser {
     pub fn start() -> Result<Self> {
         let daemon = ServiceDaemon::new()?;
         let events = daemon.browse(MDNS_SERVICE)?;
-        Ok(Self { daemon, events, found: Vec::new() })
+        Ok(Self {
+            daemon,
+            events,
+            found: Vec::new(),
+        })
     }
 
     pub fn poll(&mut self) -> &[Presenter] {
@@ -106,9 +110,15 @@ impl Browser {
     fn apply(&mut self, event: ServiceEvent) {
         match event {
             ServiceEvent::ServiceResolved(info) => {
-                let Some(fp) = info.get_property_val_str("fp") else { return };
+                let Some(fp) = info.get_property_val_str("fp") else {
+                    return;
+                };
                 let port = info.get_port();
-                let mut ips: Vec<IpAddr> = info.get_addresses().iter().map(|a| a.to_ip_addr()).collect();
+                let mut ips: Vec<IpAddr> = info
+                    .get_addresses()
+                    .iter()
+                    .map(|a| a.to_ip_addr())
+                    .collect();
                 // Prefer non-loopback IPv4, then link-local IPv4, then anything else.
                 ips.sort_by_key(|a| match a {
                     IpAddr::V4(v) if a.is_loopback() => 2,
@@ -124,11 +134,15 @@ impl Browser {
                     .map(|ip| SocketAddr::new(*ip, port))
                     .collect();
                 let addrs = if addrs.is_empty() {
-                    ips.into_iter().map(|ip| SocketAddr::new(ip, port)).collect()
+                    ips.into_iter()
+                        .map(|ip| SocketAddr::new(ip, port))
+                        .collect()
                 } else {
                     addrs
                 };
-                let Some(addr) = addrs.first().copied() else { return };
+                let Some(addr) = addrs.first().copied() else {
+                    return;
+                };
                 let name = info
                     .get_fullname()
                     .trim_end_matches(MDNS_SERVICE)
@@ -149,11 +163,14 @@ impl Browser {
                     fingerprint: fp.to_owned(),
                     resolution: info.get_property_val_str("res").map(str::to_owned),
                 };
-                self.found.retain(|p| p.fingerprint != presenter.fingerprint);
+                self.found
+                    .retain(|p| p.fingerprint != presenter.fingerprint);
                 self.found.push(presenter);
             }
             ServiceEvent::ServiceRemoved(_, fullname) => {
-                let name = fullname.trim_end_matches(MDNS_SERVICE).trim_end_matches('.');
+                let name = fullname
+                    .trim_end_matches(MDNS_SERVICE)
+                    .trim_end_matches('.');
                 self.found.retain(|p| p.name != name);
             }
             _ => {}

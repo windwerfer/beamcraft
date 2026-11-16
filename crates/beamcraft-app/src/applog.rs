@@ -53,7 +53,11 @@ impl LogStore {
     }
 
     pub fn path(&self) -> PathBuf {
-        self.inner.lock().unwrap_or_else(|e| e.into_inner()).path.clone()
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .path
+            .clone()
     }
 
     #[cfg_attr(not(feature = "gui"), allow(dead_code))]
@@ -125,22 +129,27 @@ impl Write for TeeWriter {
 /// Install the process subscriber (stderr + file + ring buffer) and return the store.
 pub fn init() -> LogStore {
     let store = LogStore::open(default_log_file());
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-        "info,mdns_sd=warn,wgpu=warn,naga=warn,eframe=warn".into()
-    });
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| "info,mdns_sd=warn,wgpu=warn,naga=warn,eframe=warn".into());
     let writer = store.clone();
     let _ = tracing_subscriber::fmt()
         .with_env_filter(env_filter)
         .with_ansi(stderr_is_tty())
         .with_timer(LocalTimer)
-        .with_writer(move || TeeWriter { store: writer.clone() })
+        .with_writer(move || TeeWriter {
+            store: writer.clone(),
+        })
         .try_init();
     let _ = LOG.set(store.clone());
     if let Some(err) = store.open_error() {
         tracing::warn!("{err}");
     }
     tracing::info!("logging to {}", store.path().display());
-    tracing::info!("beamcraft {} on {}", env!("CARGO_PKG_VERSION"), crate::session::session_from_env());
+    tracing::info!(
+        "beamcraft {} on {}",
+        env!("CARGO_PKG_VERSION"),
+        crate::session::session_from_env()
+    );
     store
 }
 
@@ -202,14 +211,20 @@ mod tests {
         let store = LogStore::open(path.clone());
         assert_eq!(store.path(), path);
         assert!(store.open_error().is_none());
-        let mut tee = TeeWriter { store: store.clone() };
+        let mut tee = TeeWriter {
+            store: store.clone(),
+        };
         tee.write_all(b"first li").unwrap();
         tee.write_all(b"ne\r\n\nsecond\nthi").unwrap();
         tee.flush().unwrap();
         let snap = store.snapshot();
         let lines: Vec<&str> = snap.lines().collect();
         assert!(lines[0].starts_with("---- session "), "{snap}");
-        assert_eq!(&lines[1..], ["first line", "second"], "blank lines dropped, partial line held");
+        assert_eq!(
+            &lines[1..],
+            ["first line", "second"],
+            "blank lines dropped, partial line held"
+        );
         tee.write_all(b"rd\n").unwrap();
         assert!(store.snapshot().ends_with("third\n"));
         let file = std::fs::read_to_string(&path).unwrap();
@@ -226,7 +241,10 @@ mod tests {
         }
         let snap = store.snapshot();
         assert_eq!(snap.lines().count(), MAX_LINES);
-        assert!(snap.starts_with("line 50\n"), "oldest lines (and the header) rotate out");
+        assert!(
+            snap.starts_with("line 50\n"),
+            "oldest lines (and the header) rotate out"
+        );
         assert!(snap.ends_with(&format!("line {}\n", MAX_LINES + 49)));
         std::fs::remove_dir_all(path.parent().unwrap()).ok();
     }
@@ -237,7 +255,10 @@ mod tests {
         let path = temp_log("dir");
         std::fs::create_dir_all(&path).unwrap();
         let store = LogStore::open(path.clone());
-        assert!(store.open_error().unwrap().contains("could not open log file"));
+        assert!(store
+            .open_error()
+            .unwrap()
+            .contains("could not open log file"));
         store.push_line("still kept in memory".into());
         assert!(store.snapshot().contains("still kept in memory"));
         std::fs::remove_dir_all(path.parent().unwrap()).ok();

@@ -6,7 +6,6 @@ use crate::codec::{DecodedImage, Decoder, Fed};
 use crate::codec_list::CodecEntry;
 use crate::stats::{Counters, PipelineHud, PipelineWindow};
 use anyhow::{anyhow, Result};
-use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender, TrySendError};
 use beamcraft_net::diag::{ConnectStepId, ConnectTrace, HANDSHAKE_TIMEOUT};
 use beamcraft_net::identity::Identity;
 use beamcraft_net::pairing::ConnectInfo;
@@ -16,6 +15,7 @@ use beamcraft_proto::control::{Control, StreamInfo};
 use beamcraft_proto::cursor::ViewerCursor;
 use beamcraft_proto::fec::{LinkHud, LinkWindow};
 use beamcraft_proto::fragment::{AssembledFrame, Reassembler};
+use crossbeam_channel::{bounded, Receiver, RecvTimeoutError, Sender, TrySendError};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -107,7 +107,10 @@ impl Handle {
     }
 
     pub fn status(&self) -> Status {
-        self.status.lock().unwrap_or_else(|e| e.into_inner()).clone()
+        self.status
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 }
 
@@ -140,9 +143,26 @@ pub fn spawn(
         counters: counters.clone(),
         stop: stop.clone(),
     };
-    let channels = Channels { frames_tx, frames_drain: frames, recycle_rx };
+    let channels = Channels {
+        frames_tx,
+        frames_drain: frames,
+        recycle_rx,
+    };
     runtime.spawn(async move {
-        let result = run(identity, target, name, decoders, gpu, force_software, status.clone(), channels, counters, stop, repaint.clone()).await;
+        let result = run(
+            identity,
+            target,
+            name,
+            decoders,
+            gpu,
+            force_software,
+            status.clone(),
+            channels,
+            counters,
+            stop,
+            repaint.clone(),
+        )
+        .await;
         let mut s = status.lock().unwrap_or_else(|e| e.into_inner());
         s.connected = false;
         if let Err(e) = result {
@@ -176,10 +196,21 @@ async fn run(
     stop: Arc<AtomicBool>,
     repaint: Arc<dyn Fn() + Send + Sync>,
 ) -> Result<()> {
-    let trace = status.lock().unwrap_or_else(|e| e.into_inner()).trace.clone();
-    let session = ViewerSession::connect_traced(&identity, &target, &name, &trace, HANDSHAKE_TIMEOUT).await?;
+    let trace = status
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .trace
+        .clone();
+    let session =
+        ViewerSession::connect_traced(&identity, &target, &name, &trace, HANDSHAKE_TIMEOUT).await?;
     let info = session.stream_info.clone();
-    tracing::info!("connected: {}x{}@{} via {}", info.width, info.height, info.fps, info.encoder);
+    tracing::info!(
+        "connected: {}x{}@{} via {}",
+        info.width,
+        info.height,
+        info.fps,
+        info.encoder
+    );
     {
         let mut s = status.lock().unwrap_or_else(|e| e.into_inner());
         s.connected = true;
@@ -207,18 +238,20 @@ async fn run(
     let dec_trace = trace.clone();
     let dec_repaint = repaint.clone();
     let dec_counters = counters.clone();
-    let decode_thread = std::thread::Builder::new().name("decode".into()).spawn(move || {
-        let ctx = DecodeCtx {
-            status: dec_status,
-            channels,
-            need_keyframe: dec_need_key,
-            control,
-            trace: dec_trace,
-            repaint: dec_repaint,
-            counters: dec_counters,
-        };
-        decode_loop(decode_rx, info, decoders, gpu, force_software, ctx)
-    })?;
+    let decode_thread = std::thread::Builder::new()
+        .name("decode".into())
+        .spawn(move || {
+            let ctx = DecodeCtx {
+                status: dec_status,
+                channels,
+                need_keyframe: dec_need_key,
+                control,
+                trace: dec_trace,
+                repaint: dec_repaint,
+                counters: dec_counters,
+            };
+            decode_loop(decode_rx, info, decoders, gpu, force_software, ctx)
+        })?;
 
     let self_healing = session.stream_info.intra_refresh;
     let mut reassembler = Reassembler::new(500_000);
@@ -257,7 +290,10 @@ async fn run(
         };
         if !got_datagram {
             got_datagram = true;
-            trace.ok(ConnectStepId::FirstDatagram, format!("{} byte datagram", datagram.len()));
+            trace.ok(
+                ConnectStepId::FirstDatagram,
+                format!("{} byte datagram", datagram.len()),
+            );
         }
         if stream_updates.has_changed().unwrap_or(false) {
             let info = stream_updates.borrow_and_update().clone();
@@ -275,7 +311,9 @@ async fn run(
             repaint();
             continue;
         }
-        let Some((frame, event)) = reassembler.push(datagram, now_us()) else { continue };
+        let Some((frame, event)) = reassembler.push(datagram, now_us()) else {
+            continue;
+        };
         PipelineCounters::add(&counters.received, 1);
         window.1 += 1;
         window.2 += frame.data.len() as u64;
@@ -322,11 +360,14 @@ async fn run(
     };
     session.close();
     drop(decode_tx);
-    decode_thread.join().map_err(|_| anyhow!("decode thread panicked"))??;
+    decode_thread
+        .join()
+        .map_err(|_| anyhow!("decode thread panicked"))??;
     if let Some(reason) = close_reason {
         tracing::info!("connection closed: {reason}");
         if !stop.load(Ordering::Acquire) {
-            status.lock().unwrap_or_else(|e| e.into_inner()).error = Some(format!("connection closed: {reason}"));
+            status.lock().unwrap_or_else(|e| e.into_inner()).error =
+                Some(format!("connection closed: {reason}"));
         }
     }
     Ok(())
@@ -346,7 +387,9 @@ struct DecodeCtx {
 impl DecodeCtx {
     fn request_keyframe(&self, reason: &str) {
         self.need_keyframe.store(true, Ordering::Release);
-        let _ = self.control.send(Control::RequestKeyframe { reason: reason.into() });
+        let _ = self.control.send(Control::RequestKeyframe {
+            reason: reason.into(),
+        });
         PipelineCounters::add(&self.counters.key_requests, 1);
     }
 
@@ -366,7 +409,10 @@ impl DecodeCtx {
         }
         if *first {
             *first = false;
-            self.trace.ok(ConnectStepId::FirstFrame, format!("{}x{} via {}", img.width, img.height, decoder.name()));
+            self.trace.ok(
+                ConnectStepId::FirstFrame,
+                format!("{}x{} via {}", img.width, img.height, decoder.name()),
+            );
         }
         PipelineCounters::add(&self.counters.decoded, 1);
         if let Err(TrySendError::Full(img)) = self.channels.frames_tx.try_send(img) {
@@ -384,7 +430,14 @@ const DECODE_QUEUE: usize = 6;
 /// for pictures that finished late.
 const POLL_EVERY: Duration = Duration::from_millis(8);
 
-fn decode_loop(rx: Receiver<AssembledFrame>, info: StreamInfo, decoders: Vec<CodecEntry>, gpu: bool, force_software: bool, ctx: DecodeCtx) -> Result<()> {
+fn decode_loop(
+    rx: Receiver<AssembledFrame>,
+    info: StreamInfo,
+    decoders: Vec<CodecEntry>,
+    gpu: bool,
+    force_software: bool,
+    ctx: DecodeCtx,
+) -> Result<()> {
     let mut decoder = Decoder::new(info.width, info.height, &decoders, gpu, force_software);
     let mut first = true;
     let mut synced = crate::codec::Counts::default();
@@ -413,7 +466,8 @@ fn decode_loop(rx: Receiver<AssembledFrame>, info: StreamInfo, decoders: Vec<Cod
             Ok(Fed::Queued(Some(img))) => ctx.show(img, &decoder, &mut first),
             Ok(Fed::Queued(None)) | Ok(Fed::NotOpen) => {
                 if frame.is_some() {
-                    ctx.status.lock().unwrap_or_else(|e| e.into_inner()).decoder = decoder.name().to_owned();
+                    ctx.status.lock().unwrap_or_else(|e| e.into_inner()).decoder =
+                        decoder.name().to_owned();
                 }
             }
             Ok(Fed::InputFull(img)) => {

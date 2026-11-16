@@ -5,16 +5,16 @@ use crate::viewer::{self, viewer_ui, Picture, ViewerHandle, ViewerOptions, Viewe
 use crate::yuv_glow::{YuvPaint, YuvRenderer};
 use crate::{GuiLaunch, RendererChoice, ViewArgs};
 use anyhow::{anyhow, Result};
-use beamcraft_proto::control::CursorMode;
-use eframe::egui;
 use beamcraft_media::encode::{
     EncoderBackend, EncoderConfig, RateControl, DEFAULT_BITRATE_KBPS, DEFAULT_QP,
 };
 use beamcraft_net::diag::{ConnectStep, FirewallHint, IncomingAttempt, StepState};
-use beamcraft_net::firewall::{Notice, OpenResult, UserConfirmed, NOT_CHANGED_NOTE};
 use beamcraft_net::discovery::{Browser, Presenter};
+use beamcraft_net::firewall::{Notice, OpenResult, UserConfirmed, NOT_CHANGED_NOTE};
 use beamcraft_net::identity::{short_fingerprint, Identity};
 use beamcraft_net::pairing::ConnectInfo;
+use beamcraft_proto::control::CursorMode;
+use eframe::egui;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -637,10 +637,8 @@ impl MirrorApp {
             latest = Some(f);
         }
         if let Some(f) = latest {
-            self.display_latency_ms = beamcraft_net::transport::ms(
-                beamcraft_proto::clock::now_us(),
-                f.capture_us_viewer,
-            );
+            self.display_latency_ms =
+                beamcraft_net::transport::ms(beamcraft_proto::clock::now_us(), f.capture_us_viewer);
             match f.picture {
                 Picture::Rgba(rgba) => {
                     let image = egui::ColorImage::from_rgba_unmultiplied(
@@ -722,13 +720,23 @@ impl MirrorApp {
                 if self.pixel_exact { "1:1 nearest" } else { "fit linear" },
             );
         }
-        let updates = status.cursor.as_ref().map(|c| c.lock().expect("cursor lock").updates).unwrap_or(0);
+        let updates = status
+            .cursor
+            .as_ref()
+            .map(|c| c.lock().expect("cursor lock").updates)
+            .unwrap_or(0);
         let elapsed = self.cursor_rate.0.elapsed().as_secs_f64();
         if elapsed >= 1.0 {
-            self.cursor_rate = (Instant::now(), updates, updates.saturating_sub(self.cursor_rate.1) as f64 / elapsed);
+            self.cursor_rate = (
+                Instant::now(),
+                updates,
+                updates.saturating_sub(self.cursor_rate.1) as f64 / elapsed,
+            );
         }
         let cursor_line = match status.cursor_mode {
-            Some(CursorMode::Separate) => format!("cursor separate ({:.0} updates/s)", self.cursor_rate.2),
+            Some(CursorMode::Separate) => {
+                format!("cursor separate ({:.0} updates/s)", self.cursor_rate.2)
+            }
             Some(CursorMode::Embedded) => "cursor embedded (in video)".to_owned(),
             Some(CursorMode::Hidden) => "cursor hidden".to_owned(),
             None => "cursor ?".to_owned(),
@@ -809,13 +817,17 @@ impl MirrorApp {
             w: video.width(),
             h: video.height(),
         };
-        let Some(r) = beamcraft_proto::cursor::cursor_rect(p, img, rect) else { return };
+        let Some(r) = beamcraft_proto::cursor::cursor_rect(p, img, rect) else {
+            return;
+        };
         if self.cursor_tex.as_ref().is_none_or(|(id, _)| *id != img.id) {
             let image = egui::ColorImage::from_rgba_premultiplied(
                 [img.width as usize, img.height as usize],
                 &img.rgba,
             );
-            let tex = ui.ctx().load_texture("cursor", image, egui::TextureOptions::LINEAR);
+            let tex = ui
+                .ctx()
+                .load_texture("cursor", image, egui::TextureOptions::LINEAR);
             self.cursor_tex = Some((img.id, tex));
         }
         if let Some((_, tex)) = &self.cursor_tex {

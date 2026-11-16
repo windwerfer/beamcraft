@@ -12,18 +12,18 @@
 //! the call that queued their input has returned.
 
 use crate::codec_list::{self, CodecEntry};
+use crate::film::FilmDecoder;
+use crate::gpu::{GpuFrame, SharedReader};
 use crate::h264;
 use crate::yuv::{self, Plane};
 use anyhow::{anyhow, bail, Result};
+use ndk::hardware_buffer::HardwareBufferUsage;
 use ndk::media::image_reader::{AcquireResult, Image, ImageFormat, ImageReader};
 use ndk::media::media_codec::{
     DequeuedInputBufferResult, DequeuedOutputBufferInfoResult, MediaCodec, MediaCodecDirection,
 };
 use ndk::media::media_format::MediaFormat;
 use ndk::native_window::NativeWindow;
-use crate::film::FilmDecoder;
-use crate::gpu::{GpuFrame, SharedReader};
-use ndk::hardware_buffer::HardwareBufferUsage;
 use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -115,9 +115,17 @@ impl Decoder {
     /// Hardware MediaCodec decoders first; the software fallback is FilmCraft, not the
     /// platform's software MediaCodec decoders (decision log 2026-11-15).
     /// `force_software` skips the hardware ones (home-screen switch, for comparison).
-    pub fn new(width: u32, height: u32, decoders: &[CodecEntry], gpu: bool, force_software: bool) -> Self {
-        let mut candidates: VecDeque<CodecEntry> =
-            codec_list::ranked(decoders).into_iter().filter(|e| e.hardware).collect();
+    pub fn new(
+        width: u32,
+        height: u32,
+        decoders: &[CodecEntry],
+        gpu: bool,
+        force_software: bool,
+    ) -> Self {
+        let mut candidates: VecDeque<CodecEntry> = codec_list::ranked(decoders)
+            .into_iter()
+            .filter(|e| e.hardware)
+            .collect();
         let mut skipped = Vec::new();
         if force_software {
             candidates.clear();
@@ -169,7 +177,11 @@ impl Decoder {
     fn update_label(&mut self) {
         if self.film.is_some() {
             let mut s = "SOFTWARE decoder FilmCraft (pure Rust)".to_owned();
-            s.push_str(if self.gpu { ", GPU output" } else { ", CPU copy" });
+            s.push_str(if self.gpu {
+                ", GPU output"
+            } else {
+                ", CPU copy"
+            });
             if let Some(why) = self.skipped.last() {
                 s.push_str(&format!(" ({why})"));
             }
@@ -186,7 +198,11 @@ impl Decoder {
         if a.entry.low_latency {
             s.push_str(", low-latency");
         }
-        s.push_str(if self.gpu { ", GPU output" } else { ", CPU copy" });
+        s.push_str(if self.gpu {
+            ", GPU output"
+        } else {
+            ", CPU copy"
+        });
         if let Some(why) = self.skipped.last() {
             s.push_str(&format!(" ({why})"));
         }
@@ -271,7 +287,11 @@ impl Decoder {
                 }
             }
         }
-        tracing::info!("decoder FilmCraft (software, pure Rust) ({}x{}) started", self.width, self.height);
+        tracing::info!(
+            "decoder FilmCraft (software, pure Rust) ({}x{}) started",
+            self.width,
+            self.height
+        );
         self.film = Some(FilmDecoder::default());
         self.update_label();
         Ok(())
@@ -312,12 +332,16 @@ impl Decoder {
     /// FilmCraft decodes on this thread and returns the picture right away (no
     /// queue, nothing for `poll`). Errors go to the session, which asks for a keyframe.
     fn decode_film(&mut self, au: &[u8], pts_us: u64, want: bool) -> Result<Fed> {
-        let Some(film) = self.film.as_mut() else { return Ok(Fed::NotOpen) };
+        let Some(film) = self.film.as_mut() else {
+            return Ok(Fed::NotOpen);
+        };
         let t = Instant::now();
         let planes = film.decode(au)?;
         self.last_latency_ms = Some(t.elapsed().as_secs_f64() * 1000.0);
         self.counts.queued += 1;
-        let Some(planes) = planes else { return Ok(Fed::Queued(None)) };
+        let Some(planes) = planes else {
+            return Ok(Fed::Queued(None));
+        };
         if !want {
             self.counts.superseded += 1;
             return Ok(Fed::Queued(None));
@@ -340,7 +364,11 @@ impl Decoder {
             let t = Instant::now();
             let (cw, _) = planes.chroma_size();
             fn plane(data: &[u8], stride: u32) -> yuv::Plane<'_> {
-                yuv::Plane { data, row_stride: stride as usize, pixel_stride: 1 }
+                yuv::Plane {
+                    data,
+                    row_stride: stride as usize,
+                    pixel_stride: 1,
+                }
             }
             let mut rgba = std::mem::take(&mut self.spare);
             yuv::to_rgba(
@@ -543,7 +571,10 @@ impl Decoder {
             match active.reader.reader().acquire_latest_image() {
                 Ok(AcquireResult::Image(img)) if self.gpu => {
                     self.unseen = 0;
-                    let pts_us = img.timestamp().map(|ns| ns.max(0) as u64 / 1000).unwrap_or(0);
+                    let pts_us = img
+                        .timestamp()
+                        .map(|ns| ns.max(0) as u64 / 1000)
+                        .unwrap_or(0);
                     let frame = GpuFrame::new(img, active.reader.clone())?;
                     self.last_convert_ms = 0.0;
                     return Ok(Some(DecodedImage {

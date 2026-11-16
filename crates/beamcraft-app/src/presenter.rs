@@ -1,18 +1,16 @@
+use crate::capture_prefs::{parse_fps_arg, CapturePrefs, CursorPref, FpsPref};
 use anyhow::{bail, Result};
-use clap::{Args, ValueEnum};
 use beamcraft_media::encode::{
     parse_size, Encoder, EncoderBackend, EncoderConfig, RateControl, DEFAULT_BITRATE_KBPS,
     DEFAULT_QP,
 };
 use beamcraft_media::frame::EncodedFrame;
-use crate::capture_prefs::{parse_fps_arg, CapturePrefs, CursorPref, FpsPref};
 use beamcraft_media::pipeline::{
     continue_capture_encode, open_encoder_for, wait_first_frame, CaptureExit, Controls, Tick,
     VideoSink,
 };
 use beamcraft_media::source::testpattern::TestPattern;
 use beamcraft_media::source::{CursorCapture, CursorSink, FrameSource};
-use beamcraft_proto::cursor::CursorEvent;
 use beamcraft_net::diag::FirewallHint;
 use beamcraft_net::diag::IncomingAttempt;
 use beamcraft_net::discovery::Advertisement;
@@ -21,8 +19,10 @@ use beamcraft_net::pairing::{
     lan_ipv4s, primary_ipv4, qr_terminal, random_pairing_code, ConnectInfo,
 };
 use beamcraft_net::transport::{FecControl, FecState, OutgoingFrame, Presenter, PresenterConfig};
-use beamcraft_proto::fec::FecMode;
 use beamcraft_proto::control::StreamInfo;
+use beamcraft_proto::cursor::CursorEvent;
+use beamcraft_proto::fec::FecMode;
+use clap::{Args, ValueEnum};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -337,7 +337,10 @@ impl PresenterHandle {
                 tracing::info!("FEC set to {}", prefs.fec.as_string());
             }
             if c.prefs.adaptive != prefs.adaptive {
-                tracing::info!("adaptive bitrate {}", if prefs.adaptive { "on" } else { "off" });
+                tracing::info!(
+                    "adaptive bitrate {}",
+                    if prefs.adaptive { "on" } else { "off" }
+                );
             }
             // FEC and adaptive bitrate apply to the next frame; no restart needed.
             c.fec.set_mode(prefs.fec);
@@ -346,7 +349,11 @@ impl PresenterHandle {
             c.needs_restart()
         };
         if restart {
-            tracing::info!("capture settings changed (cursor {}, fps {}); reopening the capture", prefs.cursor.as_str(), prefs.fps.label());
+            tracing::info!(
+                "capture settings changed (cursor {}, fps {}); reopening the capture",
+                prefs.cursor.as_str(),
+                prefs.fps.label()
+            );
             self.controls.request_source_restart();
         }
     }
@@ -535,14 +542,21 @@ fn open_source(
         "capture: cursor {} (asked {}){}, frame rate up to {fps}",
         c.active_cursor.as_str(),
         cursor.as_str(),
-        c.cursor_note.as_deref().map(|n| format!(" [{n}]")).unwrap_or_default()
+        c.cursor_note
+            .as_deref()
+            .map(|n| format!(" [{n}]"))
+            .unwrap_or_default()
     );
     Ok(source)
 }
 
 /// After the first frame the compositor's rate is known: run the encoder at
 /// min(asked, negotiated) and keep a custom keyframe interval in seconds.
-fn apply_negotiated_fps(source: &dyn FrameSource, ctl: &Mutex<CaptureCtl>, settings: &Mutex<EncoderConfig>) -> u32 {
+fn apply_negotiated_fps(
+    source: &dyn FrameSource,
+    ctl: &Mutex<CaptureCtl>,
+    settings: &Mutex<EncoderConfig>,
+) -> u32 {
     let mut c = ctl.lock().expect("capture ctl");
     c.negotiated_fps = source.negotiated_fps();
     c.source_desc = source.describe();
@@ -552,7 +566,11 @@ fn apply_negotiated_fps(source: &dyn FrameSource, ctl: &Mutex<CaptureCtl>, setti
         if let Some(k) = s.keyint {
             s.keyint = Some((k as u64 * fps as u64 / s.fps.max(1) as u64).max(1) as u32);
         }
-        tracing::info!("encoder frame rate {} -> {fps} fps (compositor allows {:?})", s.fps, c.negotiated_fps);
+        tracing::info!(
+            "encoder frame rate {} -> {fps} fps (compositor allows {:?})",
+            s.fps,
+            c.negotiated_fps
+        );
         s.fps = fps;
     }
     fps
@@ -761,7 +779,8 @@ fn present_session(
     let result = loop {
         let hud_reopen = hud.clone();
         let hud_tick = hud.clone();
-        let (rate_fec, rate_controls, rate_settings) = (fec.clone(), controls.clone(), settings.clone());
+        let (rate_fec, rate_controls, rate_settings) =
+            (fec.clone(), controls.clone(), settings.clone());
         let exit = continue_capture_encode(
             source.as_mut(),
             held.take(),
@@ -983,9 +1002,14 @@ pub fn run(args: PresentArgs, config_dir: &Path) -> Result<()> {
                 println!(
                     "cursor {}{}  frame rate asked {} fps, compositor allows {}",
                     c.active_cursor.as_str(),
-                    c.cursor_note.as_deref().map(|n| format!(" ({n})")).unwrap_or_default(),
+                    c.cursor_note
+                        .as_deref()
+                        .map(|n| format!(" ({n})"))
+                        .unwrap_or_default(),
                     c.asked_fps,
-                    c.negotiated_fps.map(|f| format!("{f} fps")).unwrap_or_else(|| "?".into())
+                    c.negotiated_fps
+                        .map(|f| format!("{f} fps"))
+                        .unwrap_or_else(|| "?".into())
                 );
                 println!("forward error correction {}", c.prefs.fec.as_string());
             }
@@ -1220,13 +1244,23 @@ mod tests {
         (args.port, args.bind, args.advertise_ip) = (0, localhost, localhost);
         args.no_mdns = true;
         args.name = Some("e2e".into());
-        let presenter = spawn(runtime.handle().clone(), args, dir.clone(), Identity::generate().unwrap(), None);
+        let presenter = spawn(
+            runtime.handle().clone(),
+            args,
+            dir.clone(),
+            Identity::generate().unwrap(),
+            None,
+        );
 
         let deadline = Instant::now() + Duration::from_secs(60);
         let wait = |what: &str, done: &mut dyn FnMut() -> bool| {
             while !done() {
                 let s = presenter.poll();
-                assert!(s.phase != PresentPhase::Failed, "presenter failed: {:?}", s.error);
+                assert!(
+                    s.phase != PresentPhase::Failed,
+                    "presenter failed: {:?}",
+                    s.error
+                );
                 assert!(Instant::now() < deadline, "timed out waiting for {what}");
                 std::thread::sleep(Duration::from_millis(20));
             }
@@ -1260,7 +1294,11 @@ mod tests {
                 while view.frames.try_recv().is_ok() {
                     shown += 1;
                 }
-                assert!(view.status.lock().unwrap().error.is_none(), "{:?}", view.status.lock().unwrap().error);
+                assert!(
+                    view.status.lock().unwrap().error.is_none(),
+                    "{:?}",
+                    view.status.lock().unwrap().error
+                );
                 shown >= n
             })
         };
@@ -1270,7 +1308,11 @@ mod tests {
         assert!(status.viewer_connected);
         assert_eq!(status.phase, PresentPhase::Streaming);
         assert_eq!(status.capture.cursor_mode, "separate");
-        assert!(status.attempts.iter().any(|a| a.ok), "{:?}", status.attempts);
+        assert!(
+            status.attempts.iter().any(|a| a.ok),
+            "{:?}",
+            status.attempts
+        );
         // Live changes: fixed FEC (no restart), a lower bitrate (encoder
         // reopens with an IDR), embedded cursor (capture restarts).
         let mut prefs = status.capture.prefs;
@@ -1284,7 +1326,10 @@ mod tests {
         let status = presenter.poll();
         assert_eq!(status.capture.fec.mode, FecMode::Fixed(30));
         assert_eq!(status.settings.bitrate_kbps, 3000);
-        assert_eq!(beamcraft_net::settings::Settings::load(&dir).fec.as_deref(), Some("30%"));
+        assert_eq!(
+            beamcraft_net::settings::Settings::load(&dir).fec.as_deref(),
+            Some("30%")
+        );
 
         let viewer_status = view.status.lock().unwrap().clone();
         assert!(viewer_status.connected && viewer_status.first_frame);

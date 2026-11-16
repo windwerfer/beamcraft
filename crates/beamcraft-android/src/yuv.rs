@@ -49,7 +49,11 @@ mod tests {
     use super::*;
 
     fn p(data: &[u8], row_stride: usize) -> Plane<'_> {
-        Plane { data, row_stride, pixel_stride: 1 }
+        Plane {
+            data,
+            row_stride,
+            pixel_stride: 1,
+        }
     }
 
     #[test]
@@ -68,17 +72,33 @@ mod tests {
         // BT.709 full-range red: Y=54, Cb=99, Cr=255.
         let mut out = Vec::new();
         to_rgba(2, 2, p(&[54; 4], 2), p(&[99], 1), p(&[255], 1), &mut out);
-        assert!(out[0] > 240 && out[1] < 20 && out[2] < 20, "{:?}", &out[..4]);
+        assert!(
+            out[0] > 240 && out[1] < 20 && out[2] < 20,
+            "{:?}",
+            &out[..4]
+        );
     }
 
     #[test]
     fn interleaved_chroma_uses_pixel_stride() {
         // NV12 view: U at even, V at odd bytes, pixel stride 2.
         let uv = [99u8, 255];
-        let u = Plane { data: &uv, row_stride: 2, pixel_stride: 2 };
-        let v = Plane { data: &uv[1..], row_stride: 2, pixel_stride: 2 };
+        let u = Plane {
+            data: &uv,
+            row_stride: 2,
+            pixel_stride: 2,
+        };
+        let v = Plane {
+            data: &uv[1..],
+            row_stride: 2,
+            pixel_stride: 2,
+        };
         let mut out = Vec::new();
         to_rgba(2, 2, p(&[54; 4], 2), u, v, &mut out);
-        assert!(out[0] > 240 && out[1] < 20 && out[2] < 20, "{:?}", &out[..4]);
+        assert!(
+            out[0] > 240 && out[1] < 20 && out[2] < 20,
+            "{:?}",
+            &out[..4]
+        );
     }
 }

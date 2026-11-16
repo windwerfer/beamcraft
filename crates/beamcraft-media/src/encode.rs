@@ -1,9 +1,9 @@
 use crate::frame::{EncodedFrame, PixelFormat, RawFrame};
 use crate::hw::{self, HwRef};
 use anyhow::{anyhow, bail, Context as _, Result};
+use beamcraft_proto::clock::now_us;
 use bytes::Bytes;
 use ffmpeg_next::{codec, encoder, ffi, format::Pixel, software::scaling, Dictionary, Packet};
-use beamcraft_proto::clock::now_us;
 
 /// Default target bitrate for desktop content. Per-frame bits are based on
 /// wall-clock PTS, so a static screen (few portal damage frames) still gets
@@ -30,7 +30,9 @@ impl std::str::FromStr for EncoderBackend {
             "x264" | "software" => Self::X264,
             "videotoolbox" => Self::VideoToolbox,
             "filmcraft" => Self::Filmcraft,
-            _ => bail!("unknown encoder backend {s:?} (auto, vaapi, x264, videotoolbox, filmcraft)"),
+            _ => {
+                bail!("unknown encoder backend {s:?} (auto, vaapi, x264, videotoolbox, filmcraft)")
+            }
         })
     }
 }
@@ -351,7 +353,15 @@ impl Encoder {
         else {
             return false;
         };
-        if apply_rate_control(enc, EncoderBackend::X264, rc, kbps as i64 * 1000, self.config.qp).is_err() {
+        if apply_rate_control(
+            enc,
+            EncoderBackend::X264,
+            rc,
+            kbps as i64 * 1000,
+            self.config.qp,
+        )
+        .is_err()
+        {
             return false;
         }
         self.config.bitrate_kbps = kbps;
@@ -585,7 +595,12 @@ impl Encoder {
     /// the compositor only sends frames on damage, so the viewer keeps getting
     /// a steady (cheap, mostly skip-block) stream. Returns nothing before the
     /// first real frame.
-    pub fn encode_repeat(&mut self, seq: u64, capture_us: u64, force_keyframe: bool) -> Result<Vec<EncodedFrame>> {
+    pub fn encode_repeat(
+        &mut self,
+        seq: u64,
+        capture_us: u64,
+        force_keyframe: bool,
+    ) -> Result<Vec<EncodedFrame>> {
         if !self.have_frame {
             return Ok(Vec::new());
         }
@@ -594,7 +609,12 @@ impl Encoder {
         self.submit(seq, capture_us, force_keyframe)
     }
 
-    fn submit(&mut self, seq: u64, capture_us: u64, force_keyframe: bool) -> Result<Vec<EncodedFrame>> {
+    fn submit(
+        &mut self,
+        seq: u64,
+        capture_us: u64,
+        force_keyframe: bool,
+    ) -> Result<Vec<EncodedFrame>> {
         let t_upload0 = now_us();
         let start = *self.start_us.get_or_insert(capture_us);
         let mut pts = capture_us.saturating_sub(start) as i64;
@@ -618,7 +638,13 @@ impl Encoder {
             let t_enc0 = now_us();
             let aus = fc.encode(&self.staging, pts, force_keyframe)?;
             for (data, keyframe) in aus {
-                out.push(EncodedFrame { seq, keyframe, data: Bytes::from(data), capture_us, encoded_us: now_us() });
+                out.push(EncodedFrame {
+                    seq,
+                    keyframe,
+                    data: Bytes::from(data),
+                    capture_us,
+                    encoded_us: now_us(),
+                });
             }
             self.last_encode_us = now_us().saturating_sub(t_enc0);
             return Ok(out);
@@ -691,7 +717,10 @@ impl Encoder {
 
     #[cfg(unix)]
     fn try_convert_dmabuf(&mut self, raw: &RawFrame) -> Result<()> {
-        let dmabuf = raw.dmabuf.as_ref().ok_or_else(|| anyhow!("frame has no DMA-BUF"))?;
+        let dmabuf = raw
+            .dmabuf
+            .as_ref()
+            .ok_or_else(|| anyhow!("frame has no DMA-BUF"))?;
         let device = match &self.upload {
             Upload::Vaapi { _device, .. } => _device.as_ptr(),
             Upload::Software => bail!("encoder {} cannot import DMA-BUF (needs VAAPI)", self.name),
@@ -731,7 +760,10 @@ impl Encoder {
                 *dma = Some(DmaImport { frames, key, graph });
             }
         }
-        let Upload::Vaapi { dma: Some(import), .. } = &mut self.upload else {
+        let Upload::Vaapi {
+            dma: Some(import), ..
+        } = &mut self.upload
+        else {
             bail!("DMA-BUF import state missing");
         };
 
@@ -740,14 +772,23 @@ impl Encoder {
         self.last_pack_us = now_us().saturating_sub(t_map);
 
         let t_vpp = now_us();
-        let mut src = import.graph.get("in").ok_or_else(|| anyhow!("vpp missing in"))?;
+        let mut src = import
+            .graph
+            .get("in")
+            .ok_or_else(|| anyhow!("vpp missing in"))?;
         src.source().add(&mapped)?;
         drop(mapped);
-        let mut sink = import.graph.get("out").ok_or_else(|| anyhow!("vpp missing out"))?;
+        let mut sink = import
+            .graph
+            .get("out")
+            .ok_or_else(|| anyhow!("vpp missing out"))?;
         let mut out = ffmpeg_next::frame::Video::empty();
         sink.sink().frame(&mut out)?;
         if !is_vaapi_pixel(out.format()) {
-            bail!("VPP returned system memory ({})", format_pixel(out.format()));
+            bail!(
+                "VPP returned system memory ({})",
+                format_pixel(out.format())
+            );
         }
         self.last_convert_us = now_us().saturating_sub(t_vpp);
         self.packed = out;
@@ -771,15 +812,20 @@ impl Encoder {
             if ret < 0 {
                 bail!("av_hwframe_get_buffer: {}", ffmpeg_next::Error::from(ret));
             }
-            let src = if matches!(self.packed.format(), Pixel::NV12 | Pixel::YUV420P | Pixel::YUVJ420P)
-            {
+            let src = if matches!(
+                self.packed.format(),
+                Pixel::NV12 | Pixel::YUV420P | Pixel::YUVJ420P
+            ) {
                 self.packed.as_ptr()
             } else {
                 self.staging.as_ptr()
             };
             let ret = ffi::av_hwframe_transfer_data(hw_frame.as_mut_ptr(), src, 0);
             if ret < 0 {
-                bail!("av_hwframe_transfer_data: {}", ffmpeg_next::Error::from(ret));
+                bail!(
+                    "av_hwframe_transfer_data: {}",
+                    ffmpeg_next::Error::from(ret)
+                );
             }
             hw_frame.set_pts(Some(pts));
             hw_frame.set_kind(kind);
@@ -792,7 +838,11 @@ impl Encoder {
         // After a DMA-BUF fallback the label still says zero-copy; shared
         // memory frames use VPP when the device has it.
         if self.conversion == path::DMABUF_ZERO_COPY {
-            self.conversion = if self.vpp_failed() { path::SHM_CPU_UPLOAD } else { path::SHM_VPP };
+            self.conversion = if self.vpp_failed() {
+                path::SHM_CPU_UPLOAD
+            } else {
+                path::SHM_VPP
+            };
         }
         if self.conversion == path::SHM_VPP {
             match self.convert_vaapi_vpp(raw) {
@@ -813,7 +863,9 @@ impl Encoder {
     }
 
     fn vpp_failed(&self) -> bool {
-        self.fallback_note.as_deref().is_some_and(|n| n.starts_with("VPP off"))
+        self.fallback_note
+            .as_deref()
+            .is_some_and(|n| n.starts_with("VPP off"))
             || !matches!(self.upload, Upload::Vaapi { .. })
     }
 
@@ -851,7 +903,10 @@ impl Encoder {
             _ => bail!("VPP graph missing"),
         };
         let t_vpp = now_us();
-        let mut src = vpp.graph.get("in").ok_or_else(|| anyhow!("vpp missing in"))?;
+        let mut src = vpp
+            .graph
+            .get("in")
+            .ok_or_else(|| anyhow!("vpp missing in"))?;
         src.source().add(&self.packed)?;
         let mut sink = vpp
             .graph
@@ -974,7 +1029,14 @@ impl VaapiVpp {
         Self::build(device, src, w, h, w, h)
     }
 
-    fn build(device: &HwRef, src: Pixel, src_w: u32, src_h: u32, dst_w: u32, dst_h: u32) -> Result<Self> {
+    fn build(
+        device: &HwRef,
+        src: Pixel,
+        src_w: u32,
+        src_h: u32,
+        dst_w: u32,
+        dst_h: u32,
+    ) -> Result<Self> {
         Self::build_from_ptr(device.as_ptr(), src, src_w, src_h, dst_w, dst_h)
     }
 
@@ -1029,7 +1091,9 @@ impl VaapiVpp {
                 );
                 graph.add(&buffer, "in", &buf_args)?
             }
-            VppInput::Vaapi(frames) => alloc_vaapi_buffersrc(&mut graph, &buffer, src_w, src_h, frames)?,
+            VppInput::Vaapi(frames) => {
+                alloc_vaapi_buffersrc(&mut graph, &buffer, src_w, src_h, frames)?
+            }
         };
         let mut vpp_ctx = alloc_hw_filter(&mut graph, &vpp, "vpp", &vpp_args, device)?;
         let mut out_ctx = graph.add(&sink, "out", "")?;
@@ -1052,7 +1116,10 @@ impl VaapiVpp {
                 ffi::AV_OPT_SEARCH_CHILDREN,
             );
             if ret < 0 {
-                tracing::warn!("could not pin buffersink to VAAPI ({})", ffmpeg_next::Error::from(ret));
+                tracing::warn!(
+                    "could not pin buffersink to VAAPI ({})",
+                    ffmpeg_next::Error::from(ret)
+                );
             }
         }
         if matches!(input, VppInput::System(_)) {
@@ -1088,7 +1155,8 @@ fn alloc_vaapi_buffersrc(
     frames: *mut ffi::AVBufferRef,
 ) -> Result<ffmpeg_next::filter::Context> {
     unsafe {
-        let ctx = ffi::avfilter_graph_alloc_filter(graph.as_mut_ptr(), buffer.as_ptr(), c"in".as_ptr());
+        let ctx =
+            ffi::avfilter_graph_alloc_filter(graph.as_mut_ptr(), buffer.as_ptr(), c"in".as_ptr());
         if ctx.is_null() {
             bail!("allocating buffer source");
         }
@@ -1099,13 +1167,19 @@ fn alloc_vaapi_buffersrc(
         (*par).format = ffi::AVPixelFormat::AV_PIX_FMT_VAAPI as i32;
         (*par).width = w as i32;
         (*par).height = h as i32;
-        (*par).time_base = ffi::AVRational { num: 1, den: 1_000_000 };
+        (*par).time_base = ffi::AVRational {
+            num: 1,
+            den: 1_000_000,
+        };
         (*par).sample_aspect_ratio = ffi::AVRational { num: 1, den: 1 };
         (*par).hw_frames_ctx = frames; // av_buffersrc_parameters_set takes its own reference
         let ret = ffi::av_buffersrc_parameters_set(ctx, par);
         ffi::av_free(par.cast());
         if ret < 0 {
-            bail!("buffer source parameters: {}", ffmpeg_next::Error::from(ret));
+            bail!(
+                "buffer source parameters: {}",
+                ffmpeg_next::Error::from(ret)
+            );
         }
         let ret = ffi::avfilter_init_str(ctx, std::ptr::null());
         if ret < 0 {
@@ -1144,7 +1218,8 @@ fn map_dmabuf(
     let size = if dmabuf.size > 0 {
         dmabuf.size
     } else {
-        (dmabuf.offset as usize).saturating_add((dmabuf.pitch as usize).saturating_mul(raw.height as usize))
+        (dmabuf.offset as usize)
+            .saturating_add((dmabuf.pitch as usize).saturating_mul(raw.height as usize))
     };
     // SAFETY: AVDRMFrameDescriptor is plain old data; all-zero is valid.
     let mut desc: ffi::AVDRMFrameDescriptor = unsafe { std::mem::zeroed() };
@@ -1211,18 +1286,18 @@ fn alloc_hw_filter(
         Some(CString::new(args)?)
     };
     unsafe {
-        let ctx = ffi::avfilter_graph_alloc_filter(
-            graph.as_mut_ptr(),
-            filter.as_ptr(),
-            cname.as_ptr(),
-        );
+        let ctx =
+            ffi::avfilter_graph_alloc_filter(graph.as_mut_ptr(), filter.as_ptr(), cname.as_ptr());
         if ctx.is_null() {
             bail!("allocating {name} filter");
         }
         (*ctx).hw_device_ctx = ffi::av_buffer_ref(device);
         let ret = ffi::avfilter_init_str(
             ctx,
-            cargs.as_ref().map(|s| s.as_ptr()).unwrap_or(std::ptr::null()),
+            cargs
+                .as_ref()
+                .map(|s| s.as_ptr())
+                .unwrap_or(std::ptr::null()),
         );
         if ret < 0 {
             bail!("init {name}: {}", ffmpeg_next::Error::from(ret));
@@ -1237,7 +1312,9 @@ fn format_pixel(p: Pixel) -> String {
     if name.is_null() {
         return format!("{p:?}").to_ascii_lowercase();
     }
-    unsafe { std::ffi::CStr::from_ptr(name) }.to_string_lossy().into_owned()
+    unsafe { std::ffi::CStr::from_ptr(name) }
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn ffmpeg_of(inner: &mut Core) -> Result<&mut encoder::Video> {
@@ -1450,7 +1527,10 @@ mod tests {
         let mut run = |enc: &mut Encoder, from: u64| {
             let (mut bytes, mut keyframes) = (0usize, 0usize);
             for seq in from..from + 60 {
-                for f in enc.encode(&noise_frame(seq, 320, 240, &mut rng), seq == 0).unwrap() {
+                for f in enc
+                    .encode(&noise_frame(seq, 320, 240, &mut rng), seq == 0)
+                    .unwrap()
+                {
                     if seq >= from + 30 {
                         bytes += f.data.len();
                     }

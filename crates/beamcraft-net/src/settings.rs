@@ -60,7 +60,13 @@ impl Settings {
 
 /// Persist the presenter's cursor mode, frame-rate cap and FEC setting for
 /// the next start.
-pub fn save_capture(config_dir: &Path, cursor: &str, fps: &str, fec: &str, adaptive: bool) -> Result<()> {
+pub fn save_capture(
+    config_dir: &Path,
+    cursor: &str,
+    fps: &str,
+    fec: &str,
+    adaptive: bool,
+) -> Result<()> {
     let mut settings = Settings::load(config_dir);
     let adaptive = if adaptive { "on" } else { "off" };
     if settings.cursor.as_deref() == Some(cursor)
@@ -173,7 +179,13 @@ mod tests {
     #[test]
     fn save_and_load_roundtrip() {
         let dir = temp_dir();
-        let settings = Settings { port: Some(47901), cursor: Some("embedded".into()), fps: Some("max".into()), fec: Some("20%".into()), adaptive_bitrate: Some("on".into()) };
+        let settings = Settings {
+            port: Some(47901),
+            cursor: Some("embedded".into()),
+            fps: Some("max".into()),
+            fec: Some("20%".into()),
+            adaptive_bitrate: Some("on".into()),
+        };
         settings.save(&dir).unwrap();
         assert_eq!(Settings::load(&dir), settings);
         std::fs::remove_dir_all(&dir).ok();
@@ -193,7 +205,10 @@ mod tests {
         save_port(&dir, 47555).unwrap();
         save_capture(&dir, "separate", "60", "auto", false).unwrap();
         let s = Settings::load(&dir);
-        assert_eq!((s.port, s.cursor.as_deref(), s.fps.as_deref()), (Some(47555), Some("separate"), Some("60")));
+        assert_eq!(
+            (s.port, s.cursor.as_deref(), s.fps.as_deref()),
+            (Some(47555), Some("separate"), Some("60"))
+        );
         assert_eq!(s.fec.as_deref(), Some("auto"));
         assert_eq!(s.adaptive_bitrate.as_deref(), Some("off"));
         std::fs::remove_dir_all(&dir).ok();
@@ -232,7 +247,12 @@ mod tests {
     #[test]
     fn saved_zero_is_ignored() {
         let dir = temp_dir();
-        Settings { port: Some(0), ..Default::default() }.save(&dir).unwrap();
+        Settings {
+            port: Some(0),
+            ..Default::default()
+        }
+        .save(&dir)
+        .unwrap();
         with_env(None, || {
             assert_eq!(resolve_port(None, &dir), DEFAULT_PORT);
         });
