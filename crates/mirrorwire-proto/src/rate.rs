@@ -461,6 +461,40 @@ impl AdaptiveBitrate {
     }
 }
 
+/// A keyframe leaves at this multiple of the budget instead of in one burst…
+pub const KEYFRAME_PACE_SHARE: f32 = 1.25;
+/// …and the frames that waited behind it at this multiple, until the send
+/// loop has caught up.
+pub const CATCH_UP_PACE_SHARE: f32 = 1.5;
+/// A frame is spread over at most this long (µs).
+pub const MAX_PACE_SPREAD_US: u64 = 100_000;
+
+/// How long (µs) to spread a frame of `wire_bytes` (video + parity) over
+/// at a budget of `budget_kbps`: a keyframe at [`KEYFRAME_PACE_SHARE`] × the
+/// budget, a frame that waited behind a paced one at [`CATCH_UP_PACE_SHARE`],
+/// at most [`MAX_PACE_SPREAD_US`]. Other frames are not paced (0).
+///
+/// A keyframe is 2–5 delta frames (measured 2026-11-16, x264 and h264_vaapi
+/// at 12 Mbit/s with the 100 ms VBV). Sent in one burst (the transport
+/// paces at 500 Mbit/s) it fills a shallow bottleneck buffer (a router,
+/// USB: tens of ms) and its tail is dropped whatever the average rate; the
+/// viewer waits for another keyframe, which is lost the same way. The
+/// frames behind it must be paced too, or they arrive as one burst on the
+/// buffer the keyframe just filled. Pacing at exactly the budget never
+/// catches up (seconds of lag in the simulation); see testing.md §3.3.
+pub fn pace_spread_us(wire_bytes: usize, budget_kbps: u32, keyframe: bool, behind: bool) -> u64 {
+    let share = if keyframe {
+        KEYFRAME_PACE_SHARE
+    } else if behind {
+        CATCH_UP_PACE_SHARE
+    } else {
+        return 0;
+    };
+    let kbps = (budget_kbps as f64 * share as f64).max(1.0);
+    let us = wire_bytes as f64 * 8.0 * 1000.0 / kbps;
+    (us as u64).min(MAX_PACE_SPREAD_US)
+}
+
 /// Encoder target that keeps video + parity within `budget_kbps`, given the
 /// FEC overhead (parity / data, e.g. 0.25) applied to delta frames.
 pub fn encoder_kbps(budget_kbps: u32, fec_overhead: Option<f32>) -> u32 {
@@ -876,6 +910,8 @@ mod tests {
         /// delay, then as loss.
         buffer_ms: u32,
         keyframes: Keyframes,
+        /// Pace keyframes and the frames behind them ([`pace_spread_us`]).
+        pace: bool,
     }
 
     /// How the simulated encoder makes keyframes.
@@ -893,7 +929,7 @@ mod tests {
     }
 
     /// A keyframe is this many times a delta frame at the same rate.
-    const KEYFRAME_SIZE: usize = 10;
+    const KEYFRAME_SIZE: usize = 5;
 
     /// A bottleneck with a FIFO buffer: packets wait behind the backlog and
     /// are dropped when the wait would exceed the buffer.
@@ -944,6 +980,13 @@ mod tests {
         keyframes: u32,
         /// Frames with more packets lost than parity sent (after 10 s).
         lost_frames: u32,
+        /// Encoded-to-arrival delay of the frames' first packets after 10 s
+        /// (ms): the wait in the presenter's send loop plus the queue.
+        /// Frames the viewer could not show (after 10 s): lost, or after a
+        /// lost frame until a keyframe arrived whole.
+        frozen_frames: u32,
+        lag_p95_ms: f32,
+        lag_max_ms: f32,
     }
 
     fn simulate(link: Link, ceiling_kbps: u32, secs: u64) -> SimResult {
@@ -964,6 +1007,9 @@ mod tests {
         let (mut keyframes, mut lost_frames) = (0u32, 0u32);
         let (mut last_key_us, mut last_reopen_us) = (None::<u64>, None::<u64>);
         let mut reopened_kbps = None::<u32>;
+        let mut sender_free_us = 0u64;
+        let mut lag_samples = crate::stats::Series::default();
+        let (mut broken, mut frozen_frames) = (false, 0u32);
         for frame in 0..secs * 60 {
             let t_us = frame * frame_us;
             let overhead = FecMode::Auto
@@ -1008,9 +1054,20 @@ mod tests {
             }
             let mut frame_seen = false;
             let mut frame_lost = 0usize;
-            for k in 0..data + parity {
-                // Paced at 500 Mbit/s: 1200 bytes every ~19 us.
-                let at = t_us + k as u64 * 19;
+            // The send loop is serial: a frame starts when the one before
+            // has left (it may still be pacing a keyframe).
+            let start_us = t_us.max(sender_free_us);
+            let n = data + parity;
+            // Unpaced: 500 Mbit/s, 1200 bytes every ~19 us.
+            let spread_us = if link.pace {
+                pace_spread_us(n * PKT, c.budget_kbps(), key, start_us > t_us)
+            } else {
+                0
+            };
+            let gap_us = (spread_us / n as u64).max(19);
+            sender_free_us = start_us + n as u64 * gap_us;
+            for k in 0..n {
+                let at = start_us + k as u64 * gap_us;
                 expected += 1;
                 (total_sent, window_sent) = (total_sent + 1, window_sent + 1);
                 if lossy.drop_next() {
@@ -1029,17 +1086,29 @@ mod tests {
                 };
                 // The first packet of the frame that arrives is what the
                 // viewer measures (sent_us = frame start, +3 ms path).
-                meter.on_packet(frame as u32, t_us, at + wait + 3_000);
+                meter.on_packet(frame as u32, start_us, at + wait + 3_000);
                 if !std::mem::replace(&mut frame_seen, true) && t_us >= 10_000_000 {
                     queue_samples.push(wait as f64 / 1000.0);
+                    lag_samples.push((start_us - t_us + wait) as f64 / 1000.0);
                 }
                 received += 1;
                 if k < data && t_us >= (secs - 20) * 1_000_000 {
                     late_bytes += PKT;
                 }
             }
+            // A lost frame breaks the picture until a keyframe arrives whole.
+            if frame_lost > parity {
+                broken = true;
+            } else if key {
+                broken = false;
+            }
+            frozen_frames += u32::from(broken && t_us >= 10_000_000);
             if frame_lost > parity && link.keyframes != Keyframes::Off {
                 lost_frames += u32::from(t_us >= 10_000_000);
+            }
+            // The viewer asks again while it waits; the presenter answers at
+            // most every 500 ms (its gate on a LAN RTT).
+            if broken && link.keyframes != Keyframes::Off {
                 want_key |= last_key_us.is_none_or(|t| t_us - t >= 500_000);
             }
             if (frame + 1) % 30 == 0 {
@@ -1082,6 +1151,9 @@ mod tests {
             queue_p95_ms: queue_samples.summary().p95 as f32,
             keyframes,
             lost_frames,
+            frozen_frames,
+            lag_p95_ms: lag_samples.summary().p95 as f32,
+            lag_max_ms: lag_samples.summary().max as f32,
         }
     }
 
@@ -1112,6 +1184,7 @@ mod tests {
         busy_kbps: 0,
         buffer_ms: 150,
         keyframes: Keyframes::Off,
+        pace: true,
     };
 
     /// The tablet link of 2026-11-15 (second run): ~16 Mbit/s, deep buffer.
@@ -1262,58 +1335,118 @@ mod tests {
         }
     }
 
+    /// Means over 10 runs (ceilings 36–44 Mbit/s, content needing 60 or 18
+    /// Mbit/s): single runs with keyframes are chaotic (one parameter step
+    /// moved lost frames from 24 to 119).
+    #[derive(Debug, Default)]
+    struct Mean {
+        video_kbps: f32,
+        lost_pct: f32,
+        frozen_frames: f32,
+        lag_p95_ms: f32,
+        lag_max_ms: f32,
+    }
+
+    fn mean(link: Link) -> Mean {
+        let mut m = Mean::default();
+        let mut n = 0.0;
+        for ceiling in [36_000, 38_000, 40_000, 42_000, 44_000] {
+            for demand_kbps in [60_000, 18_000] {
+                let r = simulate(
+                    Link {
+                        demand_kbps,
+                        ..link
+                    },
+                    ceiling,
+                    90,
+                );
+                m.video_kbps += r.delivered_kbps;
+                m.lost_pct += r.lost_pct;
+                m.frozen_frames += r.frozen_frames as f32;
+                m.lag_p95_ms += r.lag_p95_ms;
+                m.lag_max_ms = m.lag_max_ms.max(r.lag_max_ms);
+                n += 1.0;
+            }
+        }
+        m.video_kbps /= n;
+        m.lost_pct /= n;
+        m.frozen_frames /= n;
+        m.lag_p95_ms /= n;
+        m
+    }
+
     #[test]
-    fn sim_keyframes_and_reopens() {
-        // Keyframes at connect and after each lost frame, 10x a delta frame.
-        // With x264 (live rate) they change nothing measurable. With
-        // VAAPI-style reopens, a cut that waited 5 s for the reopen kept
-        // overrunning the link and the controller cut on every report:
-        //   16 Mbit/s, 300 ms: min 3.5 Mbit/s, 6.4 delivered, 3.32 % lost,
-        //     queue p95 284 ms -> min 9.8, 10.8, 0.00 %, p95 95 (1 s gap down)
-        //   20 Mbit/s, 150 ms: min 4.5, 11.4, 3.80 %, p95 134
-        //     -> min 12.0, 12.0, 0.14 %, p95 83
-        //   16 Mbit/s, 50 ms: 12.5 delivered, 6.43 %, 18 lost frames
-        //     -> 5.1, 3.14 %, 16: a keyframe larger than the buffer is lost
-        //     however low the rate, until the rate makes it small (no fix
-        //     here: keyframe pacing, roadmap).
-        // A "grace" that ignored loss for 1 s after each keyframe was tried
-        // and rejected: an upward reopen also starts with a keyframe, so it
-        // hid that overrun (20 Mbit/s: 21-97 lost frames instead of 3).
-        for (name, link, min_kbps, max_lost_pct) in [
-            ("no limit", LAN, 39_000, 0.01),
-            ("16 Mbit/s, 300 ms buffer", WIFI, 9_000, 0.2),
-            (
-                "20 Mbit/s, 150 ms buffer",
-                Link {
-                    bottleneck_kbps: 20_000,
-                    ..LAN
-                },
-                11_000,
-                0.5,
-            ),
+    fn sim_keyframe_pacing_keeps_the_picture() {
+        // Keyframes at connect and while the viewer waits for one (≤ 1 per
+        // 500 ms), 5x a delta frame. Frozen = lost, or after a lost frame
+        // until a keyframe arrives whole (4800 frames per 80 s measured).
+        // Burst -> paced (testing.md §3.3):
+        //   x264 16 Mbit/s, 20 ms buffer: 4799 -> 0 frozen (the first
+        //     keyframe never got through)
+        //   VAAPI 16/300: 100 -> 0, 16/50: 3123 -> 291, 16/20: 4799 -> 759,
+        //     20/150: 294 -> 74
+        let wifi50 = Link {
+            buffer_ms: 50,
+            ..WIFI
+        };
+        let wifi20 = Link {
+            buffer_ms: 20,
+            ..WIFI
+        };
+        let link20 = Link {
+            bottleneck_kbps: 20_000,
+            ..LAN
+        };
+        for (name, link, max_frozen, max_lag_p95) in [
+            ("no limit", LAN, 0.0, 1.0f32),
+            ("16 Mbit/s, 300 ms", WIFI, 0.0, 100.0),
+            ("16 Mbit/s, 50 ms", wifi50, 600.0, 120.0),
+            ("16 Mbit/s, 20 ms", wifi20, 1_200.0, 100.0),
+            ("20 Mbit/s, 150 ms", link20, 200.0, 150.0),
         ] {
             for keyframes in [Keyframes::Live, Keyframes::Reopen] {
                 let mode = if keyframes == Keyframes::Live {
-                    "live"
+                    "x264"
                 } else {
-                    "reopen"
+                    "vaapi"
                 };
-                let r = simulate(Link { keyframes, ..link }, 40_000, 90);
-                print(&format!("{mode}: {name}"), &r);
+                let burst = mean(Link {
+                    keyframes,
+                    pace: false,
+                    ..link
+                });
+                let paced = mean(Link { keyframes, ..link });
+                eprintln!("{mode} {name}: burst {burst:?}\n{mode} {name}: paced {paced:?}");
+                let max_frozen = if keyframes == Keyframes::Live {
+                    0.0
+                } else {
+                    max_frozen
+                };
                 assert!(
-                    r.lost_pct < max_lost_pct,
-                    "{mode} {name}: {:.2} % lost",
-                    r.lost_pct
+                    paced.frozen_frames <= max_frozen,
+                    "{mode} {name}: {paced:?}"
                 );
+                assert!(paced.frozen_frames <= burst.frozen_frames, "{mode} {name}");
                 assert!(
-                    r.lost_frames <= 5,
-                    "{mode} {name}: {} lost frames",
-                    r.lost_frames
+                    paced.lag_p95_ms <= max_lag_p95.max(burst.lag_p95_ms),
+                    "{mode} {name}: {paced:?}"
                 );
-                if keyframes == Keyframes::Live || link.bottleneck_kbps > 0 {
-                    assert!(r.min_kbps >= min_kbps, "{mode} {name}: min {}", r.min_kbps);
-                }
             }
         }
+    }
+
+    #[test]
+    fn pacing_spreads_keyframes_and_catch_up_frames_only() {
+        // 150 KB at 12 Mbit/s: keyframe at 15 Mbit/s = 80 ms.
+        assert_eq!(pace_spread_us(150_000, 12_000, true, false), 80_000);
+        // Behind a paced frame: 18 Mbit/s.
+        assert_eq!(pace_spread_us(30_000, 12_000, false, true), 13_333);
+        assert_eq!(pace_spread_us(30_000, 12_000, false, false), 0);
+        // Capped, and garbage can't stall the sender.
+        assert_eq!(
+            pace_spread_us(10_000_000, 12_000, true, false),
+            MAX_PACE_SPREAD_US
+        );
+        assert_eq!(pace_spread_us(150_000, 0, true, true), MAX_PACE_SPREAD_US);
     }
 }

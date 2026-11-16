@@ -435,9 +435,9 @@ pub const ADAPTIVE_REOPEN_DOWN_GAP: Duration = Duration::from_secs(1);
 /// more every [`ADAPTIVE_REOPEN_GAP`], a decrease of 10 % or more every
 /// [`ADAPTIVE_REOPEN_DOWN_GAP`]. A cut that waited 5 s left the encoder
 /// overrunning the link, and the controller cut again on every report
-/// (simulated h264_vaapi on a 16 Mbit/s link with a 300 ms buffer:
-/// budget down to 3.5 Mbit/s, 3.3 % lost; with the 1 s gap 9.8 Mbit/s,
-/// 0.0 %; `rate.rs` `sim_keyframes_and_reopens`).
+/// (simulated h264_vaapi, 16 Mbit/s link, 300 ms buffer, keyframes paced:
+/// lag p95 1.4 s with the 5 s gap, 60 ms with 1 s; `rate.rs`
+/// `sim_keyframe_pacing_keeps_the_picture`, testing.md §3.3).
 pub fn bitrate_action(
     current: u32,
     wanted: u32,

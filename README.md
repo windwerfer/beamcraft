@@ -231,7 +231,10 @@ also lowers it. On a clean link the rate rises again slowly. A new viewer starts
 until the link pushes back, and it only grows while the stream actually uses it, so a quiet
 screen does not leave a budget the link can't carry. FEC parity is counted inside that budget, so more parity never pushes the
 stream above what the link can carry. x264 changes rate without a keyframe; VAAPI has to be
-reopened (one keyframe): a lower rate at most every second, a higher one at most every 5 s. The presenter window shows
+reopened (one keyframe): a lower rate at most every second, a higher one at most every 5 s.
+Keyframes (2–5 normal frames) are not sent in one burst but spread over up to 100 ms at a
+little above the budget, so a router or USB link with a small buffer does not drop their tail
+(which froze the picture until the next keyframe got through). The presenter window shows
 `Bitrate: target X of max Y Mbit/s (adaptive)`. After a cut it adds why, e.g.
 `last cut: queue 64 ms (max 112, +121 ms/s)`, `loss 5.2 % (background 1.8 %)` or
 `send queue full, 3 frames dropped`, and the status line shows the viewer's latest `viewer queue …`; the log has one

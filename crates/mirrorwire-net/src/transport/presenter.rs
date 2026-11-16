@@ -13,6 +13,7 @@ use mirrorwire_proto::control::{hello_protocol, Control, StreamInfo};
 use mirrorwire_proto::cursor::{CursorEvent, CursorImage, PointerUpdate};
 use mirrorwire_proto::fec::FecMode;
 use mirrorwire_proto::fragment::{fragment, FrameTiming, PacketHeader};
+use mirrorwire_proto::rate::pace_spread_us;
 use mirrorwire_proto::stats::StageStats;
 use mirrorwire_proto::PROTOCOL_VERSION;
 use quinn::crypto::rustls::QuicServerConfig;
@@ -487,6 +488,10 @@ async fn send_loop(
     let mut window_wire = 0usize;
     // QUIC's own packet counters at the last window: (connection, sent, lost).
     let mut quic_prev = (0usize, 0u64, 0u64);
+    // When the last paced frame was handed to QUIC (`None` after an unpaced
+    // one): a frame encoded before that waited behind it and is paced too.
+    let mut paced_done_us: Option<u64> = None;
+    let mut window_paced = 0u32;
 
     while let Some(frame) = frames.recv().await {
         let Some(conn) = current.borrow().as_ref().map(|v| v.conn.clone()) else {
@@ -524,10 +529,15 @@ async fn send_loop(
             on_keyframe_request();
             continue;
         }
-        // Burst every fragment (parity last); the congestion controller's
-        // pacer spreads them out. send_datagram queues immediately; only wait
-        // when the datagram send buffer is full so a frame is not paced out
-        // one packet at a time.
+        // A keyframe, and the frames that waited behind it, are spread over
+        // time at a little above the budget (`pace_spread_us`): one burst
+        // overflows a shallow bottleneck buffer. Other frames go out as one
+        // burst (parity last) at QUIC's 500 Mbit/s pacing; send_datagram
+        // queues immediately and only waits when the send buffer is full.
+        let behind = paced_done_us.is_some_and(|d| frame.encoded_us < d);
+        let spread_us = pace_spread_us(wire_len, fec.budget_kbps(), frame.keyframe, behind);
+        let pace_start = tokio::time::Instant::now();
+        let n_packets = packets.len().max(1) as u64;
         let mut send_err = false;
         window_packets += packets.len();
         window_wire += wire_len;
@@ -537,7 +547,15 @@ async fn send_loop(
                 .and_then(|p| PacketHeader::parse(p))
                 .map_or(0, |(h, _)| h.parity_count as usize);
         }
-        for datagram in packets {
+        for (k, datagram) in packets.into_iter().enumerate() {
+            if spread_us > 0 {
+                let at = pace_start + Duration::from_micros(spread_us * k as u64 / n_packets);
+                // The timer ticks in milliseconds: send what is due, sleep
+                // only when the next packet is a tick or more ahead.
+                if at > tokio::time::Instant::now() + Duration::from_millis(1) {
+                    tokio::time::sleep_until(at).await;
+                }
+            }
             if conn.send_datagram(datagram.clone()).is_ok() {
                 continue;
             }
@@ -549,13 +567,16 @@ async fn send_loop(
         }
         let done_us = now_us();
         let send_ms = ms(done_us, sent_us);
-        if send_ms > 8.0 || send_err {
+        if send_ms > spread_us as f64 / 1000.0 + 8.0 || send_err {
             tracing::info!(
-                "QUIC send of frame {} took {send_ms:.1} ms{}",
+                "QUIC send of frame {} took {send_ms:.1} ms (paced over {:.1}){}",
                 frame.frame_id,
+                spread_us as f64 / 1000.0,
                 if send_err { " (truncated)" } else { "" }
             );
         }
+        paced_done_us = (spread_us > 0).then_some(done_us);
+        window_paced += u32::from(spread_us > 0);
         stats.record("capture_to_encoded", ms(frame.encoded_us, frame.capture_us));
         stats.record("encoded_to_sent", ms(sent_us, frame.encoded_us));
         stats.record("send", ms(done_us, sent_us));
@@ -578,10 +599,11 @@ async fn send_loop(
             );
             quic_prev = (conn.stable_id(), path.sent_packets, path.lost_packets);
             tracing::info!(
-                "presenter: {:.1} fps, {:.2} Mbit/s, {} keyframes, {} dropped for backlog, mtu {}, quic lost {} of {} packets, cwnd {} KiB, {}, ms mean/p95/max:{}",
+                "presenter: {:.1} fps, {:.2} Mbit/s, {} keyframes, {} paced, {} dropped for backlog, mtu {}, quic lost {} of {} packets, cwnd {} KiB, {}, ms mean/p95/max:{}",
                 window_frames as f64 / secs,
                 window_bytes as f64 * 8.0 / secs / 1e6,
                 window_keyframes,
+                window_paced,
                 backlog_drops,
                 max,
                 quic_lost,
@@ -596,6 +618,7 @@ async fn send_loop(
                 conn.rtt(),
             );
             backlog_drops = 0;
+            window_paced = 0;
             window_wire = 0;
             (window_parity, window_packets) = (0, 0);
             stats.clear();

@@ -161,6 +161,11 @@ impl LinkControl {
         self.lock().encoder_kbps()
     }
 
+    /// Total budget on the wire (kbit/s), see [`LinkState::budget_kbps`].
+    pub fn budget_kbps(&self) -> u32 {
+        self.lock().budget_kbps()
+    }
+
     pub(super) fn viewer_connected(&self) {
         let mut s = self.lock();
         let (mode, adaptive, mut rate) = (s.mode, s.adaptive, s.rate);

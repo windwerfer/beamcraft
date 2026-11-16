@@ -18,7 +18,10 @@ Everything here lives in `mirrorwire-proto` (constants, framing) and `mirrorwire
     (then the fingerprint is added), or pairing is off (`--no-pairing`).
 - Idle timeout 10 s. Datagram send buffer 2 MiB (`DATAGRAM_SEND_BUFFER`); when it is too full
   for a delta frame, the presenter drops that frame and forces a keyframe instead of queueing
-  (keyframes are always queued). Pacing 500 Mbit/s (`lan_cc.rs`).
+  (keyframes are always queued). Pacing 500 Mbit/s (`lan_cc.rs`); on top, the send loop spreads
+  a keyframe over time at 1.25 × the bitrate budget and the frames that waited behind it at
+  1.5 ×, at most 100 ms per frame (`rate::pace_spread_us`), so a keyframe does not overflow a
+  shallow bottleneck buffer. Not a wire change: the viewer sees the same packets, later.
 
 ## 2. Control stream
 

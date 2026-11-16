@@ -30,7 +30,7 @@ Build dependencies (Fedora and Ubuntu package lists) are in the README and in
 | Unit (FilmCraft) | `mirrorwire-media/src/filmcraft.rs`, feature `filmcraft` | FilmCraft output via the real `Encoder` decodes with FFmpeg, markers read back, keyframe on request; an `#[ignore]` x264-vs-FilmCraft benchmark |
 | Unit (app) | `#[cfg(test)]` in `mirrorwire-app` | CLI parsing, capture/FEC preference precedence, process log, and `presenter::tests::test_source_streams_to_an_in_process_viewer`: test-pattern presenter (x264) → QUIC → viewer with 1 % loss in one process, live FEC/bitrate/cursor changes, markers read back (needs FFmpeg with libx264; part of the coverage report) |
 | Unit (firewall) | `mirrorwire-net/src/firewall.rs` | hint and notice for every firewalld/ufw state, a fake `Firewalld` proving the startup probe makes no privileged call, one click = one authorization and cancel = no further prompts (D14), D-Bus error classification, zone merging, open-port messages (the D-Bus/process glue is `firewall/system.rs`) |
-| Unit (rate) | `mirrorwire-proto/src/rate.rs`, `fec.rs`, `mirrorwire-media/src/pipeline.rs` | AIMD controller (cuts on queue/loss/backlog, floor 3 Mbit/s, ceiling = user setting, learned random-loss baseline), closed-loop sims with a FIFO bottleneck, auto FEC caps 35 %/60 %, token-bucket bandwidth simulator (viewer `--simulate-bandwidth-kbps`), x264 bitrate change live without a keyframe, VAAPI reopen rate-limited (down 1 s, up 5 s), keyframe/reopen sim |
+| Unit (rate) | `mirrorwire-proto/src/rate.rs`, `fec.rs`, `mirrorwire-media/src/pipeline.rs` | AIMD controller (cuts on queue/loss/backlog, floor 3 Mbit/s, ceiling = user setting, learned random-loss baseline), closed-loop sims with a FIFO bottleneck, auto FEC caps 35 %/60 %, token-bucket bandwidth simulator (viewer `--simulate-bandwidth-kbps`), x264 bitrate change live without a keyframe, VAAPI reopen rate-limited (down 1 s, up 5 s), keyframe pacing sim (frozen frames, send-loop lag) |
 | Loopback (end to end) | `scripts/loopback-test.sh` | test pattern → encoder → QUIC (pinned TLS, pairing) → reassembly → decoder, on localhost, with latency stats |
 | Real Wi-Fi (Android) | `scripts/android-wifi-run.sh`, `scripts/run-stats.py` | test pattern → x264 → QUIC over real Wi-Fi → the Android viewer on an adb-attached device; per-run video, cuts, queue, loss (§3.4) |
 | Real hardware | the owner's T480s + iMac | portal capture, VAAPI, Wi-Fi, OpenGL on a non-Metal Mac (only he can run this) |
@@ -209,26 +209,45 @@ video there (`WIFI` 13.8 → 13.3 Mbit/s); the shallow links cut a little more o
 or 0.85 instead of 90 %, a half or 35 % step instead of a quarter. Weak spot left (roadmap item
 0): a bottleneck is still found by overrunning it, now every ~7–9 s.
 
-**Keyframes and VAAPI reopens (2026-11-16, `sim_keyframes_and_reopens`).** The rows above
-have no keyframes. This test adds one at connect and one per lost frame (≤ 1 per 500 ms, 10× a
-delta frame), with the rate either live (x264) or changed only by a reopen that starts with a
-keyframe (h264_vaapi). x264: no measurable change. VAAPI, reopen down after 1 s / up after 5 s
-(before: both 5 s):
+**Keyframes, VAAPI reopens and keyframe pacing (2026-11-16,
+`sim_keyframe_pacing_keeps_the_picture`).** The rows above have no keyframes. This test adds one
+at connect and one every 500 ms while the viewer waits for one, 5× a delta frame (measured on
+the build box, test pattern 1080p at 12 Mbit/s with the 100 ms VBV: x264 3.6–4.4×, h264_vaapi
+2.0–5.0×, up to 122 KB). The rate is either live (x264) or changed only by a reopen that starts
+with a keyframe (h264_vaapi). Each number is the mean of 10 runs (ceilings 36–44 Mbit/s, content
+needing 60 or 18 Mbit/s); single runs with keyframes are chaotic (one parameter step moved lost
+frames from 24 to 119). **Frozen** = frames the viewer cannot show: lost, or after a lost frame
+until a keyframe arrives whole (4800 frames are measured per run). **Lag** = encoded → first
+packet arrived, including the wait in the presenter's send loop (the viewer's queue metric
+starts at the send and does not see that wait).
 
-| Link | Cuts | Lowest budget after 10 s | Video delivered | Packets lost | Lost frames | Queue p95 |
-|---|---|---|---|---|---|---|
-| 16 Mbit/s, 300 ms FIFO | 13 (15) | 9.8 (3.5) | 10.8 Mbit/s (6.4) | 0.00 % (3.32 %) | 0 (2) | 95 ms (284) |
-| 20 Mbit/s, 150 ms FIFO | 12 (13) | 12.0 (4.5) | 12.0 Mbit/s (11.4) | 0.14 % (3.80 %) | 3 (5) | 83 ms (134) |
-| 16 Mbit/s, 50 ms FIFO | 15 (9) | 5.4 (6.6) | 5.1 Mbit/s (12.5) | 3.14 % (6.43 %) | 16 (18) | 0 ms (34) |
+| Link (encoder) | Burst, 5 s reopen | Burst, 1 s down | **Paced, 1 s down** |
+|---|---|---|---|
+| 16 Mbit/s, 300 ms (VAAPI) | 301 frozen, 6.6 % lost, lag p95 284 ms, 9.3 Mbit/s | 100, 0.5 %, 128 ms, 12.6 | **0, 0.0 %, 60 ms, 12.4** |
+| 16 Mbit/s, 50 ms (VAAPI) | 1801, 15.5 %, 34 ms, 7.3 | 3123, 7.0 %, 34 ms, 11.3 | **291, 1.5 %, 82 ms, 10.4** |
+| 16 Mbit/s, 20 ms (VAAPI) | 4019, 20.8 %, 5 ms, 11.4 | 4799 (never a picture), 13.2 %, 3 ms, 9.9 | **759, 3.0 %, 54 ms, 10.1** |
+| 20 Mbit/s, 150 ms (VAAPI) | 278, 5.9 %, 135 ms, 12.6 | 294, 1.3 %, 114 ms, 14.8 | **74, 0.2 %, 107 ms, 14.5** |
+| 16 Mbit/s, 20 ms (x264) | 4799 (never a picture), 11.2 % | same | **0, 0.9 %, 4 ms, 13.0** |
+| other links (x264), no limit | 0 | 0 | 0, unchanged |
 
-With the 5 s gap a cut left the encoder overrunning the link for up to 5 s; the controller cut on
-every report meanwhile (down to 3.5 Mbit/s) and learned the loss that did not follow the cut as
-~12 % background loss. The 50 ms row is a different limit: a keyframe larger than the buffer
-(here ~150 KB vs ~100 KB) is lost whatever the rate, re-requested and lost again, until the rate
-makes keyframes small enough; it needs keyframe pacing (roadmap), not a rate rule. Tried and
-rejected: ignoring loss/queue for 1 s after each keyframe (roadmap item 0.3). An upward reopen
-also starts with a keyframe, so the grace hid exactly that overrun: 20 Mbit/s row 1.6–3.1 % lost
-and 21–97 lost frames instead of 0.14 % and 3; forgiving only one report did not fix it.
+Paced: a keyframe at 1.25 × the budget, frames that waited behind a paced one at 1.5 ×, at most
+100 ms per frame (`rate::pace_spread_us`). Findings on the way:
+- The 1 s down-reopen alone helps the deep buffers but makes shallow ones freeze more (more
+  reopens, so more keyframes that do not fit). Pacing with the old 5 s rule is worse still
+  (16/300: lag p95 1.4 s): a VAAPI encoder above the budget for 5 s backs up in the send loop.
+  The two belong together.
+- Pacing only the keyframe did not help: the 2–3 frames behind it left as one burst onto the
+  buffer the keyframe had just filled.
+- Pacing at exactly the budget never catches up: lag 0.3–4 s. 1.5 × for everything: more frozen
+  frames on shallow buffers (16/50: 683, 16/20: 1206) for less lag (67 / 47 ms); 1.25 × for
+  everything: fewer (157 / 205) but lag p95 ~150 ms. Keyframe 1.25 × / catch-up 1.5 × is in
+  between and has the lowest lag on the deep buffers. Caps of 50 / 100 / 200 ms: 100 best.
+- An earlier version of this sim (keyframes 10×, no repeated keyframe requests, single runs)
+  made the 1 s down-reopen look better than it is; its numbers are superseded by this table.
+- Rejected before pacing: ignoring loss/queue for 1 s after each keyframe (roadmap item 0.3).
+  An upward reopen also starts with a keyframe, so the grace hid exactly that overrun.
+- Left: VAAPI behind a 20–50 ms buffer still freezes 6–16 % of the time; a live VAAPI rate
+  (roadmap item 0.6) would remove the reopen keyframes.
 
 ### 3.4 Real Wi-Fi: presenter in the dev container, Android tablet viewer (2026-11-15)
 
@@ -331,6 +350,34 @@ Loopback with the viewer's shallow simulated bottleneck (`--simulate-bandwidth 1
 tail-drop buffer), x264, 3 × 30 s each, alternated: packet loss 4.0–5.5 → 2.7–2.9 %,
 unrecoverable frames 70–78 → 42–53, video 7.9–8.5 → 9.2–9.5 Mbit/s, capture→decoded
 unchanged (24.6–25.8 / 30–32 ms mean / p95).
+
+### 3.6 Real Wi-Fi: keyframe pacing (2026-11-16)
+
+Presenter: the dev container (host network, Wi-Fi), test pattern 1920×1080@60, 40 Mbit/s
+setting, adaptive bitrate, FEC auto; `ENCODER=x264` or `vaapi` (h264_vaapi on the laptop's
+iGPU) with `scripts/android-wifi-run.sh`. Viewer: the MTK tablet, APK built from the same tree,
+2.4 GHz, RSSI −78 to −79 dBm, link speed 26–72 Mbit/s; the link carried only 3.6–7 Mbit/s.
+Before = 76fe82e (1 s down-reopen, no pacing), after = keyframe pacing. 60 s per run, four
+rounds, before/after alternated (rounds 3–4 after first). `scripts/run-stats.py`:
+
+| Encoder | Side | Keyframes (frames paced) | Unrecoverable | Waiting for a keyframe | Queue p95 | Video |
+|---|---|---|---|---|---|---|
+| VAAPI | before | 15, 13, 6, 8 | 1, 1, 0, 0 | 0, 8, 0, 0 frames | 146, 17, 10, 18 ms | 3.8–7.0 Mbit/s |
+| VAAPI | after | 10 (12), 9 (10), 6 (8), 7 (11) | 0, 0, 0, 0 | 0, 0, 0, 0 | 12, 35, 16, 11 ms | 3.6–6.4 Mbit/s |
+| x264 | before | 6, 5, 6, 5 | 0, 0, 0, 0 | 8, 0, 0, 0 | 26, 39, 46, 42 ms | 3.7–6.2 Mbit/s |
+| x264 | after | 5 (35), 8 (56), 7 (54), 6 (44) | 0, **165**, 1, 0 | 0, **128**, 0, 0 | 38, **582**, 37, 61 ms | 4.0–6.0 Mbit/s |
+
+This link buffers deeply (queue cuts only, 0.0 % QUIC loss), the case where the simulation
+predicts little change; the shallow-buffer case pacing is for (router, USB) was not available.
+The bold run was a Wi-Fi outage, not pacing: the queue went 17 → 456 ms within one second with
+no keyframe or paced frame (the last keyframe 8 s earlier), then QUIC lost 819 of 820 packets.
+Otherwise no difference beyond run-to-run noise: VAAPI a little better (no unrecoverable frames,
+fewer keyframes), x264 queue p95 perhaps a few ms higher. Pacing fired as designed (each
+keyframe plus 1–9 frames behind it). Loopback with the viewer's shallow simulated bottleneck
+(`--simulate-bandwidth 16`, 30 ms tail drop), 3 × 30 s alternated: x264 packet loss 3.16 /
+1.49 / 3.36 → 2.96 / 1.42 / 2.53 %, unrecoverable frames 62 / 40 / 55 → 73 / 28 / 55,
+capture→decoded p95 35–69 → 44–52 ms (no clear change); h264_vaapi stayed at ~6 Mbit/s there
+and never hit the limit.
 
 ## 4. Real hardware
 

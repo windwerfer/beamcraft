@@ -122,18 +122,17 @@ target), **planned**, **idea**. Update this file when an item moves.
         the queue never reached the 40 ms that marks loss as congestion, so the budget climbed
         past the link until loss was heavy. Now near the budget that failed last, loss counts
         and the climb is slow (item 4). Sim: 4.9–5.5 → 0.7–1.2 % lost (testing.md §3.3).
-   3. **Keyframes and VAAPI reopens: measured (2026-11-16), grace rejected.** The closed-loop
-      sim now has keyframes and VAAPI-style reopens (testing.md §3.3). No reopen → IDR → cut loop
-      showed up; ignoring loss after a keyframe made things worse (an upward reopen's keyframe
-      hid its overrun: 3 → 21–97 lost frames). What did show: a cut waited up to 5 s for the
-      reopen, so the encoder kept overrunning and the controller cut on every report (budget
-      down to 3.5 Mbit/s, 3.3 % lost). Fixed: a decrease reopens after 1 s (≥ 10 %), an increase
-      still every 5 s (16 Mbit/s / 300 ms: 0.0 % lost, lowest budget 9.8). Untested on the
-      T480s. Still open: **keyframe pacing**: a keyframe larger than a shallow bottleneck
-      buffer (50 ms: ~100 KB at 16 Mbit/s) is lost at any rate and re-requested; pace keyframe
-      packets to ~2× the budget over a few frame intervals (and spread their parity) instead
-      of bursting at 500 Mbit/s. (Viewer keyframe requests are limited to one per 2 × RTT,
-      2026-11-15.)
+   3. **Keyframes, VAAPI reopens, keyframe pacing: done in the simulation (2026-11-16).** The
+      closed-loop sim has keyframes (5×, measured), VAAPI-style reopens and a "frozen frames"
+      metric (testing.md §3.3, means of 10 runs). Ignoring loss after a keyframe was rejected
+      (an upward reopen's keyframe hid its overrun). Built: a decrease reopens VAAPI after 1 s
+      (≥ 10 %; increases still every 5 s), and the send loop paces a keyframe at 1.25 × the
+      budget and the frames behind it at 1.5 ×, ≤ 100 ms each. Simulated VAAPI frozen frames,
+      burst → paced: 16 Mbit/s with a 300 ms buffer 100 → 0, 50 ms 3123 → 291, 20 ms 4799 → 759,
+      20 Mbit/s / 150 ms 294 → 74; x264 behind a 20 ms buffer never got a picture, now 0. Cost:
+      shallow-buffer lag p95 34 → 82 ms. Real-hardware results: testing.md §3.6. Still open:
+      VAAPI behind a 20–50 ms buffer still freezes 6–16 % of the time (item 6 removes the reopen
+      keyframes); parity is spread with the keyframe, not over later frames.
    4. **Hysteresis and probing:** remember the last good budget, climb slowly near it, probe with
       extra FEC before more video, start from the last good value per peer. ~100–150 LOC.
       (Done 2026-11-15: slow start from 10 Mbit/s and no growth while unused. Done 2026-11-16:
@@ -260,9 +259,9 @@ target), **planned**, **idea**. Update this file when an item moves.
 
 - **Adaptive bitrate follow-ups:** tune the thresholds on the T480s → iMac Wi-Fi; a live
   bitrate change for VAAPI (FFmpeg's h264_vaapi only reads the rate when opened, so today it
-  reopens with a keyframe, rate-limited); per-frame pacing to the budget.
-- **FEC follow-ups:** spread a keyframe's parity over the next frame interval (covers longer
-  bursts at the cost of latency); measure on real Wi-Fi and tune the auto curve.
+  reopens with a keyframe, rate-limited); per-frame pacing to the budget for every frame (keyframes and the frames behind them are paced since 2026-11-16; pacing everything at exactly the budget built up seconds of lag in the sim).
+- **FEC follow-ups:** measure on real Wi-Fi and tune the auto curve. (Keyframes, parity
+  included, are paced over up to 100 ms since 2026-11-16.)
 - **Zero-copy (viewer):** VideoToolbox → texture and a YUV→RGB shader on the wgpu path too
   (glow already has the shader). The presenter side (DMA-BUF → VAAPI) is built.
 - **DMA-BUF modifiers from VAAPI:** today a fixed list (Intel Y/X-tiled, linear, implicit) is
