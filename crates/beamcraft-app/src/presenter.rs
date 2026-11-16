@@ -19,7 +19,7 @@ use beamcraft_net::pairing::{
     lan_ipv4s, primary_ipv4, qr_terminal, random_pairing_code, ConnectInfo,
 };
 use beamcraft_net::transport::{FecControl, FecState, OutgoingFrame, Presenter, PresenterConfig};
-use beamcraft_proto::control::StreamInfo;
+use beamcraft_proto::control::{CursorMode, StreamInfo};
 use beamcraft_proto::cursor::CursorEvent;
 use beamcraft_proto::fec::FecMode;
 use clap::{Args, ValueEnum};
@@ -474,7 +474,7 @@ impl CaptureCtl {
     fn status(&self) -> CaptureStatus {
         CaptureStatus {
             prefs: self.prefs,
-            cursor_mode: self.active_cursor.as_str().to_owned(),
+            cursor_mode: self.active_cursor.mode(),
             cursor_note: self.cursor_note.clone(),
             fps_requested: self.asked_fps,
             fps_negotiated: self.negotiated_fps,
@@ -488,8 +488,8 @@ impl CaptureCtl {
 #[cfg_attr(not(feature = "gui"), allow(dead_code))]
 pub struct CaptureStatus {
     pub prefs: CapturePrefs,
-    /// `separate`, `embedded` or `hidden`: what the viewer actually gets.
-    pub cursor_mode: String,
+    /// What the viewer actually gets.
+    pub cursor_mode: CursorMode,
     pub cursor_note: Option<String>,
     pub fps_requested: u32,
     pub fps_negotiated: Option<u32>,
@@ -1307,7 +1307,7 @@ mod tests {
         let status = presenter.poll();
         assert!(status.viewer_connected);
         assert_eq!(status.phase, PresentPhase::Streaming);
-        assert_eq!(status.capture.cursor_mode, "separate");
+        assert_eq!(status.capture.cursor_mode, CursorMode::Separate);
         assert!(
             status.attempts.iter().any(|a| a.ok),
             "{:?}",

@@ -487,12 +487,12 @@ impl MirrorApp {
                             let cap = &status.capture;
                             ui.horizontal(|ui| {
                                 ui.weak("Cursor:");
-                                let text = match cap.cursor_mode.as_str() {
-                                    "separate" => "separate (sent as coordinates, drawn by the viewer)",
-                                    "embedded" => "embedded (drawn into the video)",
-                                    other => other,
+                                let text = match cap.cursor_mode {
+                                    CursorMode::Separate => "separate (sent as coordinates, drawn by the viewer)",
+                                    CursorMode::Embedded => "embedded (drawn into the video)",
+                                    CursorMode::Hidden => "hidden",
                                 };
-                                let color = if cap.cursor_mode == "separate" || cap.prefs.cursor != CursorPref::Separate {
+                                let color = if cap.cursor_mode == CursorMode::Separate || cap.prefs.cursor != CursorPref::Separate {
                                     egui::Color32::from_rgb(0, 180, 80)
                                 } else {
                                     egui::Color32::from_rgb(230, 160, 40)
