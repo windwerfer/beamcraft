@@ -260,6 +260,13 @@ queue rises for 0.5–1.5 s (e.g. 42 → 104 → 211 → 292 ms) before any loss
 fired only at 110–180 ms. "No max rule" missed 24 ms (max 82, +193 ms/s) one report before a
 236 ms queue, which is why one frame waiting ≥ 50 ms now counts.
 
+**Protocol 2 (2026-11-16, 5a181fa, APK rebuilt):** same setup, one 60 s run: connects, 121
+`link_report`s with the queue object, 0 unrecoverable frames, 9 queue cuts, 14.7 Mbit/s sent,
+queue mean 12 / p95 44 ms (within the spread of the four "queue" runs above). A protocol-1
+desktop viewer (e298736) against this presenter is rejected with `version mismatch: the
+presenter speaks protocol 2, the viewer 1; update the viewer …` in its connect steps and the
+presenter's attempt list.
+
 ## 4. Real hardware
 
 The owner tests on the target machines (decisions D11) and reports with **photos of the
