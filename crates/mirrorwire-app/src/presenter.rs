@@ -468,6 +468,7 @@ impl CaptureCtl {
         }
     }
 
+    #[cfg_attr(not(feature = "gui"), allow(dead_code))]
     fn needs_restart(&self) -> bool {
         self.wanted_cursor() != self.asked_cursor || self.prefs.fps.request() != self.asked_fps
     }
