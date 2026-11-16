@@ -1191,7 +1191,7 @@ fn attempts_panel(ui: &mut egui::Ui, attempts: &[IncomingAttempt]) {
 }
 
 /// Presenter status line for forward error correction.
-fn fec_status_line(fec: &beamcraft_net::transport::FecState, viewer_connected: bool) -> String {
+fn fec_status_line(fec: &beamcraft_net::transport::LinkState, viewer_connected: bool) -> String {
     let mode = fec.mode.as_string();
     if !viewer_connected {
         return format!("FEC: {mode}");

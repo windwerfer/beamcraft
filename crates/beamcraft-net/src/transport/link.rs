@@ -7,20 +7,20 @@ use beamcraft_proto::rate::{AdaptiveBitrate, Sample};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// Ceiling for [`FecState::boost_pct`].
+/// Ceiling for [`LinkState::boost_pct`].
 const MAX_FEC_BOOST: f32 = 15.0;
 
 /// Presenter-side link control, shared with the app: the FEC setting, what
 /// the current viewer last reported about the link, and the adaptive
 /// bitrate budget (video + parity) derived from it.
 #[derive(Debug)]
-pub struct FecControl {
-    state: Mutex<FecState>,
+pub struct LinkControl {
+    state: Mutex<LinkState>,
     started: Instant,
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct FecState {
+pub struct LinkState {
     pub mode: FecMode,
     /// Smoothed packet loss the viewer reports (percent); drives auto mode.
     pub loss_pct: f32,
@@ -48,7 +48,7 @@ pub struct FecState {
     pub queue: Option<QueueDelay>,
 }
 
-impl Default for FecState {
+impl Default for LinkState {
     fn default() -> Self {
         Self {
             mode: FecMode::default(),
@@ -67,7 +67,7 @@ impl Default for FecState {
     }
 }
 
-impl FecState {
+impl LinkState {
     /// Overhead currently applied to (delta, key) frames, or `None` when FEC
     /// is off.
     pub fn overheads(&self) -> Option<(f32, f32)> {
@@ -116,10 +116,10 @@ impl FecState {
     }
 }
 
-impl FecControl {
+impl LinkControl {
     pub fn new(mode: FecMode) -> Arc<Self> {
         Arc::new(Self {
-            state: Mutex::new(FecState {
+            state: Mutex::new(LinkState {
                 mode,
                 ..Default::default()
             }),
@@ -127,7 +127,7 @@ impl FecControl {
         })
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, FecState> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, LinkState> {
         self.state.lock().unwrap_or_else(|e| e.into_inner())
     }
 
@@ -135,7 +135,7 @@ impl FecControl {
         self.started.elapsed().as_millis() as u64
     }
 
-    pub fn snapshot(&self) -> FecState {
+    pub fn snapshot(&self) -> LinkState {
         *self.lock()
     }
 
@@ -156,7 +156,7 @@ impl FecControl {
         self.lock().rate.set_ceiling(kbps);
     }
 
-    /// The encoder target for the next frames (kbit/s), see [`FecState::encoder_kbps`].
+    /// The encoder target for the next frames (kbit/s), see [`LinkState::encoder_kbps`].
     pub fn encoder_kbps(&self) -> u32 {
         self.lock().encoder_kbps()
     }
@@ -165,7 +165,7 @@ impl FecControl {
         let mut s = self.lock();
         let (mode, adaptive, mut rate) = (s.mode, s.adaptive, s.rate);
         rate.reset();
-        *s = FecState {
+        *s = LinkState {
             mode,
             adaptive,
             rate,
@@ -252,14 +252,14 @@ impl FecControl {
 
 /// Log the cut the latest sample made (only when adaptive bitrate is on,
 /// since otherwise the budget does not follow the controller).
-fn log_cut(s: &FecState) {
+fn log_cut(s: &LinkState) {
     if let Some(cut) = s.rate.cut_by_last_sample().filter(|_| s.adaptive) {
         tracing::info!("adaptive bitrate: {cut}");
     }
 }
 
 /// `bitrate 18.0 of 40.0 Mbit/s (adaptive), encoder 15.2, rtt 6 ms`
-pub fn rate_summary(s: &FecState) -> String {
+pub fn rate_summary(s: &LinkState) -> String {
     format!(
         "bitrate {:.1} of {:.1} Mbit/s ({}), encoder {:.1}, rtt {:.0} ms{}{}",
         s.budget_kbps() as f32 / 1000.0,

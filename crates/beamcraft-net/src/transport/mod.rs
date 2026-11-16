@@ -6,7 +6,7 @@ mod link;
 mod presenter;
 mod viewer;
 
-pub use link::{rate_summary, FecControl, FecState};
+pub use link::{rate_summary, LinkControl, LinkState};
 pub use presenter::{
     should_drop_for_backlog, KeyframeGate, OutgoingFrame, Presenter, PresenterConfig,
 };
@@ -119,7 +119,7 @@ mod tests {
                 config_dir: dir.clone(),
                 attempts: Default::default(),
                 cursor_events: Some(cursor_rx),
-                fec: FecControl::new(FecMode::Auto),
+                fec: LinkControl::new(FecMode::Auto),
             },
             Arc::new(|| {}),
         )

@@ -18,7 +18,7 @@ use beamcraft_net::identity::{short_fingerprint, Identity};
 use beamcraft_net::pairing::{
     lan_ipv4s, primary_ipv4, qr_terminal, random_pairing_code, ConnectInfo,
 };
-use beamcraft_net::transport::{FecControl, FecState, OutgoingFrame, Presenter, PresenterConfig};
+use beamcraft_net::transport::{LinkControl, LinkState, OutgoingFrame, Presenter, PresenterConfig};
 use beamcraft_proto::control::{CursorMode, StreamInfo};
 use beamcraft_proto::cursor::CursorEvent;
 use beamcraft_proto::fec::FecMode;
@@ -438,12 +438,12 @@ pub struct CaptureCtl {
     negotiated_fps: Option<u32>,
     source_desc: String,
     /// FEC setting and link feedback, shared with the transport.
-    fec: Arc<FecControl>,
+    fec: Arc<LinkControl>,
 }
 
 impl CaptureCtl {
     fn new(prefs: CapturePrefs) -> Self {
-        let fec = FecControl::new(prefs.fec);
+        let fec = LinkControl::new(prefs.fec);
         fec.set_adaptive(prefs.adaptive);
         Self {
             fec,
@@ -494,7 +494,7 @@ pub struct CaptureStatus {
     pub fps_requested: u32,
     pub fps_negotiated: Option<u32>,
     /// FEC setting, applied overhead and what the viewer reports.
-    pub fec: FecState,
+    pub fec: LinkState,
 }
 
 impl Default for CaptureStatus {

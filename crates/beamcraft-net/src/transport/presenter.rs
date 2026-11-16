@@ -1,6 +1,6 @@
 //! Presenter side: accept viewers, check pairing, send video and cursor.
 
-use super::link::{rate_summary, FecControl, FecState};
+use super::link::{rate_summary, LinkControl, LinkState};
 use super::{ms, read_body, read_msg, transport_config, version_mismatch, write_msg};
 use crate::diag::{push_attempt, IncomingAttempt};
 use crate::identity::Identity;
@@ -81,8 +81,8 @@ pub struct PresenterConfig {
     /// Cursor position and image changes from the capture source (the
     /// sending half lives with the capture thread).
     pub cursor_events: Option<mpsc::Receiver<CursorEvent>>,
-    /// FEC setting and link feedback (see [`FecControl`]).
-    pub fec: Arc<FecControl>,
+    /// FEC setting and link feedback (see [`LinkControl`]).
+    pub fec: Arc<LinkControl>,
 }
 
 type Callback = Arc<dyn Fn() + Send + Sync>;
@@ -98,7 +98,7 @@ pub struct Presenter {
     pub local_addr: SocketAddr,
     pub viewer_connected: watch::Receiver<bool>,
     stream_info: Arc<watch::Sender<StreamInfo>>,
-    pub(super) fec: Arc<FecControl>,
+    pub(super) fec: Arc<LinkControl>,
     endpoint: Endpoint,
 }
 
@@ -194,7 +194,7 @@ struct SessionShared {
     connected: watch::Sender<bool>,
     on_keyframe_request: Callback,
     attempts: Arc<Mutex<Vec<IncomingAttempt>>>,
-    fec: Arc<FecControl>,
+    fec: Arc<LinkControl>,
 }
 
 async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) -> Result<()> {
@@ -476,7 +476,7 @@ async fn send_loop(
     mut frames: mpsc::Receiver<OutgoingFrame>,
     current: watch::Receiver<Option<ActiveViewer>>,
     on_keyframe_request: Callback,
-    fec: Arc<FecControl>,
+    fec: Arc<LinkControl>,
 ) {
     let mut stats = StageStats::new(&["capture_to_encoded", "encoded_to_sent", "send"]);
     let mut window_start = Instant::now();
@@ -605,11 +605,11 @@ async fn send_loop(
     }
 }
 
-fn fec_summary(s: &FecState, parity: usize, packets: usize) -> String {
+fn fec_summary(s: &LinkState, parity: usize, packets: usize) -> String {
     format!("{}, {}", rate_summary(s), fec_part(s, parity, packets))
 }
 
-fn fec_part(s: &FecState, parity: usize, packets: usize) -> String {
+fn fec_part(s: &LinkState, parity: usize, packets: usize) -> String {
     match s.overheads() {
         None => "fec off".into(),
         Some(_) => format!(
