@@ -1,6 +1,6 @@
 use crate::pairing::lan_ipv4s;
 use anyhow::Result;
-use beamcraft_proto::MDNS_SERVICE;
+use beamcraft_proto::{MDNS_SERVICE, PROTOCOL_VERSION};
 use mdns_sd::{ServiceDaemon, ServiceEvent, ServiceInfo};
 use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
@@ -14,6 +14,34 @@ pub struct Presenter {
     pub addrs: Vec<SocketAddr>,
     pub fingerprint: String,
     pub resolution: Option<String>,
+    /// TXT `v`: the presenter's `PROTOCOL_VERSION`. `None` if missing or not a number.
+    pub protocol: Option<u32>,
+}
+
+impl Presenter {
+    /// Why this presenter can't be used from this build, for the viewer's list; `None` if it
+    /// speaks our protocol.
+    pub fn version_problem(&self) -> Option<String> {
+        version_problem(self.protocol)
+    }
+}
+
+fn version_problem(protocol: Option<u32>) -> Option<String> {
+    match protocol {
+        Some(v) if v == PROTOCOL_VERSION => None,
+        Some(v) if v > PROTOCOL_VERSION => Some(format!(
+            "newer BeamCraft (protocol {v}, this viewer {PROTOCOL_VERSION}): update this viewer"
+        )),
+        Some(v) => Some(format!(
+            "older BeamCraft (protocol {v}, this viewer {PROTOCOL_VERSION}): update the presenter"
+        )),
+        None => Some("older BeamCraft (no protocol version): update the presenter".to_owned()),
+    }
+}
+
+/// TXT `v` from outside: a decimal `u32` or nothing.
+fn parse_protocol(txt: Option<&str>) -> Option<u32> {
+    txt?.trim().parse().ok()
 }
 
 /// Keeps a presenter announced on the local network while alive.
@@ -29,7 +57,8 @@ impl Advertisement {
             .ok()
             .and_then(|h| h.into_string().ok())
             .unwrap_or_else(|| "beamcraft".into());
-        let props = [("fp", fingerprint), ("v", "1"), ("res", resolution)];
+        let version = PROTOCOL_VERSION.to_string();
+        let props = [("fp", fingerprint), ("v", &version), ("res", resolution)];
         let ips = lan_ipv4s();
         let mut info = if ips.is_empty() {
             ServiceInfo::new(
@@ -162,6 +191,7 @@ impl Browser {
                     addrs,
                     fingerprint: fp.to_owned(),
                     resolution: info.get_property_val_str("res").map(str::to_owned),
+                    protocol: parse_protocol(info.get_property_val_str("v")),
                 };
                 self.found
                     .retain(|p| p.fingerprint != presenter.fingerprint);
@@ -182,5 +212,32 @@ impl Drop for Browser {
     fn drop(&mut self) {
         let _ = self.daemon.stop_browse(MDNS_SERVICE);
         let _ = self.daemon.shutdown();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn txt_v_parses_only_a_plain_number() {
+        assert_eq!(parse_protocol(Some("3")), Some(3));
+        assert_eq!(parse_protocol(Some(" 3 ")), Some(3));
+        assert_eq!(parse_protocol(None), None);
+        for bad in ["", "x", "-1", "3.0", "99999999999"] {
+            assert_eq!(parse_protocol(Some(bad)), None, "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn only_another_protocol_needs_an_update() {
+        assert_eq!(version_problem(Some(PROTOCOL_VERSION)), None);
+        let newer = version_problem(Some(PROTOCOL_VERSION + 1)).unwrap();
+        assert!(newer.contains("update this viewer"), "{newer}");
+        let older = version_problem(Some(PROTOCOL_VERSION - 1)).unwrap();
+        assert!(older.contains("update the presenter"), "{older}");
+        assert!(version_problem(None)
+            .unwrap()
+            .contains("update the presenter"));
     }
 }

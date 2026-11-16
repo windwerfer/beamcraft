@@ -28,7 +28,7 @@ followed by a JSON body (`serde`, `tag = "type"`, `snake_case`). Bodies over
 
 | `type` | Direction | Fields |
 |---|---|---|
-| `hello` | viewer → presenter | `protocol` (u32, must equal `PROTOCOL_VERSION`, currently **2**; read first, §4), `name`, `pairing_code` (string or null) |
+| `hello` | viewer → presenter | `protocol` (u32, must equal `PROTOCOL_VERSION`, currently **3**; read first, §4), `name`, `pairing_code` (string or null) |
 | `rejected` | presenter → viewer | `reason` (shown to the user) |
 | `stream_info` | presenter → viewer | `width`, `height`, `fps`, `codec`, `encoder`, `bitrate_kbps`, `intra_refresh`, `cursor` (`separate` = §3a, `embedded` = in the video, `hidden`), `fec` (the presenter's FEC setting `off`/`auto`/`20%`, for display). Sent after `hello`, and **again** whenever it changes |
 | `request_keyframe` | viewer → presenter | `reason`. The presenter forces at most one keyframe per 2 × RTT (500 ms–2 s) per viewer and ignores requests in between (the viewer keeps asking every ~100 ms while it waits, so a lost keyframe is still replaced) |
@@ -182,7 +182,11 @@ the break for the owner in the commit message.
 ## 5. Discovery and pairing
 
 - **mDNS:** service `_beamcraft._udp.local.`, instance name = presenter name (hostname by
-  default), TXT `fp` (fingerprint), `v` (`1`), `res` (`WxH`).
+  default), TXT `fp` (fingerprint), `v` (the presenter's `PROTOCOL_VERSION` in decimal; since
+  protocol 3, before that always `1`), `res` (`WxH`). The viewer's list (desktop, Android and
+  `beamcraft discover`) still shows a presenter whose `v` differs or is missing, marked "older/
+  newer BeamCraft …: update the presenter/this viewer"; connecting to it gets the `hello`
+  rejection (§4).
 - **URI / QR:** `beamcraft://<ip>:<port>?fp=<64 hex>&code=<6 digits>&name=<name>`. `fp` is
   required; `code` and `name` are optional. IPv6 hosts are bracketed.
 - **Pairing code:** 6 decimal digits from `getrandom`, new on each presenter start, shown in the

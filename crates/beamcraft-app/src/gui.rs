@@ -601,6 +601,9 @@ impl MirrorApp {
                     p.resolution.as_deref().unwrap_or(""),
                     short_fingerprint(&p.fingerprint)
                 ));
+                if let Some(note) = p.version_problem() {
+                    ui.colored_label(egui::Color32::from_rgb(230, 160, 40), note);
+                }
             });
         }
         ui.separator();

@@ -202,11 +202,15 @@ fn main() -> Result<()> {
                         .collect::<Vec<_>>()
                         .join(",")
                 };
+                let note = p
+                    .version_problem()
+                    .map(|n| format!("  ({n})"))
+                    .unwrap_or_default();
                 println!(
-                    "{}  {}  {}  {}",
+                    "{}  {}  {}  {}{note}",
                     p.name,
                     addrs,
-                    p.resolution.unwrap_or_default(),
+                    p.resolution.as_deref().unwrap_or_default(),
                     beamcraft_net::identity::short_fingerprint(&p.fingerprint)
                 );
             }

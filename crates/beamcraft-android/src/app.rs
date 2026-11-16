@@ -253,6 +253,10 @@ impl ViewerApp {
                     .map(|r| format!("  ·  {r}"))
                     .unwrap_or_default()
             );
+            let label = match p.version_problem() {
+                Some(note) => format!("{label}\n{note}"),
+                None => label,
+            };
             if ui
                 .add(egui::Button::new(label).min_size(egui::vec2(ui.available_width(), 48.0)))
                 .clicked()
