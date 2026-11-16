@@ -978,7 +978,9 @@ mod tests {
         queue_mean_ms: f32,
         queue_p95_ms: f32,
         keyframes: u32,
-        /// Frames with more packets lost than parity sent (after 10 s).
+        /// Frames with more packets lost than parity sent (after 10 s; the
+        /// sim pools parity per frame, real FEC per block, so real links
+        /// lose at least this many).
         lost_frames: u32,
         /// Encoded-to-arrival delay of the frames' first packets after 10 s
         /// (ms): the wait in the presenter's send loop plus the queue.
@@ -1103,7 +1105,7 @@ mod tests {
                 broken = false;
             }
             frozen_frames += u32::from(broken && t_us >= 10_000_000);
-            if frame_lost > parity && link.keyframes != Keyframes::Off {
+            if frame_lost > parity {
                 lost_frames += u32::from(t_us >= 10_000_000);
             }
             // The viewer asks again while it waits; the presenter answers at
@@ -1340,6 +1342,8 @@ mod tests {
     /// moved lost frames from 24 to 119).
     #[derive(Debug, Default)]
     struct Mean {
+        cuts: f32,
+        lost_frames: f32,
         video_kbps: f32,
         lost_pct: f32,
         frozen_frames: f32,
@@ -1360,6 +1364,8 @@ mod tests {
                     ceiling,
                     90,
                 );
+                m.cuts += r.cuts.len() as f32;
+                m.lost_frames += r.lost_frames as f32;
                 m.video_kbps += r.delivered_kbps;
                 m.lost_pct += r.lost_pct;
                 m.frozen_frames += r.frozen_frames as f32;
@@ -1368,6 +1374,8 @@ mod tests {
                 n += 1.0;
             }
         }
+        m.cuts /= n;
+        m.lost_frames /= n;
         m.video_kbps /= n;
         m.lost_pct /= n;
         m.frozen_frames /= n;
