@@ -234,7 +234,10 @@ stream above what the link can carry. x264 changes rate without a keyframe; VAAP
 reopened (one keyframe): a lower rate at most every second, a higher one at most every 5 s.
 Keyframes (2–5 normal frames) are not sent in one burst but spread over up to 100 ms at a
 little above the budget, so a router or USB link with a small buffer does not drop their tail
-(which froze the picture until the next keyframe got through). The presenter window shows
+(which froze the picture until the next keyframe got through). The viewer asks for a 4 MB UDP receive
+buffer (the kernel may grant less: `net.core.rmem_max`), because a fast link such as USB
+tethering or Ethernet delivers a keyframe within milliseconds and the 224 KB default on Android
+overflowed, which the presenter read as congestion. The presenter window shows
 `Bitrate: target X of max Y Mbit/s (adaptive)`. After a cut it adds why, e.g.
 `last cut: queue 64 ms (max 112, +121 ms/s)`, `loss 5.2 % (background 1.8 %)` or
 `send queue full, 3 frames dropped`, and the status line shows the viewer's latest `viewer queue …`; the log has one

@@ -379,6 +379,26 @@ keyframe plus 1–9 frames behind it). Loopback with the viewer's shallow simula
 capture→decoded p95 35–69 → 44–52 ms (no clear change); h264_vaapi stayed at ~6 Mbit/s there
 and never hit the limit.
 
+### 3.7 USB tethering: viewer receive buffer (2026-11-16)
+
+Presenter: the GUI in the dev container, portal capture (dmabuf-zero-copy), h264_vaapi, 40 Mbit/s
+setting, adaptive bitrate, a movie playing. Viewer: the MTK tablet over Android USB tethering
+(`rndis0`, RTT 1 ms, tablet Wi-Fi still on). Before the fix the viewer socket had Android's
+default 224 KB receive buffer (`rmem_default`); the link lost nothing (laptop tx drops 0, viewer
+queue 0–1 ms) but the tablet's `/proc/net/snmp` `Udp RcvbufErrors` rose 33 per 10 s (~2 % of
+datagrams, 13–18 % around keyframes), so rate control cut on "heavy loss" and sat at the 3 Mbit/s
+floor. After (`VIEWER_RECV_BUFFER`, 4 MB asked; Android `rmem_max` 8 MB): 0 RcvbufErrors over
+~106 000 datagrams, budget 17.6–31 Mbit/s, 9.2 Mbit/s sent (mean of 60 s, peak 19.6, the movie's
+need), viewer loss 0.00 %, 0 unrecoverable frames. On Wi-Fi the same viewer ran at 3.4–5.5 Mbit/s
+(the link's limit). Not tested: Ethernet, the iMac viewer (macOS buffer limits), desktop Linux
+viewers (Fedora `rmem_max` 4 MB here; many distributions 208 KB, which caps the buffer).
+
+Setup traps on the way (not MirrorWire bugs): an always-on VPN on the tablet (eduVPN, all apps)
+routed `10.38.14.0/24` into `tun0`, so the viewer never reached the presenter; and Fedora gave the
+tethering link a default route (metric 100, below Wi-Fi's 600), sending the laptop's internet
+through the tablet (`nmcli connection modify … ipv4.never-default yes`). The presenter must be
+started after tethering is up to advertise the new address.
+
 ## 4. Real hardware
 
 The owner tests on the target machines (decisions D11) and reports with **photos of the

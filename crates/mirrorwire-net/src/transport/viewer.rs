@@ -190,7 +190,7 @@ async fn connect_one(
         "[::]:0"
     }
     .parse()?;
-    let mut endpoint = Endpoint::client(bind)?;
+    let mut endpoint = viewer_endpoint(bind)?;
     endpoint.set_default_client_config(client);
 
     let connecting = endpoint
@@ -305,6 +305,47 @@ async fn connect_one(
     })
 }
 
+/// UDP receive buffer the viewer asks for. On USB or Ethernet a keyframe and its parity
+/// (up to ~200 KB) arrive within a few milliseconds; Android's default 224 KB overflowed
+/// when the receive task paused briefly (tablet over USB tethering: ~2 % of datagrams
+/// dropped as `RcvbufErrors`, bursts of 13–18 %, budget pinned at the 3 Mbit/s floor).
+/// The kernel caps it at `net.core.rmem_max` (8 MB on Android, often 208 KB on desktop
+/// Linux) without needing any privilege.
+pub const VIEWER_RECV_BUFFER: usize = 4 << 20;
+
+/// Like `Endpoint::client`, but with a larger UDP receive buffer.
+fn viewer_endpoint(bind: SocketAddr) -> Result<Endpoint> {
+    let (socket, got) = viewer_socket(bind)?;
+    match got {
+        // Linux reports twice the usable size (it counts bookkeeping overhead).
+        Ok(got) => tracing::info!(
+            "UDP receive buffer {} KiB (asked {} KiB)",
+            got / 1024,
+            VIEWER_RECV_BUFFER / 1024
+        ),
+        Err(e) => tracing::warn!("could not read the UDP receive buffer size: {e}"),
+    }
+    let runtime = quinn::default_runtime().ok_or_else(|| anyhow!("no async runtime found"))?;
+    Ok(Endpoint::new(
+        quinn::EndpointConfig::default(),
+        None,
+        socket,
+        runtime,
+    )?)
+}
+
+/// The viewer's UDP socket with [`VIEWER_RECV_BUFFER`] requested, and the size the
+/// kernel granted. Failing to enlarge the buffer is logged, not fatal.
+fn viewer_socket(bind: SocketAddr) -> Result<(std::net::UdpSocket, std::io::Result<usize>)> {
+    let socket = std::net::UdpSocket::bind(bind)?;
+    let state = quinn::udp::UdpSocketState::new((&socket).into())?;
+    if let Err(e) = state.set_recv_buffer_size((&socket).into(), VIEWER_RECV_BUFFER) {
+        tracing::warn!("could not enlarge the UDP receive buffer: {e}");
+    }
+    let got = state.recv_buffer_size((&socket).into());
+    Ok((socket, got))
+}
+
 /// Cursor images arrive one per unidirectional stream (bounded size).
 async fn accept_cursor_images(conn: Connection, cursor: Arc<Mutex<ViewerCursor>>) {
     while let Ok(mut stream) = conn.accept_uni().await {
@@ -386,6 +427,32 @@ mod tests {
     use super::*;
     use crate::identity::Identity;
     use crate::pairing::ConnectInfo;
+
+    /// The viewer socket gets a bigger receive buffer than a plain socket whenever the
+    /// kernel allows one (`rmem_max` above the default).
+    #[test]
+    fn viewer_socket_enlarges_the_receive_buffer() {
+        let bind: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let plain = std::net::UdpSocket::bind(bind).unwrap();
+        let state = quinn::udp::UdpSocketState::new((&plain).into()).unwrap();
+        let default = state.recv_buffer_size((&plain).into()).unwrap();
+
+        let (_socket, got) = viewer_socket(bind).unwrap();
+        let got = got.unwrap();
+        let rmem_max: Option<usize> = std::fs::read_to_string("/proc/sys/net/core/rmem_max")
+            .ok()
+            .and_then(|s| s.trim().parse().ok());
+        // Linux reports double the requested size, capped at rmem_max.
+        let possible = rmem_max.map_or(VIEWER_RECV_BUFFER, |m| m.min(VIEWER_RECV_BUFFER)) * 2;
+        if possible > default {
+            assert!(
+                got >= possible.min(VIEWER_RECV_BUFFER),
+                "receive buffer {got} B, plain socket {default} B, rmem_max {rmem_max:?}"
+            );
+        } else {
+            assert!(got >= default);
+        }
+    }
 
     #[tokio::test]
     async fn connect_timeout_reports_firewall_hint() {
