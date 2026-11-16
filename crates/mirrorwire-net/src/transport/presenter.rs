@@ -352,6 +352,16 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
                 Err(_) if conn.close_reason().is_some() => return Ok(()),
                 Err(e) => return Err(e),
             };
+            if let Some(quiet) = shared.fec.heard_from_viewer() {
+                // The video was paused: start again from a keyframe.
+                tracing::info!(
+                    "viewer {name} is back after {:.1} s of silence: video resumes with a keyframe",
+                    quiet.as_secs_f32()
+                );
+                if keyframe_gate.allow(now_us(), conn.rtt()) {
+                    (shared.on_keyframe_request)();
+                }
+            }
             match msg {
                 Control::Ping { t_viewer_us } => {
                     let _ = out_tx.send(Control::Pong { t_viewer_us, t_presenter_us: now_us() });
@@ -494,11 +504,27 @@ async fn send_loop(
     // one): a frame encoded before that waited behind it and is paced too.
     let mut paced_done_us: Option<u64> = None;
     let mut window_paced = 0u32;
+    // Frames not sent while the viewer is silent (this episode).
+    let mut paused = 0u32;
 
     while let Some(frame) = frames.recv().await {
         let Some(conn) = current.borrow().as_ref().map(|v| v.conn.clone()) else {
             continue;
         };
+        if let Some(quiet) = fec.viewer_silent_for() {
+            if paused == 0 {
+                tracing::warn!(
+                    "viewer silent for {:.1} s (app closed or network down): video paused",
+                    quiet.as_secs_f32()
+                );
+            }
+            paused += 1;
+            continue;
+        }
+        if paused > 0 {
+            tracing::info!("video resumed after {paused} frames paused for a silent viewer");
+            paused = 0;
+        }
         let Some(max) = conn.max_datagram_size() else {
             continue;
         };

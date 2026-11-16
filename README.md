@@ -242,7 +242,10 @@ little above the budget, so a router or USB link with a small buffer does not dr
 (which froze the picture until the next keyframe got through). The viewer asks for a 4 MB UDP receive
 buffer (the kernel may grant less: `net.core.rmem_max`), because a fast link such as USB
 tethering or Ethernet delivers a keyframe within milliseconds and the 224 KB default on Android
-overflowed, which the presenter read as congestion. The presenter window shows
+overflowed, which the presenter read as congestion. If the viewer sends nothing for 1.5 s (it
+pings every 250 ms; an Android app that is killed sends no goodbye), the presenter pauses the
+video and the window says `The viewer has not responded for N s`; the next message from the
+viewer gets a keyframe, and after 10 s of silence the connection ends. The presenter window shows
 `Bitrate: target X of max Y Mbit/s (adaptive)`. After a cut it adds why, e.g.
 `last cut: queue 64 ms (max 112, +121 ms/s)`, `loss 5.2 % (background 1.8 %)` or
 `send queue full, 3 frames dropped`, and the status line shows the viewer's latest `viewer queue …`; the log has one

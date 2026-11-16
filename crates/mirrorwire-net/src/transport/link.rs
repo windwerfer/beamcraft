@@ -16,6 +16,11 @@ const MAX_FEC_BOOST: f32 = 15.0;
 const REMEMBER_LINK: Duration = Duration::from_secs(10 * 60);
 /// Viewers whose link is remembered at once (oldest forgotten first).
 const REMEMBERED_PEERS: usize = 16;
+/// The viewer pings every 250 ms. After this long without any message it is
+/// gone (a killed app sends no close; QUIC notices only after its 10 s idle
+/// timeout) or the network dropped: the video pauses instead of going into
+/// the void, and the window says so.
+pub const VIEWER_SILENT: Duration = Duration::from_millis(1_500);
 
 /// One viewer on one path: its certificate fingerprint (as pairing uses)
 /// and its address, since the same tablet over USB and over Wi-Fi are two
@@ -100,6 +105,8 @@ pub struct LinkState {
     /// This viewer was here before on this path and its link failed at
     /// this budget (kbit/s); the controller resumed from it.
     pub resumed_bad_kbps: Option<u32>,
+    /// When the current viewer last sent anything (ping, report, request).
+    last_heard: Option<Instant>,
 }
 
 impl Default for LinkState {
@@ -118,11 +125,19 @@ impl Default for LinkState {
             sent_kbps: None,
             queue: None,
             resumed_bad_kbps: None,
+            last_heard: None,
         }
     }
 }
 
 impl LinkState {
+    /// How long the viewer has been silent, once that is at least
+    /// [`VIEWER_SILENT`].
+    pub fn viewer_silent_for(&self) -> Option<Duration> {
+        let quiet = self.last_heard?.elapsed();
+        (quiet >= VIEWER_SILENT).then_some(quiet)
+    }
+
     /// Overhead currently applied to (delta, key) frames, or `None` when FEC
     /// is off.
     pub fn overheads(&self) -> Option<(f32, f32)> {
@@ -265,8 +280,23 @@ impl LinkControl {
             adaptive: s.adaptive,
             rate,
             resumed_bad_kbps,
+            last_heard: Some(Instant::now()),
             ..Default::default()
         };
+    }
+
+    /// The viewer sent a message. Returns how long it had been silent if
+    /// that was at least [`VIEWER_SILENT`] (it missed frames: send a keyframe).
+    pub(super) fn heard_from_viewer(&self) -> Option<Duration> {
+        let mut s = self.lock();
+        let was = s.viewer_silent_for();
+        s.last_heard = Some(Instant::now());
+        was
+    }
+
+    /// See [`LinkState::viewer_silent_for`].
+    pub(super) fn viewer_silent_for(&self) -> Option<Duration> {
+        self.lock().viewer_silent_for()
     }
 
     /// A viewer's session ended: remember its link (unless another viewer
@@ -440,6 +470,27 @@ mod tests {
         assert_eq!(link.snapshot().resumed_bad_kbps, None);
         link.viewer_connected(a);
         assert_eq!(link.snapshot().resumed_bad_kbps, Some(10_000));
+    }
+
+    #[test]
+    fn a_silent_viewer_is_reported_until_it_speaks_again() {
+        let link = LinkControl::new(FecMode::Auto);
+        assert_eq!(link.viewer_silent_for(), None, "no viewer yet");
+        link.viewer_connected(peer("aa", 2));
+        assert_eq!(link.viewer_silent_for(), None);
+        assert_eq!(link.heard_from_viewer(), None, "not silent: no keyframe");
+        // Two seconds without a message (as after a killed app).
+        link.lock().last_heard = Instant::now().checked_sub(Duration::from_secs(2));
+        let quiet = link.viewer_silent_for().expect("silent");
+        assert!(quiet >= Duration::from_secs(2));
+        assert!(
+            link.snapshot().viewer_silent_for().is_some(),
+            "the GUI sees it"
+        );
+        // The next message ends it and asks for a keyframe once.
+        assert!(link.heard_from_viewer().is_some());
+        assert_eq!(link.viewer_silent_for(), None);
+        assert_eq!(link.heard_from_viewer(), None);
     }
 
     #[test]

@@ -114,8 +114,14 @@ target), **planned**, **idea**. Update this file when an item moves.
       frames not separable from noise in 4 min. Simulation: 5 % random loss 3 → 0 cuts.
       Found on the way, still open:
       - **Viewer silent = congestion?** One run lost 121 frames in a Wi-Fi outage: no report for
-        2.4 s, QUIC lost 2606 packets. Nothing reacted until the link came back. A missing
-        report for > 1 s while sending could cut hard and stop forcing keyframes.
+        2.4 s, QUIC lost 2606 packets. Nothing reacted until the link came back. Partly done
+        (2026-11-16): after 1.5 s without any message (the viewer pings every 250 ms) the
+        presenter pauses the video, the window says the viewer is not responding, and the
+        next message gets a keyframe. Found on the tablet: a force-stopped Android app sends no
+        close, so before this the presenter streamed into the void until QUIC's 10 s idle
+        timeout. Tablet (USB): paused 1.5 s after the force-stop, closed 8.6 s later, the next
+        viewer got video at once. Not seen on hardware: a viewer that comes back within the
+        10 s (needs a real outage). Still open: whether the rate should also cut then.
       - The remaining overruns come from the budget sitting far above what is sent (27.5 vs
         10–15 Mbit/s), so a content burst hits the link at once: item 4.
       - **Shallow bottleneck buffers: done (2026-11-16).** With ≤ 50 ms (a router or USB link)

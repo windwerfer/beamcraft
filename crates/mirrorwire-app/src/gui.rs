@@ -419,7 +419,18 @@ impl MirrorApp {
                             show_copy_note(ui, &self.copy_note);
                         }
                         ui.add_space(8.0);
-                        if status.viewer_connected {
+                        let silent = status.capture.fec.viewer_silent_for();
+                        if let (true, Some(quiet)) = (status.viewer_connected, silent) {
+                            ui.colored_label(
+                                egui::Color32::from_rgb(220, 140, 0),
+                                format!(
+                                    "The viewer has not responded for {:.0} s (app closed, or the \
+                                     network dropped). Video is paused; the connection ends \
+                                     after 10 s of silence.",
+                                    quiet.as_secs_f32()
+                                ),
+                            );
+                        } else if status.viewer_connected {
                             ui.colored_label(
                                 egui::Color32::from_rgb(0, 180, 80),
                                 "A viewer is connected.",
