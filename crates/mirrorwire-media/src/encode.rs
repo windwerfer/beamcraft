@@ -261,6 +261,11 @@ pub struct Encoder {
     scaler: Option<Scaler>,
     staging: ffmpeg_next::frame::Video,
     packed: ffmpeg_next::frame::Video,
+    /// The shm frame copied for the VPP graph, kept apart from `packed`
+    /// (which then holds the VPP output) so its 8 MB are reused instead of
+    /// allocated per frame (2026-11-16: 6.1 ms pack/map, ~49 instead of 60
+    /// fps with the 1080p test pattern on h264_vaapi).
+    vpp_input: ffmpeg_next::frame::Video,
     config: EncoderConfig,
     name: &'static str,
     conversion: &'static str,
@@ -525,6 +530,7 @@ impl Encoder {
             scaler: None,
             staging: ffmpeg_next::frame::Video::new(sw_format, config.width, config.height),
             packed: ffmpeg_next::frame::Video::empty(),
+            vpp_input: ffmpeg_next::frame::Video::empty(),
             config: config.clone(),
             name: codec_name,
             conversion,
@@ -551,6 +557,7 @@ impl Encoder {
             scaler: None,
             staging: ffmpeg_next::frame::Video::new(Pixel::YUV420P, config.width, config.height),
             packed: ffmpeg_next::frame::Video::empty(),
+            vpp_input: ffmpeg_next::frame::Video::empty(),
             config: config.clone(),
             name: crate::filmcraft::NAME,
             conversion: path::SHM_CPU,
@@ -896,24 +903,16 @@ impl Encoder {
             );
         }
         let t_pack = now_us();
-        fill_packed(&mut self.packed, raw)?;
+        fill_packed(&mut self.vpp_input, raw)?;
         self.last_pack_us = now_us().saturating_sub(t_pack);
-        let vpp = match &mut self.upload {
-            Upload::Vaapi { vpp: Some(v), .. } => v,
-            _ => bail!("VPP graph missing"),
-        };
         let t_vpp = now_us();
-        let mut src = vpp
-            .graph
-            .get("in")
-            .ok_or_else(|| anyhow!("vpp missing in"))?;
-        src.source().add(&self.packed)?;
-        let mut sink = vpp
-            .graph
-            .get("out")
-            .ok_or_else(|| anyhow!("vpp missing out"))?;
-        let mut out = ffmpeg_next::frame::Video::empty();
-        sink.sink().frame(&mut out)?;
+        let out = self.run_vpp();
+        if out.is_err() {
+            // The graph may still hold a reference to the input buffer:
+            // never write into it again.
+            self.vpp_input = ffmpeg_next::frame::Video::empty();
+        }
+        let out = out?;
         self.last_convert_us = now_us().saturating_sub(t_vpp);
         if !is_vaapi_pixel(out.format()) {
             tracing::warn!(
@@ -923,6 +922,28 @@ impl Encoder {
         }
         self.packed = out;
         Ok(())
+    }
+
+    /// `vpp_input` through the VPP graph. When this returns a frame,
+    /// hwupload has copied the input to the GPU and dropped its reference,
+    /// so `vpp_input` can be filled again.
+    fn run_vpp(&mut self) -> Result<ffmpeg_next::frame::Video> {
+        let vpp = match &mut self.upload {
+            Upload::Vaapi { vpp: Some(v), .. } => v,
+            _ => bail!("VPP graph missing"),
+        };
+        let mut src = vpp
+            .graph
+            .get("in")
+            .ok_or_else(|| anyhow!("vpp missing in"))?;
+        src.source().add(&self.vpp_input)?;
+        let mut sink = vpp
+            .graph
+            .get("out")
+            .ok_or_else(|| anyhow!("vpp missing out"))?;
+        let mut out = ffmpeg_next::frame::Video::empty();
+        sink.sink().frame(&mut out)?;
+        Ok(out)
     }
 
     fn convert_cpu(&mut self, raw: &RawFrame) -> Result<()> {

@@ -424,6 +424,13 @@ keyframe plus 1–9 frames behind it). Loopback with the viewer's shallow simula
 capture→decoded p95 35–69 → 44–52 ms (no clear change); h264_vaapi stayed at ~6 Mbit/s there
 and never hit the limit.
 
+**Caveat for every h264_vaapi test-pattern run above (found 2026-11-16):** the shm+VPP upload
+allocated a new 8 MB frame per frame (`pack/map` 6.1 ms), so the presenter made ~49 fps, not 60
+(the tablet showed `in 49`). Fixed in `encode.rs` (`vpp_input` is reused). Loopback, same box,
+3 × 10 s alternated: 39.9 / 42.5 / 42.3 → 60.0 fps at steady state, capture→encoded 24 → 13 ms;
+tablet over USB: 60.0 fps sent and decoded. Portal capture with DMA-BUF (zero-copy) never took
+this path.
+
 ### 3.7 USB tethering: viewer receive buffer (2026-11-16)
 
 Presenter: the GUI in the dev container, portal capture (dmabuf-zero-copy), h264_vaapi, 40 Mbit/s
