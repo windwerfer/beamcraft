@@ -273,43 +273,52 @@ pub fn local_stamp() -> String {
     }
 }
 
-#[cfg(unix)]
-fn local_hms(secs: i64) -> Option<(i32, i32, i32)> {
-    #[repr(C)]
-    struct Tm {
-        tm_sec: i32,
-        tm_min: i32,
-        tm_hour: i32,
-        tm_mday: i32,
-        tm_mon: i32,
-        tm_year: i32,
-        tm_wday: i32,
-        tm_yday: i32,
-        tm_isdst: i32,
-        tm_gmtoff: i64,
-        tm_zone: *const core::ffi::c_char,
-    }
-    extern "C" {
-        fn localtime_r(timep: *const i64, result: *mut Tm) -> *mut Tm;
-    }
-    let mut tm = unsafe { std::mem::zeroed::<Tm>() };
-    let ptr = unsafe { localtime_r(&secs, &mut tm) };
-    if ptr.is_null() {
-        None
-    } else {
-        Some((tm.tm_hour, tm.tm_min, tm.tm_sec))
+/// Local `(hour, minute, second)` for a Unix time, from the system time zone (`TZ`, else
+/// `/etc/localtime`). The zone is read once per process; `None` when it can't be read (no
+/// zone file, e.g. Android or Windows), and the caller prints seconds since the epoch.
+fn local_hms(secs: i64) -> Option<(i64, i64, i64)> {
+    static ZONE: std::sync::OnceLock<Option<tz::TimeZone>> = std::sync::OnceLock::new();
+    let zone = ZONE.get_or_init(system_zone).as_ref()?;
+    let offset = zone.find_local_time_type(secs).ok()?.ut_offset();
+    Some(hms_of_day(secs.checked_add(i64::from(offset))?))
+}
+
+/// The zone libc's `localtime` would use: `TZ` if set (empty means UTC), else
+/// `/etc/localtime`.
+fn system_zone() -> Option<tz::TimeZone> {
+    match std::env::var("TZ") {
+        Ok(s) if s.is_empty() => Some(tz::TimeZone::utc()),
+        Ok(s) => tz::TimeZone::from_posix_tz(&s).ok(),
+        Err(_) => tz::TimeZone::local().ok(),
     }
 }
 
-#[cfg(not(unix))]
-fn local_hms(_secs: i64) -> Option<(i32, i32, i32)> {
-    None
+/// Hours, minutes and seconds into the day of a (zone-shifted) Unix time.
+fn hms_of_day(local_secs: i64) -> (i64, i64, i64) {
+    let day = local_secs.rem_euclid(86_400);
+    (day / 3600, day % 3600 / 60, day % 60)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::net::{IpAddr, Ipv4Addr};
+
+    #[test]
+    fn hms_of_day_wraps_and_handles_times_before_1970() {
+        assert_eq!(hms_of_day(0), (0, 0, 0));
+        assert_eq!(hms_of_day(86_399), (23, 59, 59));
+        assert_eq!(hms_of_day(86_400 + 3_723), (1, 2, 3));
+        assert_eq!(hms_of_day(-1), (23, 59, 59));
+    }
+
+    #[test]
+    fn local_stamp_has_a_clock_or_epoch_shape() {
+        let s = local_stamp();
+        let (head, ms) = s.rsplit_once('.').expect("millis");
+        assert_eq!(ms.len(), 3, "{s}");
+        assert!(head.len() == 8 && head.matches(':').count() == 2 || head.parse::<i64>().is_ok());
+    }
 
     #[test]
     fn timeout_message_mentions_udp_and_firewall_cmd() {

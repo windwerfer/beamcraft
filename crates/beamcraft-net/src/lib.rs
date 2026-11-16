@@ -1,3 +1,7 @@
+//! Networking for BeamCraft: QUIC transport, discovery, identity and pairing.
+//! Parses input from the network, so it must stay free of `unsafe` (AGENTS.md §1.12).
+#![forbid(unsafe_code)]
+
 pub mod diag;
 pub mod discovery;
 pub mod firewall;

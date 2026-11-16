@@ -147,8 +147,8 @@ target), **planned**, **idea**. Update this file when an item moves.
       allowed in tests only); `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic,
       clippy::indexing_slicing)]` in proto and net; `forbid(unsafe_code)` everywhere except media
       and the glow renderer; `clippy::undocumented_unsafe_blocks` with a `// SAFETY:` comment on
-      all remaining unsafe sites; first try to remove the `unsafe` in net/diag.rs,
-      app/applog.rs and portal.rs via safe APIs (D15); lock poisoning via `unwrap_or_else(PoisonError::into_inner)`. ~1 day.
+      all remaining unsafe sites; first try to remove the `unsafe` in
+      app/applog.rs and portal.rs (net/diag.rs is done: tz-rs, net forbids unsafe) via safe APIs (D15); lock poisoning via `unwrap_or_else(PoisonError::into_inner)`. ~1 day.
    2. **cargo-fuzz targets** for fragment, fec, cursor and control decode, plus a CI job (if not
       already done alongside item 0). ~½ day.
    3. **A `cargo xtask ci` gate** (the formatting-only commit and the CI fmt check are done,
@@ -162,8 +162,8 @@ target), **planned**, **idea**. Update this file when an item moves.
    Already in force: decision records with alternatives (decisions.md) and small commits (AGENTS.md).
 
 0c. **Remove `unsafe` Rust where possible (owner, 2026-11-14; after 0 and 0b, D15).** Go through
-   every `unsafe` site (encode.rs, decode.rs, hw.rs, source/portal.rs, yuv_glow.rs, applog.rs,
-   net/diag.rs) and check for a safe replacement: safe methods of `ffmpeg-next`/`ffmpeg-sys`
+   every `unsafe` site (encode.rs, decode.rs, hw.rs, source/portal.rs, yuv_glow.rs, applog.rs;
+   net/diag.rs is done) and check for a safe replacement: safe methods of `ffmpeg-next`/`ffmpeg-sys`
    wrappers, `glow`/egui-safe GL paths or a wgpu-only path, safe crates for the libc/socket calls,
    dropping the `unsafe impl Send` by restructuring threads. Remove what can go; for what must
    stay, write down why (per site) and report the list to the owner. Goal: no `unsafe` outside
