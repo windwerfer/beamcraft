@@ -12,6 +12,16 @@ Low-latency screen mirroring over a LAN (Wi-Fi, Ethernet, USB networking). One R
 show). The main job: put a Fedora KDE laptop's screen on an old iMac with near-HDMI latency,
 sharp text, and no special privileges.
 
+**Design priority: clarity and the better design over compatibility.** BeamCraft is in
+development. When compatibility with older builds costs code, drop the compatibility: no
+fallbacks for old peers, no capability flags or optional-for-compatibility fields, no "older
+viewer" branches. Choose the clearest code and the best design (best practice, better
+performance), change the format, bump `PROTOCOL_VERSION`, delete the old path. Presenter and
+viewer run the same release. You don't need to ask before a break, but **list every break for
+the owner** in the commit message and in your report ("Breaks: …"). Still fixed: the §1.5
+identifiers, and data on disk (pairings, identity, settings) is never a reason to crash; if its
+format changes, say what the user loses. See [decisions.md](docs/agents/decisions.md) D6.
+
 **Non-goals:** remote desktop control (no input injection), internet/relay streaming, audio
 (not yet planned), a WebAssembly *presenter* (a browser viewer is planned), AirPlay or Miracast *sources*, anything that needs root,
 `setcap`, kernel modules or a display-server hack.
@@ -44,7 +54,8 @@ sharp text, and no special privileges.
    plaintext, "insecure", or skip-verification mode, not even behind a flag.
 4. **Protocol changes need a version bump and a doc update in the same commit**
    ([protocol.md](docs/agents/protocol.md)). Never change the meaning of an existing field
-   silently.
+   silently. A peer of another version must get a readable "update the viewer/presenter"
+   message, not a timeout.
 5. **Fixed identifiers do not change:** app id `io.github.windwerfer.BeamCraft`, mDNS service
    `_beamcraft._udp`, default UDP port `47800`, URI scheme `beamcraft://`, config directory
    `beamcraft`. Users have firewall rules, pairings and launchers that depend on them.
@@ -137,8 +148,7 @@ schedule so new advisories against existing pins are caught. Details:
 ## 5. Ask the owner first
 
 Stop and ask before: adding a Flatpak permission or any privilege; changing anything in
-[decisions.md](docs/agents/decisions.md); a protocol change that breaks old peers; a new
-licence outside the list above; publishing a GitHub Release, tag, Flathub submission or
+[decisions.md](docs/agents/decisions.md); a new licence outside the list above; publishing a GitHub Release, tag, Flathub submission or
 notarization; spending money; adding a remote or CI secret; destructive git. Everything else:
 decide, record the choice, keep going.
 

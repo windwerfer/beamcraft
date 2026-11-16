@@ -175,18 +175,23 @@ change for video packets; `sent_us` was always there.
 
 ## 4. Versioning rules
 
-| Change | Bump |
-|---|---|
-| Datagram header layout or flag meaning | `WIRE_VERSION` (`fragment.rs`; FEC packets are version 2, `fec.rs`) |
-| Control message incompatible change, handshake/auth semantics | `PROTOCOL_VERSION` (`lib.rs`) **and** the ALPN suffix (`beamcraft/2`) |
-| mDNS TXT keys or meaning | TXT `v` |
-| URI parameters (removal or meaning) | document it; keep parsing the old form |
+There is **no backwards compatibility** (decisions.md D6): presenter and viewer must speak
+the same `PROTOCOL_VERSION` (`lib.rs`), and any incompatible change (a control message or
+field, a datagram layout, handshake or auth semantics, mDNS TXT keys, URI parameters) bumps
+it. Don't add optional fields, capabilities or fallbacks to keep an older peer working:
+change the format and delete the old path.
 
-In the same commit: update this file, the README if users see it, and add a test in
-`beamcraft-proto` / `beamcraft-net` that pins the new layout (encode → bytes → decode).
-A presenter must reject an incompatible viewer with a `rejected` message the viewer GUI shows
-("presenter is version X, update the viewer"), not a timeout. Ask the owner before any change
-that makes old peers stop working (D6).
+The presenter reads `hello.protocol` before parsing the rest of the hello
+(`control::hello_protocol`), so a viewer of any version gets a `rejected` message the viewer
+GUI shows ("version mismatch: the presenter speaks protocol X, the viewer Y; update the
+viewer …"), not a timeout or a parse error. That check is the one thing that must keep working
+across versions: `hello` stays a JSON object with `"type":"hello"` and a numeric `protocol`.
+The ALPN stays `beamcraft/1` (D5); an ALPN mismatch would fail inside TLS with no readable
+message.
+
+In the same commit: update this file, the README if users see it, add a test in
+`beamcraft-proto` / `beamcraft-net` that pins the new layout (encode → bytes → decode), and list
+the break for the owner in the commit message.
 
 ## 5. Discovery and pairing
 
