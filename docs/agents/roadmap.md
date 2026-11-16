@@ -156,8 +156,8 @@ target), **planned**, **idea**. Update this file when an item moves.
       (architecture.md made mechanical), loopback test.
    4. **Machine-checked perf budgets:** loopback p95 capture→decoded and the adaptive-bitrate
       simulation rows as TOML budgets checked in CI, instead of prose tables in testing.md.
-   5. **Split the big files** (encode.rs, presenter.rs, transport.rs; move FecState and the rate
-      wiring out of transport.rs) and merge the duplicated encoder-config comparison in
+   5. **Split the big files** (encode.rs, presenter.rs; net's transport is done: `transport/`
+      `presenter.rs`, `viewer.rs`, `link.rs` for the FEC/bitrate state) and merge the duplicated encoder-config comparison in
       pipeline.rs (`maybe_reopen` / `maybe_replace_encoder`).
    Already in force: decision records with alternatives (decisions.md) and small commits (AGENTS.md).
 
