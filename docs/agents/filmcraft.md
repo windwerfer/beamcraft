@@ -1,32 +1,32 @@
-# FilmCraft in BeamCraft
+# FilmCraft in MirrorWire
 
 FilmCraft (storytold/filmcraft and storytold/craft-libs, the owner's project) changes quickly.
-This file says where BeamCraft touches it, how to upgrade, and what we measured, so an upgrade
+This file says where MirrorWire touches it, how to upgrade, and what we measured, so an upgrade
 can be judged against known numbers.
 
 ## 1. Where FilmCraft is used
 
 | Use | Crate | Pin | Notes |
 |---|---|---|---|
-| H.264 **software decoder** (fallback when no hardware decoder works; macOS keeps FFmpeg) | `beamcraft-film` (all API calls), used by `beamcraft-media/src/film_decode.rs` (desktop, maps to `YuvImage`) and `beamcraft-android` (re-export `film`) | `craft-video` @ craft-libs `09dcbc22` | Decision log 2026-11-15 |
-| H.264 **encoder** (optional, `--features filmcraft`, `--encoder filmcraft`) | `beamcraft-media/src/filmcraft.rs` | `filmcraft-h264enc` @ filmcraft `cb9783ba` (pulls craft-libs at the same commit) | Decision log 2026-11 |
-| H.264 **hardware decoder**: planned, not built | will go into `beamcraft-film` | — | §4 |
+| H.264 **software decoder** (fallback when no hardware decoder works; macOS keeps FFmpeg) | `mirrorwire-film` (all API calls), used by `mirrorwire-media/src/film_decode.rs` (desktop, maps to `YuvImage`) and `mirrorwire-android` (re-export `film`) | `craft-video` @ craft-libs `09dcbc22` | Decision log 2026-11-15 |
+| H.264 **encoder** (optional, `--features filmcraft`, `--encoder filmcraft`) | `mirrorwire-media/src/filmcraft.rs` | `filmcraft-h264enc` @ filmcraft `cb9783ba` (pulls craft-libs at the same commit) | Decision log 2026-11 |
+| H.264 **hardware decoder**: planned, not built | will go into `mirrorwire-film` | — | §4 |
 
-`beamcraft-film` exposes only `FilmDecoder::decode(&[u8]) -> Result<Option<Planes>>` (tight
+`mirrorwire-film` exposes only `FilmDecoder::decode(&[u8]) -> Result<Option<Planes>>` (tight
 I420) and `Planes`. Nothing else in the workspace names a `craft_video` type, so an API change
 upstream is fixed in that one crate.
 
 ## 2. Upgrading
 
-1. Bump the rev in `crates/beamcraft-film/Cargo.toml`. If the encoder is bumped too, keep both
+1. Bump the rev in `crates/mirrorwire-film/Cargo.toml`. If the encoder is bumped too, keep both
    on the same craft-libs commit (`cargo tree -d | grep craft` must show one copy).
-2. Fix `crates/beamcraft-film/src/lib.rs` if the API moved. Keep: one worker thread (no output
+2. Fix `crates/mirrorwire-film/src/lib.rs` if the API moved. Keep: one worker thread (no output
    delay), panics caught, tight planes.
-3. Gates (AGENTS.md §3), including `cargo ndk -t arm64-v8a clippy -p beamcraft-android`.
+3. Gates (AGENTS.md §3), including `cargo ndk -t arm64-v8a clippy -p mirrorwire-android`.
 4. Re-measure with the same recording and compare with §3:
    ```sh
-   BEAMCRAFT_FILM_BENCH=rec.h264 BEAMCRAFT_FILM_YUV=out.yuv \
-     cargo test --release -p beamcraft-film --test bench -- --ignored --nocapture
+   MIRRORWIRE_FILM_BENCH=rec.h264 MIRRORWIRE_FILM_YUV=out.yuv \
+     cargo test --release -p mirrorwire-film --test bench -- --ignored --nocapture
    ffmpeg -v error -i rec.h264 -fps_mode passthrough -f rawvideo -pix_fmt yuv420p - | md5sum
    md5sum out.yuv     # must match: bit-exact with FFmpeg
    ```
@@ -48,7 +48,7 @@ Same 2804-AU recording, one access unit per call, single thread.
 
 | Machine | Result |
 |---|---|
-| Build box (x86-64), `beamcraft-film` bench | 2804/2804 pictures, 0 errors, no output delay, **bit-exact with FFmpeg** (also on two simulated-loss variants). IDR 49.4 ms mean (p95 69.0), P 15.7 ms mean (p50 13.6, p95 26.3) |
+| Build box (x86-64), `mirrorwire-film` bench | 2804/2804 pictures, 0 errors, no output delay, **bit-exact with FFmpeg** (also on two simulated-loss variants). IDR 49.4 ms mean (p95 69.0), P 15.7 ms mean (p50 13.6, p95 26.3) |
 | Build box, loopback 1080p60 (x264) | decode 15.9 ms, capture→decoded 36 ms. FFmpeg software: 4.2 ms / 19.8 ms. FFmpeg VAAPI: 8.9 ms / 27 ms. FilmCraft has no SIMD yet |
 | Lenovo TB336FU (MT8755, Cortex-A76), app switch forced | decode 14–16 ms, 38–48 fps, live through 24 presenter encoder reopens, 0 errors. 14.8 ms per P-frame in the offline bench vs 80–155 ms for `c2.android.avc.decoder` |
 
@@ -79,8 +79,8 @@ FFI, no FFmpeg in the viewer. Steps:
    `filmcraft-platform`; the owner commented with our VA-API numbers) and a craft-libs
    feature request for a hardware-decoder crate (owner opened it 2026-11-15). Check both
    before starting; until one lands there is no light crate to pull.
-2. Here: add it to `beamcraft-film` as `HwDecoder` with the same `Planes` output (later a GPU
-   surface to skip the read-back), plus a `VideoDecoder` impl in `beamcraft-media`.
+2. Here: add it to `mirrorwire-film` as `HwDecoder` with the same `Planes` output (later a GPU
+   surface to skip the read-back), plus a `VideoDecoder` impl in `mirrorwire-media`.
    `decode::open_decoder` already picks hardware first and falls back to FilmCraft software,
    so only that function and the `--software-decoder`/hwdec options change. Android keeps
    MediaCodec (already hardware, no FFmpeg).

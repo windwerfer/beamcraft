@@ -16,7 +16,7 @@ without new information.
 | D2 | **Flatpak-friendly, minimal permissions.** `finish-args`: `--socket=wayland`, `--socket=fallback-x11`, `--share=ipc`, `--share=network`, `--device=dri`, `--system-talk-name=org.fedoraproject.FirewallD1`. Nothing else. | Sandboxed install without extra rights. Screen capture needs no permission because the portal asks the user. The firewalld name was added with the owner's approval (2026-11) so the presenter can detect a blocked port and offer a polkit-authenticated Open-port button; the app never runs as root. |
 | D3 | **Transport: QUIC (`quinn`).** Video as unreliable datagrams with per-frame fragmentation; one reliable bidirectional control stream. | Low latency without TCP head-of-line blocking; TLS 1.3 built in; one UDP port. |
 | D4 | **Security: pinned self-signed certs + pairing code.** Each install generates a cert once. The viewer pins the presenter's SHA-256 fingerprint (from QR/URI or mDNS). The presenter streams only to a viewer that sent the 6-digit pairing code once, then remembers it by client-cert fingerprint. No plaintext or skip-verify mode. | "Secure and easy": no CA, no accounts, keys generated once. |
-| D5 | **Identifiers:** app id `io.github.windwerfer.BeamCraft`; mDNS service `_beamcraft._udp`; default UDP port `47800`; ALPN `beamcraft/1`; URI scheme `beamcraft://`; config dir name `beamcraft`. | Users' firewall rules (firewalld `47800/udp`), pairings and launchers depend on them. |
+| D5 | **Identifiers:** app id `io.github.windwerfer.MirrorWire`; mDNS service `_mirrorwire._udp`; default UDP port `47800`; ALPN `mirrorwire/1`; URI scheme `mirrorwire://`; config dir name `mirrorwire`. | Users' firewall rules (firewalld `47800/udp`), pairings and launchers depend on them. |
 | D6 | **No backwards compatibility during development.** Code clarity, the better design and performance win over compatibility with older builds. One `PROTOCOL_VERSION`; presenter and viewer must match exactly (checked in `hello` before the rest is parsed; a mismatch gets a readable rejection). Every incompatible change bumps it and updates [protocol.md](protocol.md) in the same commit; no capability flags, optional-for-old-peers fields or fallback paths. Agents don't ask before a break but list each one for the owner. | The owner (2026-11-16): "remove all backwards compatibility … not prefer compatibility but go for code clarity and the better design in any case. this is development, we prefer best practice/better perf if possible. just notify me if there are breaks." Alternatives considered: additive changes (optional fields + `hello.caps`, the old D6; rejected: each feature left an old-peer branch behind: embedded-cursor capture reopen, plain v1 fragments, RTT fallback); a new ALPN per version (rejected: an ALPN mismatch fails inside TLS with no readable message). |
 | D7 | **Codec: H.264, low-latency profile** (no B-frames, no lookahead, IDR on demand, optional intra refresh). Hardware encode first (VAAPI on Linux, VideoToolbox on macOS), x264 as fallback. | Universal hardware decode, including the 2011 iMac's CPU path. HEVC/AV1 decode is not available in hardware on the target viewer. |
 | D8 | **Licence:** source `MIT OR Apache-2.0`. The Linux release builds statically link x264 (GPL-2.0-or-later), so those *binaries* are GPL; macOS builds use only FFmpeg's LGPL parts + VideoToolbox. Never copy GPL code into the source tree. | Permissive source; GPL only via packaging. A GPL-free Linux build is a roadmap item (pure-Rust encoder or system FFmpeg). |
@@ -46,7 +46,7 @@ Newest first. Add an entry when the owner decides something non-obvious.
   instead of asking. Protocol 2 dropped `hello.caps` (`cursor-metadata`, `fec-rs1`), the
   presenter's embedded-cursor reopen for old viewers, plain version-1 video fragments, the
   optional `stream_info`/`link_report` fields and the adaptive bitrate's RTT fallback. The
-  ALPN stays `beamcraft/1` (a D5 identifier); the version lives in `hello.protocol` only.
+  ALPN stays `mirrorwire/1` (a D5 identifier); the version lives in `hello.protocol` only.
 
 - **2026-11-15 (Hardware decode by default):** the owner wants hardware decoding wherever it
   exists; software is only the fallback. The desktop viewer's `--hwdec` now defaults to on on
@@ -59,7 +59,7 @@ Newest first. Add an entry when the owner decides something non-obvious.
   Order: hardware first (VAAPI/VideoToolbox via FFmpeg on the desktop, hardware MediaCodec
   on Android), then FilmCraft. Android no longer uses the platform's software MediaCodec
   decoders (`c2.android.avc.decoder` froze on old content after presenter encoder reopens).
-  Escape hatch: `beamcraft view --software-decoder ffmpeg`; on Android a home-screen switch
+  Escape hatch: `mirrorwire view --software-decoder ffmpeg`; on Android a home-screen switch
   forces FilmCraft for comparison. Evidence: bit-exact with FFmpeg on a 2804-frame VAAPI
   recording with encoder reopens and on two simulated-loss variants; tablet (MT8755,
   Cortex-A76) 14.8 ms per 1080p P-frame single-threaded vs 80–155 ms for
@@ -70,7 +70,7 @@ Newest first. Add an entry when the owner decides something non-obvious.
   load, more loss), the owner approved: FEC parity is paid from the bitrate budget, auto FEC is
   capped at 35 % (delta) / 60 % (keyframes) and its boost does not grow under congestion, and an
   AIMD controller (floor 3 Mbit/s, ceiling = the bitrate setting) follows the viewer's loss
-  reports and the RTT. On by default; `--adaptive-bitrate`, `BEAMCRAFT_ADAPTIVE_BITRATE`,
+  reports and the RTT. On by default; `--adaptive-bitrate`, `MIRRORWIRE_ADAPTIVE_BITRATE`,
   `settings.json`, Quality panel. x264 dropped `nal-hrd=cbr` (filler padded every frame to the
   target and blocks live rate changes).
 
@@ -86,13 +86,13 @@ Newest first. Add an entry when the owner decides something non-obvious.
 
 - **2026-11 (Presenter port and firewall):** the owner does not want a "magic always-open
   port" (none exists across distros). Keep default UDP 47800 (D5). The port is configurable
-  (`--port`, `BEAMCRAFT_PORT`, a saved field on the presenter start screen). mDNS and the
+  (`--port`, `MIRRORWIRE_PORT`, a saved field on the presenter start screen). mDNS and the
   QR/URI already carry the port, so the viewer finds a changed port automatically. If a
   firewall is detected, the presenter shows a prompt: an **Open port for me…** button
   when firewalld is reachable over D-Bus (polkit password prompt, runtime + permanent; see D14),
   otherwise a short general guide (Fedora `firewall-cmd`, one Ubuntu `ufw` line, and "look
   up your own distro if different") — not a list of every OS. The same guide is in the
-  README troubleshooting section. A `beamcraft.xml` firewalld service (UDP 47800) is
+  README troubleshooting section. A `mirrorwire.xml` firewalld service (UDP 47800) is
   shipped in the Flatpak/AppImage for packagers; it only works once installed on the host.
 - **2026-11 (FilmCraft encoder built):** `filmcraft-h264enc` is an optional presenter encoder
   behind cargo feature `filmcraft` (`--encoder filmcraft`, or the Encoder selector in the
@@ -102,7 +102,7 @@ Newest first. Add an entry when the owner decides something non-obvious.
   Input is the same swscale I420 picture x264 gets (shared-memory capture; a DMA-BUF stream is
   switched to shared memory). Settings: Constrained Baseline, `speed` preset, no B-frames,
   no scenecut, CBR/VBR/QP from the usual RC options, one slice per core (2–8,
-  `BEAMCRAFT_FILMCRAFT_SLICES` overrides). FilmCraft has no force-IDR call and no intra
+  `MIRRORWIRE_FILMCRAFT_SLICES` overrides). FilmCraft has no force-IDR call and no intra
   refresh, so a keyframe request re-creates the encoder (rate-control history restarts).
   Enabled in the Flatpak and AppImage (+0.8 MB stripped, a few seconds of build time); not in
   the DMG (the Mac is a viewer) or the APK (viewer only). Box numbers are in
@@ -113,7 +113,7 @@ Newest first. Add an entry when the owner decides something non-obvious.
 - **2026-11 (Android viewer):** the owner wants an installable APK (thin Kotlin/Java shell that
   is never touched, loading the Rust viewer, the neurofeed pattern), and later a browser
   viewer for people who don't want to install anything. Built as: one `NativeActivity`
-  subclass in Java (multicast lock, link hand-off), all logic in `crates/beamcraft-android`
+  subclass in Java (multicast lock, link hand-off), all logic in `crates/mirrorwire-android`
   (egui/glow, MediaCodec, no FFmpeg), APK built without Gradle, debug-signed arm64-v8a,
   minSdk 26. The browser viewer (WebTransport + WebCodecs) is a roadmap sketch, not built.
 
@@ -142,3 +142,9 @@ Newest first. Add an entry when the owner decides something non-obvious.
   service, Android package). Port 47800 is unchanged. No migration of the old `mirrorwire`
   config dir: viewers pair again once. MirrorWire builds and BeamCraft builds cannot see or
   talk to each other.
+- **2026-11-16 (rename back):** the owner changed the name back to **MirrorWire**. Every D5
+  identifier moved from `beamcraft`/`BeamCraft` back to `mirrorwire`/`MirrorWire` (same list as
+  above, `MIRRORWIRE_*` env vars). The GitHub repo and the SonarCloud project key stay
+  `windwerfer/beamcraft` / `windwerfer_beamcraft` until the owner renames them. Port 47800 is
+  unchanged. No migration of the `beamcraft` config dir: viewers pair again once. BeamCraft
+  builds and MirrorWire builds cannot see or talk to each other.

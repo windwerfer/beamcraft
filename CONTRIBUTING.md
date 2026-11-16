@@ -1,4 +1,4 @@
-# Contributing to BeamCraft
+# Contributing to MirrorWire
 
 Thanks for helping. Before you start:
 

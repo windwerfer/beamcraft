@@ -12,7 +12,7 @@ feature is not enabled on this repository yet. Until it is, email
 short, non-exploitable description and wait for a private channel before
 sending details or a sample.
 
-A useful report includes the BeamCraft version or commit, operating system
+A useful report includes the MirrorWire version or commit, operating system
 and architecture, what is affected, the impact, and reproduction steps. Please
 allow time to investigate before any public disclosure. This is a pre-1.0
 project; there is no promised response deadline or supported-version window

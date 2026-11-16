@@ -1,14 +1,14 @@
 # Protocol
 
-Everything here lives in `beamcraft-proto` (constants, framing) and `beamcraft-net`
+Everything here lives in `mirrorwire-proto` (constants, framing) and `mirrorwire-net`
 (handshake, URI, mDNS). If you change any of it, follow §4.
 
 ## 1. Connection
 
-- QUIC over UDP, default port **47800** (`DEFAULT_PORT`), ALPN **`beamcraft/1`** (`ALPN`,
+- QUIC over UDP, default port **47800** (`DEFAULT_PORT`), ALPN **`mirrorwire/1`** (`ALPN`,
   fixed; the protocol version is `hello.protocol`, §4).
-  The presenter port is configurable (`--port`, `BEAMCRAFT_PORT`, saved `settings.json`).
-  A changed port is advertised in mDNS (`ServiceInfo` port) and in the URI (`beamcraft://ip:port?…`);
+  The presenter port is configurable (`--port`, `MIRRORWIRE_PORT`, saved `settings.json`).
+  A changed port is advertised in mDNS (`ServiceInfo` port) and in the URI (`mirrorwire://ip:port?…`);
   the viewer always uses the advertised port, never a hard-coded 47800.
 - TLS 1.3 with self-signed certificates on both sides (`rcgen`, ring provider).
   - The viewer's verifier accepts the presenter's cert **only** if its SHA-256 fingerprint
@@ -41,7 +41,7 @@ unknown fields are ignored. Any change to a message bumps `PROTOCOL_VERSION` (§
 
 ## 3. Video datagrams
 
-One packet format, with or without FEC (`beamcraft-proto/src/fragment.rs`). Each encoded frame
+One packet format, with or without FEC (`mirrorwire-proto/src/fragment.rs`). Each encoded frame
 (H.264 Annex B access unit) is cut into `data_count` equal data shards of `shard_len` bytes
 (even) that fit `conn.max_datagram_size()`; the last data shard goes out unpadded. While the
 presenter's FEC setting isn't `off`, `parity_count` parity shards follow (§3b); with `off` it is
@@ -75,7 +75,7 @@ The header costs 10 bytes more per packet than the old version-1 fragments (34 b
 
 ## 3a. Cursor as coordinates (`stream_info.cursor` = `separate`)
 
-All in `beamcraft-proto/src/cursor.rs`.
+All in `mirrorwire-proto/src/cursor.rs`.
 
 **Pointer datagram** (unreliable, one per change, not tied to video frames). The first byte
 `0xC1` can't collide with a video packet (whose first byte is `WIRE_VERSION` = 2).
@@ -109,7 +109,7 @@ line up. The same message is meant to carry the future pen/Wacom mode.
 ## 3b. Forward error correction
 
 Parity shards in the packets of §3, while the presenter's FEC setting isn't `off`. Code in
-`beamcraft-proto/src/fec.rs` (erasure code: `reed-solomon-simd`, MIT AND BSD-3-Clause).
+`mirrorwire-proto/src/fec.rs` (erasure code: `reed-solomon-simd`, MIT AND BSD-3-Clause).
 
 Data shard `i` belongs to block `i % blocks`, parity shard `j` to block `j % blocks`
 (`blocks = ceil(data_count / 64)`, at most 255), so consecutive packets hit different blocks and
@@ -126,7 +126,7 @@ congestion (parity would only add load). A fixed setting `N%` gives delta frames
 keyframes 1.5 × N %. At least one parity packet per block (two for keyframes). Parity is paid
 from the bitrate budget: the encoder target is budget / (1 + delta overhead).
 
-**Adaptive bitrate** (presenter; `beamcraft-proto/src/rate.rs`): the same `link_report`
+**Adaptive bitrate** (presenter; `mirrorwire-proto/src/rate.rs`): the same `link_report`
 (loss and the queueing delay of §3c) and the presenter's backlog drops drive an AIMD
 controller (the QUIC RTT is shown in the status line but not used). Its ceiling is the bitrate setting, its floor
 3 Mbit/s. Congestion cuts the budget ×0.85 (×0.75 at ≥ 10 points excess loss, ×0.6 at ≥ 20),
@@ -147,7 +147,7 @@ live (no keyframe); VAAPI/FilmCraft reopen (keyframe), at most every 5 s and onl
 against packets received, once the frame is 30 frames old (so late packets still count). Frames
 that never arrive at all are not in the packet count; they show up as unrecoverable frames.
 
-## 3c. One-way queueing delay (`beamcraft-proto/src/delay.rs`)
+## 3c. One-way queueing delay (`mirrorwire-proto/src/delay.rs`)
 
 The viewer measures, for the **first packet that arrives of each new frame**, `arrival − sent_us`
 (its clock minus the presenter's; the unknown clock offset is constant). The lowest value of the
@@ -172,22 +172,22 @@ The presenter reads `hello.protocol` before parsing the rest of the hello
 GUI shows ("version mismatch: the presenter speaks protocol X, the viewer Y; update the
 viewer …"), not a timeout or a parse error. That check is the one thing that must keep working
 across versions: `hello` stays a JSON object with `"type":"hello"` and a numeric `protocol`.
-The ALPN stays `beamcraft/1` (D5); an ALPN mismatch would fail inside TLS with no readable
+The ALPN stays `mirrorwire/1` (D5); an ALPN mismatch would fail inside TLS with no readable
 message.
 
 In the same commit: update this file, the README if users see it, add a test in
-`beamcraft-proto` / `beamcraft-net` that pins the new layout (encode → bytes → decode), and list
+`mirrorwire-proto` / `mirrorwire-net` that pins the new layout (encode → bytes → decode), and list
 the break for the owner in the commit message.
 
 ## 5. Discovery and pairing
 
-- **mDNS:** service `_beamcraft._udp.local.`, instance name = presenter name (hostname by
+- **mDNS:** service `_mirrorwire._udp.local.`, instance name = presenter name (hostname by
   default), TXT `fp` (fingerprint), `v` (the presenter's `PROTOCOL_VERSION` in decimal; since
   protocol 3, before that always `1`), `res` (`WxH`). The viewer's list (desktop, Android and
-  `beamcraft discover`) still shows a presenter whose `v` differs or is missing, marked "older/
-  newer BeamCraft …: update the presenter/this viewer"; connecting to it gets the `hello`
+  `mirrorwire discover`) still shows a presenter whose `v` differs or is missing, marked "older/
+  newer MirrorWire …: update the presenter/this viewer"; connecting to it gets the `hello`
   rejection (§4).
-- **URI / QR:** `beamcraft://<ip>:<port>?fp=<64 hex>&code=<6 digits>&name=<name>`. `fp` is
+- **URI / QR:** `mirrorwire://<ip>:<port>?fp=<64 hex>&code=<6 digits>&name=<name>`. `fp` is
   required; `code` and `name` are optional. IPv6 hosts are bracketed.
 - **Pairing code:** 6 decimal digits from `getrandom`, new on each presenter start, shown in the
   presenter window and terminal. Only needed on the first connection of a viewer.

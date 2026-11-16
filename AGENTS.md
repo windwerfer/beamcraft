@@ -1,18 +1,18 @@
-# AGENTS.md: BeamCraft
+# AGENTS.md: MirrorWire
 
 Rules for every contributor, human or AI. This file holds the rules that must not be broken.
 The details live in [`docs/agents/`](docs/agents/README.md). If a doc there disagrees with this
 file, this file wins. If the code disagrees with a doc, the doc is the bug report: say so, don't
 silently "fix" either side.
 
-## What BeamCraft is
+## What MirrorWire is
 
 Low-latency screen mirroring over a LAN (Wi-Fi, Ethernet, USB networking). One Rust binary,
-`beamcraft`, runs as **presenter** (capture, encode, send) or **viewer** (receive, decode,
+`mirrorwire`, runs as **presenter** (capture, encode, send) or **viewer** (receive, decode,
 show). The main job: put a Fedora KDE laptop's screen on an old iMac with near-HDMI latency,
 sharp text, and no special privileges.
 
-**Design priority: clarity and the better design over compatibility.** BeamCraft is in
+**Design priority: clarity and the better design over compatibility.** MirrorWire is in
 development. When compatibility with older builds costs code, drop the compatibility: no
 fallbacks for old peers, no capability flags or optional-for-compatibility fields, no "older
 viewer" branches. Choose the clearest code and the best design (best practice, better
@@ -42,7 +42,7 @@ format changes, say what the user loses. See [decisions.md](docs/agents/decision
    `/dev/uinput`, KMS/DRM grabbing or X11-only capture paths. Screen capture goes through the
    xdg-desktop-portal ScreenCast API and PipeWire only.
 2. **No new Flatpak permissions.** The `finish-args` in
-   `packaging/flatpak/io.github.windwerfer.BeamCraft.yml` are the ceiling:
+   `packaging/flatpak/io.github.windwerfer.MirrorWire.yml` are the ceiling:
    `--socket=wayland`, `--socket=fallback-x11`, `--share=ipc`, `--share=network`,
    `--device=dri`, and `--system-talk-name=org.fedoraproject.FirewallD1` (owner-approved,
    so the presenter can query or open its UDP port through firewalld; a password prompt
@@ -56,9 +56,9 @@ format changes, say what the user loses. See [decisions.md](docs/agents/decision
    ([protocol.md](docs/agents/protocol.md)). Never change the meaning of an existing field
    silently. A peer of another version must get a readable "update the viewer/presenter"
    message, not a timeout.
-5. **Fixed identifiers do not change:** app id `io.github.windwerfer.BeamCraft`, mDNS service
-   `_beamcraft._udp`, default UDP port `47800`, URI scheme `beamcraft://`, config directory
-   `beamcraft`. Users have firewall rules, pairings and launchers that depend on them.
+5. **Fixed identifiers do not change:** app id `io.github.windwerfer.MirrorWire`, mDNS service
+   `_mirrorwire._udp`, default UDP port `47800`, URI scheme `mirrorwire://`, config directory
+   `mirrorwire`. Users have firewall rules, pairings and launchers that depend on them.
 6. **No secrets in the repository**: no tokens, keys, certificates, pairing files,
    `paired_viewers.json`, or `identity.*.der`, not even test ones that look real. Tests
    generate identities at runtime.
@@ -95,7 +95,7 @@ format changes, say what the user loses. See [decisions.md](docs/agents/decision
   the code (or with a test) before fixing it, even when someone names a location.
 - **Keep changes narrow.** Fix what was asked, where the problem is. No drive-by refactors or
   reformatting of files you didn't otherwise change.
-- **Test-first where it's cheap.** A bug fix in `beamcraft-proto` or `beamcraft-net` comes
+- **Test-first where it's cheap.** A bug fix in `mirrorwire-proto` or `mirrorwire-net` comes
   with a unit test that fails without the fix.
 - **No new heavy dependency without a reason** written in the commit message: what it replaces,
   binary-size and build-time cost, licence, and why a small hand-written version is worse.
@@ -155,7 +155,7 @@ decide, record the choice, keep going.
 ## 6. Definition of done
 
 - [ ] The gates pass locally, and CI + Build are green after the push.
-- [ ] Network-facing changes have unit tests in `beamcraft-proto` / `beamcraft-net`.
+- [ ] Network-facing changes have unit tests in `mirrorwire-proto` / `mirrorwire-net`.
 - [ ] Performance-relevant changes include before/after loopback numbers (same machine, same args).
 - [ ] New failure modes show a readable message in the GUI.
 - [ ] `README.md` and `docs/agents/` reflect the change; [roadmap.md](docs/agents/roadmap.md)

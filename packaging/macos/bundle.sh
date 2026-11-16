@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Wraps a built beamcraft binary into BeamCraft.app and a UDZO DMG
+# Wraps a built mirrorwire binary into MirrorWire.app and a UDZO DMG
 # (app + /Applications symlink, ready to drag and drop).
 # usage: packaging/macos/bundle.sh <binary> <arch-label> <min-macos> <out-dir>
 set -euo pipefail
@@ -19,45 +19,45 @@ else
 fi
 
 mkdir -p "$OUT"
-APP="$OUT/BeamCraft.app"
+APP="$OUT/MirrorWire.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN" "$APP/Contents/MacOS/beamcraft"
+cp "$BIN" "$APP/Contents/MacOS/mirrorwire"
 sed -e "s/@VERSION@/$VERSION/g" -e "s/@MIN_MACOS@/$MIN/g" "$ROOT/packaging/macos/Info.plist.in" > "$APP/Contents/Info.plist"
 
-ICONSET=$(mktemp -d)/BeamCraft.iconset
+ICONSET=$(mktemp -d)/MirrorWire.iconset
 mkdir -p "$ICONSET"
-SRC="$ROOT/packaging/icons/io.github.windwerfer.BeamCraft.png"
+SRC="$ROOT/packaging/icons/io.github.windwerfer.MirrorWire.png"
 for s in 16 32 128 256; do
   sips -z $s $s "$SRC" --out "$ICONSET/icon_${s}x${s}.png" >/dev/null
   sips -z $((s * 2)) $((s * 2)) "$SRC" --out "$ICONSET/icon_${s}x${s}@2x.png" >/dev/null
 done
 cp "$SRC" "$ICONSET/icon_512x512.png"
-iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/BeamCraft.icns"
+iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/MirrorWire.icns"
 
 echo "== linked libraries"
-otool -L "$APP/Contents/MacOS/beamcraft"
+otool -L "$APP/Contents/MacOS/mirrorwire"
 # A universal binary prints one "<path> (architecture X):" header per slice; skip those.
-if otool -L "$APP/Contents/MacOS/beamcraft" | grep -vE ':$' | grep -vE '^\s*(/usr/lib/|/System/Library/)'; then
+if otool -L "$APP/Contents/MacOS/mirrorwire" | grep -vE ':$' | grep -vE '^\s*(/usr/lib/|/System/Library/)'; then
   echo "error: binary links libraries outside the OS" >&2
   exit 1
 fi
 echo "== minimum macOS"
-otool -l "$APP/Contents/MacOS/beamcraft" | grep -A4 -E 'LC_BUILD_VERSION|LC_VERSION_MIN_MACOSX' | grep -E 'minos|version' | head -2
+otool -l "$APP/Contents/MacOS/mirrorwire" | grep -A4 -E 'LC_BUILD_VERSION|LC_VERSION_MIN_MACOSX' | grep -E 'minos|version' | head -2
 
 # Sign the .app before it goes into the DMG (ad-hoc; not notarized).
 codesign --force --deep --sign - "$APP"
 
 STAGING=$(mktemp -d)
 # ditto preserves the code signature and resource forks; cp -R may not.
-ditto "$APP" "$STAGING/BeamCraft.app"
+ditto "$APP" "$STAGING/MirrorWire.app"
 ln -s /Applications "$STAGING/Applications"
 
-DMG="$OUT/BeamCraft-${LABEL}-macos-${ARCH}.dmg"
+DMG="$OUT/MirrorWire-${LABEL}-macos-${ARCH}.dmg"
 rm -f "$DMG"
 # HFS+ so the image opens on macOS 10.13 (the Intel minimum).
 hdiutil create \
-  -volname BeamCraft \
+  -volname MirrorWire \
   -srcfolder "$STAGING" \
   -ov \
   -fs HFS+ \

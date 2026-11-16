@@ -1,15 +1,15 @@
-# firewalld service for BeamCraft
+# firewalld service for MirrorWire
 
-`beamcraft.xml` describes the default presenter port (UDP 47800) so a host
+`mirrorwire.xml` describes the default presenter port (UDP 47800) so a host
 with firewalld can open it as a named service:
 
 ```
-sudo firewall-cmd --permanent --add-service=beamcraft
+sudo firewall-cmd --permanent --add-service=mirrorwire
 sudo firewall-cmd --reload
 ```
 
-The file has to live on the *host* at `/etc/firewalld/services/beamcraft.xml`
-or `/usr/lib/firewalld/services/beamcraft.xml`. The AppImage and Flatpak
+The file has to live on the *host* at `/etc/firewalld/services/mirrorwire.xml`
+or `/usr/lib/firewalld/services/mirrorwire.xml`. The AppImage and Flatpak
 bundles include a copy under `share/firewalld/services/` for packagers, but
 those paths inside a sandbox are not visible to the host firewalld.
 

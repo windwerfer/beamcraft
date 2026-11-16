@@ -25,12 +25,12 @@ Build dependencies (Fedora and Ubuntu package lists) are in the README and in
 
 | Kind | Where | What it proves |
 |---|---|---|
-| Unit | `#[cfg(test)]` in `beamcraft-proto` | header encode/parse, fragmentation and reassembly (loss, reordering, late fragments), control framing, clock offset, stats |
-| Unit | `#[cfg(test)]` in `beamcraft-net` | identity load/create, URI round trip (including a non-default port) and rejection of bad fingerprints, QR generation, port settings precedence, firewall guide text, ufw rule parsing |
-| Unit (FilmCraft) | `beamcraft-media/src/filmcraft.rs`, feature `filmcraft` | FilmCraft output via the real `Encoder` decodes with FFmpeg, markers read back, keyframe on request; an `#[ignore]` x264-vs-FilmCraft benchmark |
-| Unit (app) | `#[cfg(test)]` in `beamcraft-app` | CLI parsing, capture/FEC preference precedence, process log, and `presenter::tests::test_source_streams_to_an_in_process_viewer`: test-pattern presenter (x264) → QUIC → viewer with 1 % loss in one process, live FEC/bitrate/cursor changes, markers read back (needs FFmpeg with libx264; part of the coverage report) |
-| Unit (firewall) | `beamcraft-net/src/firewall.rs` | hint and notice for every firewalld/ufw state, a fake `Firewalld` proving the startup probe makes no privileged call, one click = one authorization and cancel = no further prompts (D14), D-Bus error classification, zone merging, open-port messages (the D-Bus/process glue is `firewall/system.rs`) |
-| Unit (rate) | `beamcraft-proto/src/rate.rs`, `fec.rs`, `beamcraft-media/src/pipeline.rs` | AIMD controller (cuts on queue/loss/backlog, floor 3 Mbit/s, ceiling = user setting, learned random-loss baseline), closed-loop sims with a FIFO bottleneck, auto FEC caps 35 %/60 %, token-bucket bandwidth simulator (viewer `--simulate-bandwidth-kbps`), x264 bitrate change live without a keyframe, VAAPI reopen rate-limited |
+| Unit | `#[cfg(test)]` in `mirrorwire-proto` | header encode/parse, fragmentation and reassembly (loss, reordering, late fragments), control framing, clock offset, stats |
+| Unit | `#[cfg(test)]` in `mirrorwire-net` | identity load/create, URI round trip (including a non-default port) and rejection of bad fingerprints, QR generation, port settings precedence, firewall guide text, ufw rule parsing |
+| Unit (FilmCraft) | `mirrorwire-media/src/filmcraft.rs`, feature `filmcraft` | FilmCraft output via the real `Encoder` decodes with FFmpeg, markers read back, keyframe on request; an `#[ignore]` x264-vs-FilmCraft benchmark |
+| Unit (app) | `#[cfg(test)]` in `mirrorwire-app` | CLI parsing, capture/FEC preference precedence, process log, and `presenter::tests::test_source_streams_to_an_in_process_viewer`: test-pattern presenter (x264) → QUIC → viewer with 1 % loss in one process, live FEC/bitrate/cursor changes, markers read back (needs FFmpeg with libx264; part of the coverage report) |
+| Unit (firewall) | `mirrorwire-net/src/firewall.rs` | hint and notice for every firewalld/ufw state, a fake `Firewalld` proving the startup probe makes no privileged call, one click = one authorization and cancel = no further prompts (D14), D-Bus error classification, zone merging, open-port messages (the D-Bus/process glue is `firewall/system.rs`) |
+| Unit (rate) | `mirrorwire-proto/src/rate.rs`, `fec.rs`, `mirrorwire-media/src/pipeline.rs` | AIMD controller (cuts on queue/loss/backlog, floor 3 Mbit/s, ceiling = user setting, learned random-loss baseline), closed-loop sims with a FIFO bottleneck, auto FEC caps 35 %/60 %, token-bucket bandwidth simulator (viewer `--simulate-bandwidth-kbps`), x264 bitrate change live without a keyframe, VAAPI reopen rate-limited |
 | Loopback (end to end) | `scripts/loopback-test.sh` | test pattern → encoder → QUIC (pinned TLS, pairing) → reassembly → decoder, on localhost, with latency stats |
 | Real Wi-Fi (Android) | `scripts/android-wifi-run.sh`, `scripts/run-stats.py` | test pattern → x264 → QUIC over real Wi-Fi → the Android viewer on an adb-attached device; per-run video, cuts, queue, loss (§3.4) |
 | Real hardware | the owner's T480s + iMac | portal capture, VAAPI, Wi-Fi, OpenGL on a non-Metal Mac (only he can run this) |
@@ -106,7 +106,7 @@ the T480s (untested on target). Two measurements:
 
 Encoder-only benchmark (synthetic gradient + moving pattern, 120 frames, CBR 15 Mbit/s, Y-PSNR
 against a BT.601 reference, so the ceiling is ~50 dB):
-`BEAMCRAFT_BENCH_SIZE=1920x1080 cargo test --release -p beamcraft-media --features filmcraft -- --ignored bench_ --nocapture`
+`MIRRORWIRE_BENCH_SIZE=1920x1080 cargo test --release -p mirrorwire-media --features filmcraft -- --ignored bench_ --nocapture`
 
 | Encoder | Size | encode mean / p95 | max fps | Mbit/s @60 | Y-PSNR |
 |---|---|---|---|---|---|
@@ -116,7 +116,7 @@ against a BT.601 reference, so the ceiling is ~50 dB):
 | filmcraft-h264enc | 2000×1000 | 11.97 / 15.46 ms | ~84 | 14.7 | 41.54 dB |
 
 End-to-end loopback, 15 s, test pattern at 60 fps, all frame markers read back, 0 mismatches
-(`BEAMCRAFT_FEATURES=filmcraft scripts/loopback-test.sh 15 --encoder filmcraft --width W --height H --bitrate-kbps K`):
+(`MIRRORWIRE_FEATURES=filmcraft scripts/loopback-test.sh 15 --encoder filmcraft --width W --height H --bitrate-kbps K`):
 
 | Encoder | Size, bitrate | fps | Mbit/s | capture_to_encoded mean / p95 | capture_to_decoded mean / p95 |
 |---|---|---|---|---|---|
@@ -134,7 +134,7 @@ Useful runs:
 
 ```sh
 scripts/loopback-test.sh 30 --encoder x264 --width 1920 --height 1080 --bitrate-kbps 30000
-BEAMCRAFT_FEATURES=filmcraft scripts/loopback-test.sh 15 --encoder filmcraft --width 1920 --height 1080 --bitrate-kbps 30000
+MIRRORWIRE_FEATURES=filmcraft scripts/loopback-test.sh 15 --encoder filmcraft --width 1920 --height 1080 --bitrate-kbps 30000
 scripts/loopback-test.sh 10 --intra-refresh -- --simulate-loss 0.5
 ```
 
@@ -174,7 +174,7 @@ on its own: the excess-loss rule needs 3 points above the background loss.
 
 ### 3.3 Adaptive bitrate, closed-loop simulation (unit test)
 
-`cargo test -p beamcraft-proto sim_ -- --nocapture` runs the controller against an encoder
+`cargo test -p mirrorwire-proto sim_ -- --nocapture` runs the controller against an encoder
 model (60 fps, sends min(target, content demand)), auto FEC parity, `LossSim`, a FIFO bottleneck
 (150 ms buffer unless noted; overload shows as delay first, then as loss) and a `DelayMeter` as
 the viewer has, with a 500 ms report. There is no QUIC, so the backlog trigger is not exercised.
@@ -217,20 +217,20 @@ x264 1920×1080@60, 40 Mbit/s setting, adaptive bitrate and FEC auto. Viewer: th
 run, before and after alternated so Wi-Fi conditions are comparable. "before" is 38e3290.
 
 **Reproduce** (also §3.5): install the APK of the same release (`packaging/android/build-apk.sh`,
-`adb install -r dist/BeamCraft-arm64-v8a.apk`), keep the device on USB for adb and on the same
+`adb install -r dist/MirrorWire-arm64-v8a.apk`), keep the device on USB for adb and on the same
 Wi-Fi, then alternate two presenter builds and summarise:
 
 ```sh
-cp target/release/beamcraft /tmp/bc-before        # build the "before" commit first
+cp target/release/mirrorwire /tmp/bc-before        # build the "before" commit first
 for i in 1 2; do for b in before after; do
-  BEAMCRAFT_BIN=/tmp/bc-$b scripts/android-wifi-run.sh 60 /tmp/tab-$b-$i.log   # extra args go to `present`
+  MIRRORWIRE_BIN=/tmp/bc-$b scripts/android-wifi-run.sh 60 /tmp/tab-$b-$i.log   # extra args go to `present`
 done; done
 scripts/run-stats.py /tmp/tab-*.log
 ```
 
 `android-wifi-run.sh` starts the presenter (`--no-pairing --no-mdns`, test pattern, x264),
-opens its `beamcraft://` link on the device with `am start`, waits, stops both, and keeps the
-device's `beamcraft` logcat next to the log. `ADB_SERIAL` picks a device; `ADVERTISE_IP`
+opens its `mirrorwire://` link on the device with `am start`, waits, stops both, and keeps the
+device's `mirrorwire` logcat next to the log. `ADB_SERIAL` picks a device; `ADVERTISE_IP`
 overrides the presenter address (default: the local address that routes to the device's
 wlan0). The UDP port (47800) must be open in the host firewall. `run-stats.py` reads the
 per-second `presenter:` lines and the `adaptive bitrate: cut` lines; its columns are the ones

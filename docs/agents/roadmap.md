@@ -17,7 +17,7 @@ target), **planned**, **idea**. Update this file when an item moves.
 | Flatpak, AppImage, DMGs in CI | built; Flatpak and x86_64 DMG run on target |
 | Android viewer APK (arm64-v8a, MediaCodec) | built (2026-11-13); first device test 2026-11-14: connects, cursor fine, picture froze after the first frame. Fixed 2026-11-14 (decode-queue flush spiral, late pictures, hardware decoder choice, pipeline HUD), tested on the x86_64 emulator only; device retest pending |
 | Browser (WebAssembly) viewer | design sketch in Planned and Future, not started |
-| Camera QR scan in the desktop viewer | not started (Android: the phone's camera app opens the `beamcraft://` link) |
+| Camera QR scan in the desktop viewer | not started (Android: the phone's camera app opens the `mirrorwire://` link) |
 | Cursor sent as coordinates (portal METADATA cursor, pointer datagrams, viewer-drawn) | built (2026-11-13), loopback-tested with a synthetic cursor; untested with KWin on the T480s |
 | 60 fps / max frame-rate setting, negotiated rate shown | built (2026-11-13); KWin's reported max untested |
 | Click-freeze in the viewer (egui nested input lock) | fixed (2026-11-13), untested on the iMac |
@@ -198,7 +198,7 @@ target), **planned**, **idea**. Update this file when an item moves.
    wrappers, `glow`/egui-safe GL paths or a wgpu-only path, safe crates for the libc/socket calls,
    dropping the `unsafe impl Send` by restructuring threads. Remove what can go; for what must
    stay, write down why (per site) and report the list to the owner. Goal: no `unsafe` outside
-   `beamcraft-media`, then `#![forbid(unsafe_code)]` in proto, net and app.
+   `mirrorwire-media`, then `#![forbid(unsafe_code)]` in proto, net and app.
    **Realistic goal (owner-agreed):** not zero `unsafe`, but FFmpeg behind one small,
    well-documented module with a safe API; `unsafe` removed from the GUI's OpenGL code
    (yuv_glow.rs), logging (applog.rs) and network diagnostics (net/diag.rs). Reason: the iMac
@@ -269,7 +269,7 @@ target), **planned**, **idea**. Update this file when an item moves.
   the camera app, or the keypad + mDNS list); a stable release keystore so updates install
   over each other (CI debug keys change per run).
 - **FilmCraft pure-Rust decoder: built (2026-11-15) as the software fallback except on macOS**
-  (decision log). Desktop: `VideoDecoder` trait in `beamcraft-media/src/decode.rs`,
+  (decision log). Desktop: `VideoDecoder` trait in `mirrorwire-media/src/decode.rs`,
   `film_decode.rs`, `--software-decoder`. Android: `film.rs`, planes drawn by a GPU shader.
   Measured: tablet (MT8755) with the home-screen switch, VAAPI test-pattern presenter, 1080p:
   decode 14–16 ms, picture age 14–23 ms, 38–48 fps shown, live through 24 encoder reopens in
@@ -282,19 +282,20 @@ target), **planned**, **idea**. Update this file when an item moves.
   Measured, not built: FilmCraft's VA-API decoder is bit-exact with FFmpeg at 6.8 ms per
   access unit with no output delay, but `filmcraft-platform` adds ~50 crates. Needs the
   hardware decoders split into a small upstream crate first; then they go into
-  `beamcraft-film` behind the existing `VideoDecoder`/`open_decoder` path. Plan, numbers and
+  `mirrorwire-film` behind the existing `VideoDecoder`/`open_decoder` path. Plan, numbers and
   the upgrade checklist: [filmcraft.md](filmcraft.md). The presenter keeps FFmpeg for encoding.
-- **Rename to BeamCraft (owner 2026-11-14):** the owner's favourite (alternatives: WireCraft
-  etc.). Steps: check the name is free (GitHub, Flathub, app stores, trademarks); then do one
-  rename before friends install it: app id, mDNS service, ALPN, URI scheme, config dir (D5),
-  crate names, docs, packaging. Keep port 47800. Consider migrating old config and pairings from
-  `beamcraft`. Needs the owner's go-ahead on the final name (a D5 change).
+- **Name back to MirrorWire (owner 2026-11-16):** done in the code, packaging and docs (D5
+  history in [decisions.md](decisions.md)). Still `beamcraft`: the GitHub repo
+  (`windwerfer/beamcraft`), the SonarCloud project key (`windwerfer_beamcraft`) and the dev
+  container's workspace path and `beamcraft_home` volume. They change only when the owner renames
+  the repo and the SonarCloud project. Before friends install it: check the name is free
+  (Flathub, app stores, trademarks).
 - **Android presenter** later (MediaProjection + MediaCodec encode; needs Java/JNI glue).
 - **Browser viewer (WebAssembly), sketch:** see also [Future: phone/tablet as input device](#future-phonetablet-as-input-device) for the agreed trust model and input-mode scope.
   - Presenter: add an HTTP/3 WebTransport endpoint on the presenter's own UDP port (any port, including 47800; not 443), e.g. `wtransport` or `h3` + `quinn`. Video goes as WebTransport datagrams with the existing fragment header; control messages on a bidirectional stream. Decode with **WebCodecs**.
   - Trust: browsers reject self-signed certs unless pinned via `serverCertificateHashes` (cert valid ≤ 14 days, ECDSA P-256). The presenter mints a short-lived cert and puts its hash in the QR/URL. The web page itself must come from a normal HTTPS origin (e.g. GitHub Pages); only the WebTransport session goes to the laptop on the LAN. Pairing is bound to the pairing identity, not to one certificate, so pairings survive automatic cert rotation.
   - Page: egui compiled to wasm (or plain JS) + WebCodecs `VideoDecoder` (`avc1.42E0xx`, `optimizeForLatency: true`), drawing `VideoFrame`s onto a canvas.
-  - Wire: reuse `beamcraft-proto` compiled to wasm (it has no I/O by design, see architecture.md §1).
+  - Wire: reuse `mirrorwire-proto` compiled to wasm (it has no I/O by design, see architecture.md §1).
   - The viewer and the input modes in the Future section can all run in the browser. The presenter stays a native app.
 
 
@@ -303,7 +304,7 @@ target), **planned**, **idea**. Update this file when an item moves.
 **Status: idea.** Parked until screen mirroring is solid and the owner sends a UI
 sketch. Do not start this work until then.
 
-The phone or tablet already shows the laptop screen as a BeamCraft viewer.
+The phone or tablet already shows the laptop screen as a MirrorWire viewer.
 These modes add a reverse input channel so the same device can control the
 presenter: a PowerPoint remote, a laser pointer, a drawing overlay, a
 touchpad, and (later) a Wacom-style pen tablet. They all share one foundation.
@@ -315,7 +316,7 @@ connection (do not switch to TCP).
 
 - Unreliable datagrams for pointer and pen samples (high rate; loss is acceptable).
   **Reuse the cursor path:** the presenter→viewer pointer datagram
-  (`beamcraft-proto/src/cursor.rs`, protocol.md §3a) already has a `tool` byte and accepts
+  (`mirrorwire-proto/src/cursor.rs`, protocol.md §3a) already has a `tool` byte and accepts
   trailing fields, so pen pressure/tilt/buttons are appended there (and the same message goes
   viewer→presenter for input), with `cursor_rect()` inverted to map tablet touches back to
   presenter pixels.
@@ -383,17 +384,17 @@ Found while writing these docs (2026-11-12, commit `f7677c7`). Fix them in their
 - **Hardcoded 2000×1000:** `--width/--height` default to 2000×1000 and the GUI presenter uses
   them, so a 1920×1080 screen is scaled and distorted. The docs describe native resolution as
   the goal. (Being fixed under Next 1.)
-- **`unsafe` without `// SAFETY:` comments** in `beamcraft-media` (`encode.rs`, `decode.rs`,
+- **`unsafe` without `// SAFETY:` comments** in `mirrorwire-media` (`encode.rs`, `decode.rs`,
   `hw.rs`, incl. `unsafe impl Send` for FFmpeg wrappers). No workspace lint forbids `unsafe`
   elsewhere yet (consider `unsafe_code = "forbid"` in proto/net/app).
 - **Panicking shortcuts in production code:** `Mutex::lock().expect(..)` throughout
-  `beamcraft-app` and `beamcraft-net` (a poisoned lock crashes instead of recovering), plus a
+  `mirrorwire-app` and `mirrorwire-net` (a poisoned lock crashes instead of recovering), plus a
   few `expect`s (`Control::encode`, scaler init, URI building) and `unwrap()` in
   `stats.rs`/`fragment.rs` header parsing (safe today after the length check, but brittle). No
   clippy lints (`unwrap_used`, `expect_used`) enforce the rule.
 - **No rate limit on pairing attempts:** a 6-digit code with unlimited `hello` retries per
   presenter run. Consider a per-address attempt limit or a lockout after N wrong codes.
-- **ALPN vs protocol:** `ALPN` is `beamcraft/1` and `PROTOCOL_VERSION` is 1; nothing ties them
+- **ALPN vs protocol:** `ALPN` is `mirrorwire/1` and `PROTOCOL_VERSION` is 1; nothing ties them
   together in code. Bump both together (protocol.md §4).
 - **macOS presenter:** the **Present** button is disabled on macOS (no capture source there
   yet); VideoToolbox encode is built but untested.

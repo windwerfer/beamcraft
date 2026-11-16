@@ -92,17 +92,17 @@ jobs:
           PKG_CONFIG_LIBDIR: ${{ github.workspace }}/.ffmpeg/lib/pkgconfig
         run: |
           cargo build --release --locked --target ${{ matrix.target }} \
-            -p beamcraft-app --no-default-features --features gui,static-ffmpeg
+            -p mirrorwire-app --no-default-features --features gui,static-ffmpeg
       - name: Smoke test
-        run: target/${{ matrix.target }}/release/beamcraft --version
+        run: target/${{ matrix.target }}/release/mirrorwire --version
       # Each slice keeps its own minimum macOS (arm64 11.0, x86_64 10.13); the
       # macos-universal job merges them with lipo into one .app / DMG.
       - name: Stage binary
-        run: cp target/${{ matrix.target }}/release/beamcraft beamcraft-${{ matrix.arch }}
+        run: cp target/${{ matrix.target }}/release/mirrorwire mirrorwire-${{ matrix.arch }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: macos-bin-${{ matrix.arch }}
-          path: beamcraft-${{ matrix.arch }}
+          path: mirrorwire-${{ matrix.arch }}
           retention-days: 1
           if-no-files-found: error
 
@@ -119,18 +119,18 @@ jobs:
           merge-multiple: true
       - name: lipo
         run: |
-          lipo -create bin/beamcraft-arm64 bin/beamcraft-x86_64 -output bin/beamcraft
-          chmod +x bin/beamcraft
-          lipo -info bin/beamcraft
+          lipo -create bin/mirrorwire-arm64 bin/mirrorwire-x86_64 -output bin/mirrorwire
+          chmod +x bin/mirrorwire
+          lipo -info bin/mirrorwire
       - name: Bundle .app and DMG
         id: bundle
         # LSMinimumSystemVersion is the lowest slice (Intel, 10.13); the arm64
         # slice needs 11.0, which every Apple Silicon Mac has anyway.
-        run: packaging/macos/bundle.sh bin/beamcraft universal 10.13 dist
+        run: packaging/macos/bundle.sh bin/mirrorwire universal 10.13 dist
       - name: Smoke test
         run: |
-          dist/BeamCraft.app/Contents/MacOS/beamcraft --version
-          arch -x86_64 dist/BeamCraft.app/Contents/MacOS/beamcraft --version
+          dist/MirrorWire.app/Contents/MacOS/mirrorwire --version
+          arch -x86_64 dist/MirrorWire.app/Contents/MacOS/mirrorwire --version
       # archive: false (upload-artifact v7+) uploads the bare .dmg; the artifact
       # name is the filename, so the Actions download is not wrapped in a zip.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -171,14 +171,14 @@ jobs:
       - name: Build
         env:
           PKG_CONFIG_PATH: ${{ github.workspace }}/.ffmpeg/lib/pkgconfig
-        run: cargo build --release --locked -p beamcraft-app --features static-ffmpeg,filmcraft
+        run: cargo build --release --locked -p mirrorwire-app --features static-ffmpeg,filmcraft
       - name: Smoke test
-        run: target/release/beamcraft --version && ldd target/release/beamcraft
+        run: target/release/mirrorwire --version && ldd target/release/mirrorwire
       - name: Package AppImage
         run: packaging/appimage/build.sh dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          path: dist/BeamCraft-x86_64.AppImage
+          path: dist/MirrorWire-x86_64.AppImage
           archive: false
           if-no-files-found: error
 
@@ -193,13 +193,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6.8
         with:
-          bundle: BeamCraft-x86_64.flatpak
-          manifest-path: packaging/flatpak/io.github.windwerfer.BeamCraft.yml
+          bundle: MirrorWire-x86_64.flatpak
+          manifest-path: packaging/flatpak/io.github.windwerfer.MirrorWire.yml
           cache-key: flatpak-builder-${{ hashFiles('packaging/flatpak/*.yml') }}
           upload-artifact: false
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          path: BeamCraft-x86_64.flatpak
+          path: MirrorWire-x86_64.flatpak
           archive: false
           if-no-files-found: error
 
@@ -228,7 +228,7 @@ jobs:
       - name: cargo-ndk
         run: cargo install cargo-ndk --locked --version 4.1.2
       - name: Clippy (Android target)
-        run: cargo ndk -t arm64-v8a --platform 26 clippy --release --locked -p beamcraft-android -- -D warnings
+        run: cargo ndk -t arm64-v8a --platform 26 clippy --release --locked -p mirrorwire-android -- -D warnings
       - name: Release keystore
         # Decoded from secrets so every APK has the same signature and updates install
         # over the old one. Without the secrets (fork PRs) build-apk.sh makes a debug key.
@@ -239,22 +239,22 @@ jobs:
             # Pasting into the web form can add line breaks, spaces or invisible Unicode
             # whitespace; keep only base64 characters so base64 -d accepts it.
             printf '%s' "$KEYSTORE_BASE64" | LC_ALL=C tr -cd 'A-Za-z0-9+/=' | base64 -d > "$RUNNER_TEMP/release.jks"
-            echo "BEAMCRAFT_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "MIRRORWIRE_KEYSTORE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
             echo "Signing with the release key"
           else
-            echo "BEAMCRAFT_KEYSTORE=$RUNNER_TEMP/beamcraft-debug.keystore" >> "$GITHUB_ENV"
+            echo "MIRRORWIRE_KEYSTORE=$RUNNER_TEMP/mirrorwire-debug.keystore" >> "$GITHUB_ENV"
             echo "::warning::KEYSTORE_BASE64 not set, signing with a throwaway debug key"
           fi
       - name: Build APK
         env:
           VERSION_CODE: ${{ github.run_number }}
-          BEAMCRAFT_KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
-          BEAMCRAFT_KEY_PASS: ${{ secrets.KEY_PASSWORD }}
-          BEAMCRAFT_KEY_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
+          MIRRORWIRE_KS_PASS: ${{ secrets.KEYSTORE_PASSWORD }}
+          MIRRORWIRE_KEY_PASS: ${{ secrets.KEY_PASSWORD }}
+          MIRRORWIRE_KEY_ALIAS: ${{ secrets.KEYSTORE_ALIAS }}
         run: packaging/android/build-apk.sh dist
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          path: dist/BeamCraft-arm64-v8a.apk
+          path: dist/MirrorWire-arm64-v8a.apk
           archive: false
           if-no-files-found: error
 
@@ -278,4 +278,4 @@ jobs:
           ls -la artifacts
           gh release create "${GITHUB_REF_NAME}" \
             artifacts/*.dmg artifacts/*.AppImage artifacts/*.flatpak artifacts/*.apk \
-            --repo "${GITHUB_REPOSITORY}" --title "BeamCraft ${GITHUB_REF_NAME}" --generate-notes
+            --repo "${GITHUB_REPOSITORY}" --title "MirrorWire ${GITHUB_REF_NAME}" --generate-notes
