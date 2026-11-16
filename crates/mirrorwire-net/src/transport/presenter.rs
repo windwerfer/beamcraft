@@ -1,6 +1,6 @@
 //! Presenter side: accept viewers, check pairing, send video and cursor.
 
-use super::link::{rate_summary, LinkControl, LinkState};
+use super::link::{rate_summary, LinkControl, LinkState, Peer};
 use super::{ms, read_body, read_msg, transport_config, version_mismatch, write_msg};
 use crate::diag::{push_attempt, IncomingAttempt};
 use crate::identity::Identity;
@@ -309,7 +309,8 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
         IncomingAttempt::new(remote, Some(name.clone()), true, "connected"),
     );
     tracing::info!("viewer {name} connected from {remote}");
-    shared.fec.viewer_connected();
+    let peer = Peer::new(&fp, remote.ip());
+    shared.fec.viewer_connected(peer.clone());
     let active = ActiveViewer { conn: conn.clone() };
     if let Some(old) = shared.current.send_replace(Some(active)) {
         old.conn.close(1u32.into(), b"replaced by another viewer");
@@ -396,6 +397,7 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
     if shared.current.borrow().is_none() {
         shared.connected.send_replace(false);
     }
+    shared.fec.viewer_left(&peer);
     tracing::info!("viewer {name} disconnected");
     result
 }

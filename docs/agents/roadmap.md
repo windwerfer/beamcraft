@@ -137,8 +137,13 @@ target), **planned**, **idea**. Update this file when an item moves.
       extra FEC before more video, start from the last good value per peer. ~100–150 LOC.
       (Done 2026-11-15: slow start from 10 Mbit/s and no growth while unused. Done 2026-11-16:
       each cut remembers what the link did not carry; from 90 % to 115 % of it the climb is a
-      quarter as fast and flat-queue loss counts as congestion (testing.md §3.3). Still open:
-      last good value per peer, probing with FEC. Note for VAAPI: slow start changes the rate each
+      quarter as fast and flat-queue loss counts as congestion (testing.md §3.3). Done
+      2026-11-16: a reconnecting viewer (fingerprint + address, 10 min, in memory, not on disk:
+      a stale capacity would overrun the link at connect) starts at min(budget it left with,
+      60 % of its last failure) and slow-starts to 90 % of it; sim: shallow-buffer and < 10
+      Mbit/s links freeze far less in the first 20 s, VAAPI 20 Mbit/s / 150 ms and a link that
+      got worse a little more (testing.md §3.3). Not yet seen on hardware: the USB test link
+      never cut, so no resume fired. Still open: probing with FEC. Note for VAAPI: slow start changes the rate each
       report, but VAAPI reopens at most every 5 s, so it reaches 40 Mbit/s in steps; untested
       on the T480s.)
    5. **Don't cut when FEC recovered everything; smooth the loss: tried and rejected in the

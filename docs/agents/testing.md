@@ -267,6 +267,33 @@ the table above (same sim, same seeds):
   paced 0 → 25 frozen frames and 0.82 → 3.81 % lost; shallow 20 ms 1.19 → 2.27 % lost (test
   fails). The slow decay keeps cutting after the loss is gone.
 
+**Reconnect: resume from the last budget (2026-11-16, `sim_reconnect_resumes_the_last_budget`).**
+A 90 s session, then the same viewer reconnects; the first 20 s after the reconnect, means of
+the same 10 runs as above, paced. Fresh = slow start from 10 Mbit/s; resumed = start at
+min(budget when it left, 60 % of the last bad budget), slow start to 90 % of it, keep the
+failure for the hysteresis; without a failure, resumed = fresh. Frozen frames (lost frames):
+
+| Link | x264 fresh → resumed | VAAPI fresh → resumed |
+|---|---|---|
+| no limit; no limit, then 16 Mbit/s / 50 ms | unchanged (no failure to resume from) | unchanged |
+| 16 Mbit/s, 300 ms | 0 → 0 (lag p95 50 → 36 ms) | 0 → 0 (lag p95 257 → 47 ms) |
+| 16 Mbit/s, 50 ms | 32 (13) → 0 (0) | 64 (19) → 50 (10) |
+| 16 Mbit/s, 20 ms | 32 (16) → 0 (0) | 503 (108) → 160 (22) |
+| 8 Mbit/s, 50 ms | 37 (33) → 0 (0) | 103 (66) → 47 (17) |
+| 5 Mbit/s, 300 ms | 85 (51) → 0 (0) | 98 (58) → 30 (5) |
+| 20 Mbit/s, 150 ms | 0 → 0 | **0 → 18.5 (11)** |
+| 20 Mbit/s, then 8 Mbit/s / 50 ms (link got worse) | **37 (33) → 59 (31)** | **103 (66) → 115 (48)** |
+
+Start share tried: 1.0 (the budget it left with) froze more than fresh on shallow buffers (x264
+16/20: 32 → 119; the connect keyframe at 1.25 × a budget at the limit does not fit), 0.85 and
+0.75 in between, 0.6 best. Resuming without a failure (an unlimited LAN remembered at 40 Mbit/s,
+then a 16 Mbit/s / 50 ms path): 13 → 78 lost frames, so that case starts fresh. Remembering only
+the failure (slow start from 10 Mbit/s, capped at 90 % of it): as good on 16 Mbit/s links, but no
+help below 10 Mbit/s (5 Mbit/s: 85 frozen either way). Hardware (2026-11-16, USB tethering,
+h264_vaapi test pattern, three 40 s sessions with a force-stop between): picture within ~0.5 s
+of each reconnect, 0.0 % loss, 0 unrecoverable frames; the link never cut, so each reconnect
+started fresh (resume not exercised on hardware).
+
 ### 3.4 Real Wi-Fi: presenter in the dev container, Android tablet viewer (2026-11-15)
 
 Presenter: this repo's dev container on the Fedora laptop (host network, Wi-Fi), test pattern,

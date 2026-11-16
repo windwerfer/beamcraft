@@ -38,6 +38,9 @@
 //!   background counts as congestion even with a flat queue. A shallow
 //!   bottleneck buffer (≤ 50 ms: a router, USB) drops before a queue shows,
 //!   so without this each overrun lost ~23 % of a report's packets.
+//! * Reconnect: a viewer whose link failed before starts from the budget it
+//!   left with, at most 60 % of what failed, and keeps that failure
+//!   ([`AdaptiveBitrate::resume`]): no overrun at connect on a known link.
 //! * Only while it is used: the budget does not grow while the presenter
 //!   sends less than 80 % of it (static or simple content). Otherwise it
 //!   drifts far above what was ever proven to fit, and the next busy frame
@@ -92,6 +95,10 @@ const NEAR_BAD_SHARE: f32 = 0.9;
 const PAST_BAD_SHARE: f32 = 1.15;
 /// The additive step near the last bad budget, as a share of the normal one.
 const NEAR_BAD_STEP: f32 = 0.25;
+/// A reconnecting viewer starts at most at this share of its last bad
+/// budget: its first keyframe (paced at 1.25 × the budget) then fits.
+/// Simulated 0.6 / 0.75 / 0.85 / 1.0: 0.6 froze least on shallow buffers.
+pub const RESUME_OF_BAD: f32 = 0.6;
 
 /// One feedback sample. `loss_pct` is `None` when only the presenter's own
 /// view is known (send window without a viewer report).
@@ -170,6 +177,16 @@ impl std::fmt::Display for Cut {
     }
 }
 
+/// What the controller learned about one viewer's link, to start from when
+/// the same viewer reconnects ([`AdaptiveBitrate::resume`]).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LinkMemory {
+    /// The budget when the viewer left (kbit/s).
+    pub good_kbps: u32,
+    /// What the link did not carry at the last cut (kbit/s).
+    pub bad_kbps: Option<u32>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct AdaptiveBitrate {
     ceiling_kbps: u32,
@@ -230,6 +247,32 @@ impl AdaptiveBitrate {
         }
     }
 
+    /// A viewer that was here before: start from the budget it left with, at
+    /// most [`RESUME_OF_BAD`] of the budget that failed last, and keep that
+    /// failure. Slow start then runs up to [`NEAR_BAD_SHARE`] of it and the
+    /// rest is the slow climb, so the old limit is not hit at connect (and
+    /// a link slower than [`START_KBPS`] is not overrun at once). Without a
+    /// failure this is [`Self::new`]. Simulated, testing.md §3.3.
+    pub fn resume(ceiling_kbps: u32, memory: LinkMemory) -> Self {
+        // Without a failure there is nothing to start from: an unlimited
+        // LAN reconnecting over a worse path would hit it at the ceiling.
+        let Some(bad) = memory.bad_kbps else {
+            return Self::new(ceiling_kbps);
+        };
+        let start = memory.good_kbps.min((bad as f32 * RESUME_OF_BAD) as u32);
+        let mut c = Self::with_start(ceiling_kbps, start);
+        c.last_bad_kbps = memory.bad_kbps.map(|b| b as f32);
+        c
+    }
+
+    /// What to remember about this link for the viewer's next connection.
+    pub fn memory(&self) -> LinkMemory {
+        LinkMemory {
+            good_kbps: self.budget_kbps(),
+            bad_kbps: self.last_bad_kbps.map(|b| b.round() as u32),
+        }
+    }
+
     /// The most recent cut and why it happened.
     pub fn last_cut(&self) -> Option<Cut> {
         self.last_cut
@@ -280,7 +323,8 @@ impl AdaptiveBitrate {
         *self = Self::new(self.ceiling_kbps);
     }
 
-    /// Still in slow start (no cut yet).
+    /// Still in slow start (no cut yet; after a resume, not yet near the
+    /// last bad budget).
     pub fn in_slow_start(&self) -> bool {
         self.slow_start
     }
@@ -426,8 +470,18 @@ impl AdaptiveBitrate {
                     }
                     _ => step,
                 };
+                // Only a resumed controller has a bad budget in slow start:
+                // it grows fast up to the zone, then slowly.
+                let near_bad = self.last_bad_kbps.map(|b| b * NEAR_BAD_SHARE);
                 self.budget_kbps = if self.slow_start {
-                    self.budget_kbps * SLOW_START_PER_S.powf(secs)
+                    let grown = self.budget_kbps * SLOW_START_PER_S.powf(secs);
+                    match near_bad {
+                        Some(cap) if grown >= cap => {
+                            self.slow_start = false;
+                            grown.min(cap).max(self.budget_kbps)
+                        }
+                        _ => grown,
+                    }
                 } else {
                     self.budget_kbps + step * secs
                 }
@@ -531,6 +585,55 @@ mod tests {
             b = c.on_sample(s, *t);
         }
         b
+    }
+
+    #[test]
+    fn resume_starts_below_the_last_failure_and_slow_starts_up_to_it() {
+        let mut t = 0;
+        // Nothing failed: the same as a new viewer.
+        let none = LinkMemory {
+            good_kbps: 40_000,
+            bad_kbps: None,
+        };
+        assert_eq!(
+            AdaptiveBitrate::resume(40_000, none),
+            AdaptiveBitrate::new(40_000)
+        );
+        // Left at 15 after a failure at 16: start at 60 % of 16.
+        let mut c = AdaptiveBitrate::resume(
+            40_000,
+            LinkMemory {
+                good_kbps: 15_000,
+                bad_kbps: Some(16_000),
+            },
+        );
+        assert_eq!(c.budget_kbps(), 9_600);
+        assert!(c.in_slow_start());
+        // Slow start stops at 90 % of the failure (4 reports: ×1.25 per
+        // second), then the climb is a quarter of 4 % of the ceiling per s.
+        assert_eq!(feed(&mut c, loss(0.0), 3, &mut t), 13_416);
+        assert!(c.in_slow_start());
+        assert_eq!(feed(&mut c, loss(0.0), 1, &mut t), 14_400);
+        assert!(!c.in_slow_start());
+        assert_eq!(feed(&mut c, loss(0.0), 2, &mut t), 14_800);
+        // Near the failure, loss with a flat queue counts at once.
+        assert_eq!(c.memory().bad_kbps, Some(16_000));
+        // A viewer that left at the floor starts there, below the 10 Mbit/s
+        // a new viewer gets.
+        let low = LinkMemory {
+            good_kbps: 3_000,
+            bad_kbps: Some(5_000),
+        };
+        assert_eq!(AdaptiveBitrate::resume(40_000, low).budget_kbps(), 3_000);
+        // The ceiling still wins.
+        let c = AdaptiveBitrate::resume(
+            8_000,
+            LinkMemory {
+                good_kbps: 30_000,
+                bad_kbps: Some(30_000),
+            },
+        );
+        assert_eq!(c.budget_kbps(), 8_000);
     }
 
     #[test]
@@ -893,6 +996,7 @@ mod tests {
 
     /// Closed-loop simulation without QUIC: encoder model -> FEC parity ->
     /// random loss -> bottleneck -> viewer report every 500 ms -> controller.
+    #[derive(Clone, Copy)]
     struct Link {
         /// Bitrate the content needs (x264 sends less than the target on
         /// easy content, since there is no HRD filler).
@@ -992,9 +1096,20 @@ mod tests {
     }
 
     fn simulate(link: Link, ceiling_kbps: u32, secs: u64) -> SimResult {
+        simulate_with(link, AdaptiveBitrate::new(ceiling_kbps), secs, 10).0
+    }
+
+    /// Runs `c` on `link` for `secs`; the frame, queue and lag metrics count
+    /// from `measure_from_s`. Also returns the controller at the end.
+    fn simulate_with(
+        link: Link,
+        mut c: AdaptiveBitrate,
+        secs: u64,
+        measure_from_s: u64,
+    ) -> (SimResult, AdaptiveBitrate) {
         use crate::fec::{FecMode, LossSim};
         const PKT: usize = 1200;
-        let mut c = AdaptiveBitrate::new(ceiling_kbps);
+        let measure_us = measure_from_s * 1_000_000;
         let mut lossy = LossSim::new(link.loss, link.burst, 0x5eed);
         let mut fifo =
             (link.bottleneck_kbps > 0).then(|| Fifo::new(link.bottleneck_kbps, link.buffer_ms));
@@ -1089,12 +1204,12 @@ mod tests {
                 // The first packet of the frame that arrives is what the
                 // viewer measures (sent_us = frame start, +3 ms path).
                 meter.on_packet(frame as u32, start_us, at + wait + 3_000);
-                if !std::mem::replace(&mut frame_seen, true) && t_us >= 10_000_000 {
+                if !std::mem::replace(&mut frame_seen, true) && t_us >= measure_us {
                     queue_samples.push(wait as f64 / 1000.0);
                     lag_samples.push((start_us - t_us + wait) as f64 / 1000.0);
                 }
                 received += 1;
-                if k < data && t_us >= (secs - 20) * 1_000_000 {
+                if k < data && t_us >= secs.saturating_sub(20) * 1_000_000 {
                     late_bytes += PKT;
                 }
             }
@@ -1104,9 +1219,9 @@ mod tests {
             } else if key {
                 broken = false;
             }
-            frozen_frames += u32::from(broken && t_us >= 10_000_000);
+            frozen_frames += u32::from(broken && t_us >= measure_us);
             if frame_lost > parity {
-                lost_frames += u32::from(t_us >= 10_000_000);
+                lost_frames += u32::from(t_us >= measure_us);
             }
             // The viewer asks again while it waits; the presenter answers at
             // most every 500 ms (its gate on a LAN RTT).
@@ -1137,17 +1252,17 @@ mod tests {
                     now_ms,
                 );
                 cuts.extend(c.cut_by_last_sample());
-                if now_ms >= 10_000 {
+                if now_ms >= measure_from_s * 1000 {
                     min_kbps = min_kbps.min(c.budget_kbps());
                 }
                 (expected, received) = (0, 0);
             }
         }
-        SimResult {
+        let r = SimResult {
             cuts,
             final_kbps: c.budget_kbps(),
             min_kbps,
-            delivered_kbps: late_bytes as f32 * 8.0 / 1000.0 / 20.0,
+            delivered_kbps: late_bytes as f32 * 8.0 / 1000.0 / secs.min(20) as f32,
             lost_pct: 100.0 * total_lost as f32 / total_sent.max(1) as f32,
             queue_mean_ms: queue_samples.summary().mean as f32,
             queue_p95_ms: queue_samples.summary().p95 as f32,
@@ -1156,7 +1271,8 @@ mod tests {
             frozen_frames,
             lag_p95_ms: lag_samples.summary().p95 as f32,
             lag_max_ms: lag_samples.summary().max as f32,
-        }
+        };
+        (r, c)
     }
 
     fn print(name: &str, r: &SimResult) {
@@ -1349,27 +1465,36 @@ mod tests {
         frozen_frames: f32,
         lag_p95_ms: f32,
         lag_max_ms: f32,
+        queue_p95_ms: f32,
     }
 
     fn mean(link: Link) -> Mean {
+        mean_of(|demand_kbps, ceiling| {
+            simulate(
+                Link {
+                    demand_kbps,
+                    ..link
+                },
+                ceiling,
+                90,
+            )
+        })
+    }
+
+    /// [`Mean`] of `run(demand_kbps, ceiling_kbps)` over the 10 cases.
+    fn mean_of(run: impl Fn(u32, u32) -> SimResult) -> Mean {
         let mut m = Mean::default();
         let mut n = 0.0;
         for ceiling in [36_000, 38_000, 40_000, 42_000, 44_000] {
             for demand_kbps in [60_000, 18_000] {
-                let r = simulate(
-                    Link {
-                        demand_kbps,
-                        ..link
-                    },
-                    ceiling,
-                    90,
-                );
+                let r = run(demand_kbps, ceiling);
                 m.cuts += r.cuts.len() as f32;
                 m.lost_frames += r.lost_frames as f32;
                 m.video_kbps += r.delivered_kbps;
                 m.lost_pct += r.lost_pct;
                 m.frozen_frames += r.frozen_frames as f32;
                 m.lag_p95_ms += r.lag_p95_ms;
+                m.queue_p95_ms += r.queue_p95_ms;
                 m.lag_max_ms = m.lag_max_ms.max(r.lag_max_ms);
                 n += 1.0;
             }
@@ -1380,6 +1505,7 @@ mod tests {
         m.lost_pct /= n;
         m.frozen_frames /= n;
         m.lag_p95_ms /= n;
+        m.queue_p95_ms /= n;
         m
     }
 
@@ -1439,6 +1565,87 @@ mod tests {
                     paced.lag_p95_ms <= max_lag_p95.max(burst.lag_p95_ms),
                     "{mode} {name}: {paced:?}"
                 );
+            }
+        }
+    }
+
+    /// A 90 s session on `before`, then the same viewer reconnects to
+    /// `after`, either from scratch or resumed from what the first session
+    /// learned. The metrics cover the first 20 s after the reconnect.
+    fn reconnect(before: Link, after: Link, ceiling: u32, resume: bool) -> SimResult {
+        let (_, c) = simulate_with(before, AdaptiveBitrate::new(ceiling), 90, 10);
+        let c = if resume {
+            AdaptiveBitrate::resume(ceiling, c.memory())
+        } else {
+            AdaptiveBitrate::new(ceiling)
+        };
+        simulate_with(after, c, 20, 0).0
+    }
+
+    #[test]
+    fn sim_reconnect_resumes_the_last_budget() {
+        let wifi50 = Link {
+            buffer_ms: 50,
+            ..WIFI
+        };
+        let wifi20 = Link {
+            buffer_ms: 20,
+            ..WIFI
+        };
+        let link20 = Link {
+            bottleneck_kbps: 20_000,
+            ..LAN
+        };
+        let link5 = Link {
+            bottleneck_kbps: 5_000,
+            ..WIFI
+        };
+        let link8 = Link {
+            bottleneck_kbps: 8_000,
+            ..wifi50
+        };
+        // Frozen frames in the 20 s after the reconnect, fresh -> resumed
+        // (testing.md §3.3); the last number is how many more frozen frames
+        // resuming may cost:
+        //   x264: 16/50 32 -> 0, 16/20 32 -> 0, 5/300 85 -> 0, 8/50 37 -> 0
+        //   VAAPI: 16/50 64 -> 50, 16/20 503 -> 160, 5/300 98 -> 30,
+        //     8/50 103 -> 47; 16/300 0 -> 0 with lag p95 257 -> 47 ms
+        //   worse: VAAPI 20/150 0 -> 18.5; 20 then 8 Mbit/s: x264 37 -> 59,
+        //     VAAPI 103 -> 115 (but fewer lost frames: 66 -> 48)
+        for (name, before, after, may_cost) in [
+            ("no limit", LAN, LAN, 0.0),
+            ("16 Mbit/s, 300 ms", WIFI, WIFI, 0.0),
+            ("16 Mbit/s, 50 ms", wifi50, wifi50, 0.0),
+            ("16 Mbit/s, 20 ms", wifi20, wifi20, 0.0),
+            ("20 Mbit/s, 150 ms", link20, link20, 30.0),
+            ("5 Mbit/s, 300 ms", link5, link5, 0.0),
+            ("8 Mbit/s, 50 ms", link8, link8, 0.0),
+            ("no limit, then 16 Mbit/s, 50 ms", LAN, wifi50, 0.0),
+            ("20 Mbit/s, then 8 Mbit/s, 50 ms", link20, link8, 30.0),
+        ] {
+            for keyframes in [Keyframes::Live, Keyframes::Reopen] {
+                let mode = if keyframes == Keyframes::Live {
+                    "x264"
+                } else {
+                    "vaapi"
+                };
+                let run = |resume: bool| {
+                    mean_of(|demand_kbps, ceiling| {
+                        let with = |l: Link| Link {
+                            demand_kbps,
+                            keyframes,
+                            ..l
+                        };
+                        reconnect(with(before), with(after), ceiling, resume)
+                    })
+                };
+                let (fresh, resumed) = (run(false), run(true));
+                eprintln!("{mode} {name}: fresh {fresh:?}\n{mode} {name}: resumed {resumed:?}");
+                assert!(
+                    resumed.frozen_frames <= fresh.frozen_frames + may_cost,
+                    "{mode} {name}"
+                );
+                assert!(resumed.lost_pct <= fresh.lost_pct + 0.5, "{mode} {name}");
             }
         }
     }

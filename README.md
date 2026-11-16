@@ -229,7 +229,12 @@ to build (before packets are lost), the presenter lowers the rate (down to 3 Mbi
 while the queue stays flat is random Wi-Fi loss: FEC covers it and the rate stays; heavy loss (or the presenter's own send queue filling up)
 also lowers it. On a clean link the rate rises again slowly. A new viewer starts at 10 Mbit/s and the rate grows quickly (×1.25 per second)
 until the link pushes back, and it only grows while the stream actually uses it, so a quiet
-screen does not leave a budget the link can't carry. FEC parity is counted inside that budget, so more parity never pushes the
+screen does not leave a budget the link can't carry. A viewer that reconnects within 10 minutes
+over the same path (same viewer certificate, same address) and whose link failed before starts
+at the rate it left with, at most 60 % of what failed, instead of 10 Mbit/s: a slow link is not
+overrun at connect, and the old limit is approached slowly. This is kept in memory only; Stop
+in the presenter forgets it. The window then shows `resumed: this link failed at X Mbit/s last
+time` until the first cut. FEC parity is counted inside that budget, so more parity never pushes the
 stream above what the link can carry. x264 changes rate without a keyframe; VAAPI has to be
 reopened (one keyframe): a lower rate at most every second, a higher one at most every 5 s.
 Keyframes (2–5 normal frames) are not sent in one burst but spread over up to 100 ms at a
