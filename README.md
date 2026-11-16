@@ -150,7 +150,7 @@ The presenter can also be started from a terminal:
 ```sh
 flatpak run io.github.windwerfer.BeamCraft present     # Flatpak
 ./BeamCraft-x86_64.AppImage present                     # AppImage
-/Applications/BeamCraft.app/Contents/MacOS/beamcraft view --hwdec   # Mac viewer from a terminal
+/Applications/BeamCraft.app/Contents/MacOS/beamcraft view   # Mac viewer from a terminal
 ```
 
 **Flatpak permissions:** `--socket=wayland`, `--socket=fallback-x11`, `--share=ipc`

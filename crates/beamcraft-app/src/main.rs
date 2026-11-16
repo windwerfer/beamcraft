@@ -83,14 +83,10 @@ pub struct ViewArgs {
     /// Stop after this many seconds (headless mode).
     #[arg(long)]
     pub duration: Option<f64>,
-    /// Use hardware decoding (VideoToolbox on macOS, VAAPI on Linux). On by
-    /// default everywhere (owner, 2026-11-15); falls back to software if the GPU
-    /// cannot decode H.264 (a 2011 HD 6770M on OCLP often cannot). Kept so old
-    /// command lines still parse.
-    #[arg(long, default_value_t = true)]
-    pub hwdec: bool,
-    /// Force the software H.264 decoder (hardware decoding is the default).
-    #[arg(long, overrides_with = "hwdec")]
+    /// Force the software H.264 decoder. Without it the viewer decodes in hardware
+    /// (VideoToolbox on macOS, VAAPI on Linux) and falls back to software if the GPU
+    /// cannot decode H.264 (a 2011 HD 6770M on OCLP often cannot).
+    #[arg(long)]
     pub software_decode: bool,
     /// Software H.264 decoder: FilmCraft (pure Rust; default on Linux and Windows) or
     /// FFmpeg (default on macOS).
@@ -121,7 +117,6 @@ impl Default for ViewArgs {
             uri: None,
             headless: false,
             duration: None,
-            hwdec: true,
             software_decode: false,
             software_decoder: None,
             rgba: false,
@@ -144,11 +139,7 @@ impl ViewArgs {
     }
 
     pub fn want_hwdec(&self) -> bool {
-        if self.software_decode {
-            false
-        } else {
-            self.hwdec
-        }
+        !self.software_decode
     }
 }
 
@@ -356,12 +347,15 @@ mod tests {
             (args.duration, args.simulate_loss, args.simulate_burst),
             (Some(5.0), 2.0, 4.0)
         );
-        assert!(!args.want_hwdec(), "--software-decode wins over --hwdec");
-        assert!(ViewArgs {
-            hwdec: true,
-            ..ViewArgs::default()
-        }
-        .want_hwdec());
+        assert!(
+            !args.want_hwdec(),
+            "--software-decode turns hardware decode off"
+        );
+        assert!(
+            ViewArgs::default().want_hwdec(),
+            "hardware decode is the default"
+        );
+        assert!(parse(&["view", "--hwdec"]).is_err(), "--hwdec was removed");
         assert_eq!(
             resolve_renderer(Some(RendererChoice::Wgpu)),
             RendererChoice::Wgpu

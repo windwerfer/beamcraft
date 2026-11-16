@@ -60,7 +60,8 @@ line `fps, Mbit/s, rtt, ms mean/p95/max: …stages…`.
 - `capture_to_encoded` high (tens of ms with VAAPI): CPU-side scaling/conversion before the
   encoder, or the software fallback is in use. Check the encoder name in the overlay.
 - `network` high or spiky: Wi-Fi. Try cable; note `rtt`.
-- `decode` high on the iMac: software decode; try `--hwdec` / the View checkbox.
+- `decode` high on the iMac: software decode. Hardware decode is the default; check that
+  `--software-decode` isn't set and the View checkbox is on.
 - `convert` high: CPU YUV→RGBA at large sizes (a GPU shader is on the roadmap).
 - Frames queueing anywhere is a bug: every media-path channel is bounded and drops old frames.
   The viewer's decode queue holds 2 frames; when it overflows it is flushed and a keyframe is
