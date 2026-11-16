@@ -32,6 +32,12 @@
 //!   ~20–25 Mbit/s link lost 50–100 frames in the first 3 s).
 //! * Clean (little loss, no queue): the budget climbs additively by 4 % of
 //!   the ceiling per second, starting 4 s after the last cut.
+//! * Hysteresis: each cut remembers what the link did not carry (the
+//!   budget, or what was sent if less). From 90 % to 115 % of that value
+//!   the climb is a quarter as fast, and from 90 % up loss above the
+//!   background counts as congestion even with a flat queue. A shallow
+//!   bottleneck buffer (≤ 50 ms: a router, USB) drops before a queue shows,
+//!   so without this each overrun lost ~23 % of a report's packets.
 //! * Only while it is used: the budget does not grow while the presenter
 //!   sends less than 80 % of it (static or simple content). Otherwise it
 //!   drifts far above what was ever proven to fit, and the next busy frame
@@ -78,6 +84,14 @@ const SEVERE_EXCESS: f32 = 20.0;
 /// A queue cut goes at least this far below what was sent (the link
 /// carried less than that, or the queue would not have grown).
 const QUEUE_CUT_OF_SENT: f32 = 0.9;
+/// From this share of the last bad budget up, loss above the background is
+/// congestion even with a flat queue, and the budget climbs slowly.
+const NEAR_BAD_SHARE: f32 = 0.9;
+/// Above this multiple of the last bad budget the climb is at full speed
+/// again (the link got better).
+const PAST_BAD_SHARE: f32 = 1.15;
+/// The additive step near the last bad budget, as a share of the normal one.
+const NEAR_BAD_STEP: f32 = 0.25;
 
 /// One feedback sample. `loss_pct` is `None` when only the presenter's own
 /// view is known (send window without a viewer report).
@@ -176,6 +190,9 @@ pub struct AdaptiveBitrate {
     cut_now: bool,
     /// The previous sample's queue reached [`QUEUE_LOSS_MS`].
     queue_was_high: bool,
+    /// What the link did not carry at the last cut: the budget then, or
+    /// what was sent if less. Near it the climb is slow and loss counts.
+    last_bad_kbps: Option<f32>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -209,6 +226,7 @@ impl AdaptiveBitrate {
             last_cut: None,
             cut_now: false,
             queue_was_high: false,
+            last_bad_kbps: None,
         }
     }
 
@@ -295,7 +313,12 @@ impl AdaptiveBitrate {
         // Loss with a flat queue is random (Wi-Fi retries, interference):
         // cutting would not reduce it.
         let queue_high = queue.is_some_and(|q| q.max_ms() >= QUEUE_LOSS_MS);
-        let delay_says_random = queue.is_some() && !queue_high && !self.queue_was_high;
+        // ...unless the budget is back where the link failed last time: a
+        // shallow buffer (router, USB) drops before a queue shows.
+        let near_bad = self
+            .last_bad_kbps
+            .is_some_and(|b| self.budget_kbps >= b * NEAR_BAD_SHARE);
+        let delay_says_random = queue.is_some() && !queue_high && !self.queue_was_high && !near_bad;
         if queue.is_some() {
             self.queue_was_high = queue_high;
         }
@@ -338,10 +361,13 @@ impl AdaptiveBitrate {
                     0.85
                 };
                 let from_kbps = self.budget_kbps();
+                let sent = s.sent_kbps.filter(|k| k.is_finite() && *k > 0.0);
+                self.last_bad_kbps =
+                    Some(sent.map_or(self.budget_kbps, |k| k.min(self.budget_kbps)));
                 let mut target = self.budget_kbps * factor;
                 let queue_cut = s.backlog_drops == 0 && !heavy && excess < 3.0;
                 if queue_cut {
-                    if let Some(sent) = s.sent_kbps.filter(|k| k.is_finite() && *k > 0.0) {
+                    if let Some(sent) = sent {
                         target = target.min(sent * QUEUE_CUT_OF_SENT);
                     }
                 }
@@ -390,10 +416,20 @@ impl AdaptiveBitrate {
                 .is_none_or(|k| k >= USED_SHARE * self.budget_kbps);
             if rested && used {
                 let secs = dt_ms as f32 / 1000.0;
+                let step = (ceiling * 0.04).max(MIN_STEP_KBPS);
+                let step = match self.last_bad_kbps {
+                    Some(b)
+                        if self.budget_kbps >= b * NEAR_BAD_SHARE
+                            && self.budget_kbps < b * PAST_BAD_SHARE =>
+                    {
+                        step * NEAR_BAD_STEP
+                    }
+                    _ => step,
+                };
                 self.budget_kbps = if self.slow_start {
                     self.budget_kbps * SLOW_START_PER_S.powf(secs)
                 } else {
-                    self.budget_kbps + (ceiling * 0.04).max(MIN_STEP_KBPS) * secs
+                    self.budget_kbps + step * secs
                 }
                 .min(ceiling);
             }
@@ -552,9 +588,14 @@ mod tests {
         assert_eq!(s.budget_kbps(), 7_500);
         assert_eq!(feed(&mut s, loss(0.0), 7, &mut t), 7_500, "4 s rest");
         assert_eq!(
-            feed(&mut s, loss(0.0), 3, &mut t),
-            9_900,
+            feed(&mut s, loss(0.0), 2, &mut t),
+            9_100,
             "then +1.6 Mbit/s per s"
+        );
+        assert_eq!(
+            feed(&mut s, loss(0.0), 1, &mut t),
+            9_300,
+            "a quarter of that from 90 % of the 10 Mbit/s that failed"
         );
         s.reset();
         assert!(s.in_slow_start());
@@ -649,6 +690,59 @@ mod tests {
             queue: None,
         };
         feed(&mut b, junk, 3, &mut t);
+    }
+
+    #[test]
+    fn climbs_slowly_near_the_budget_that_failed() {
+        let mut c = at_ceiling(20_000);
+        let mut t = 0;
+        // Severe loss at 20 Mbit/s with 16 sent: the link failed at 16.
+        let overrun = Sample {
+            sent_kbps: Some(16_000.0),
+            ..loss(25.0)
+        };
+        assert_eq!(feed(&mut c, overrun, 1, &mut t), 12_000);
+        // 4 s rest, then +400 per report (4 % of 20 Mbit/s per second)...
+        assert_eq!(feed(&mut c, loss(0.0), 7, &mut t), 12_000);
+        assert_eq!(feed(&mut c, loss(0.0), 6, &mut t), 14_400);
+        // ...a quarter of that from 14.4 (90 % of 16) to 18.4 (115 %)...
+        assert_eq!(feed(&mut c, loss(0.0), 1, &mut t), 14_500);
+        assert_eq!(feed(&mut c, loss(0.0), 39, &mut t), 18_400);
+        // ...then full speed again: the link got better.
+        assert_eq!(feed(&mut c, loss(0.0), 1, &mut t), 18_800);
+    }
+
+    #[test]
+    fn near_the_failed_budget_loss_with_a_flat_queue_counts() {
+        // A shallow buffer drops before a queue shows. Far below the
+        // budget that failed, flat-queue loss is random...
+        let mut c = at_ceiling(40_000);
+        let mut t = 0;
+        feed(&mut c, loss(12.0), 1, &mut t);
+        assert_eq!(c.budget_kbps(), 30_000);
+        let flat = |l: f32| queued(l, 2.0, 10.0, 0.0, None);
+        c.set_ceiling(20_000);
+        feed(&mut c, flat(0.0), 10, &mut t);
+        assert_eq!(c.budget_kbps(), 20_000);
+        feed(&mut c, flat(5.0), 4, &mut t);
+        assert_eq!(
+            c.budget_kbps(),
+            20_000,
+            "20 is far below the 40 that failed"
+        );
+        // ...near it, the same loss is congestion.
+        let mut n = at_ceiling(20_000);
+        feed(&mut n, loss(12.0), 1, &mut t);
+        feed(&mut n, flat(0.0), 30, &mut t);
+        let before = n.budget_kbps();
+        assert!(before >= 18_000, "{before}");
+        feed(&mut n, flat(5.0), 2, &mut t);
+        assert_eq!(n.last_cut().map(|c| c.trigger), Some(CutTrigger::Loss));
+        assert!(n.budget_kbps() < before);
+        // A new viewer forgets it.
+        n.reset();
+        feed(&mut n, flat(5.0), 4, &mut t);
+        assert_eq!(n.last_cut(), None);
     }
 
     #[test]
@@ -1087,17 +1181,18 @@ mod tests {
     }
 
     #[test]
-    fn sim_shallow_buffer_overruns_until_heavy_loss() {
-        // Known weakness (roadmap 0.4): a bottleneck that drops before a
-        // queue of QUEUE_LOSS_MS builds looks like random loss, so the
-        // budget climbs past the link until the loss is heavy. Measured:
-        // 50 ms buffer 4.9 % lost, 20 ms buffer 5.5 %, each overrun ~23 %
-        // loss in one report. Pinned so a fix shows up as a change here.
+    fn sim_shallow_buffer_is_found_without_heavy_loss() {
+        // A bottleneck that drops before a queue of QUEUE_LOSS_MS builds
+        // (a router or USB link) looks like random loss. Near the budget
+        // that failed last time, loss counts anyway and the climb is slow.
+        // Measured: 50 ms buffer 0.72 % lost, 13.3 Mbit/s video; 20 ms
+        // 1.19 %, 13.0 (before, loss counted only once heavy: 4.92 % /
+        // 11.7 and 5.53 % / 11.3, each overrun ~23 % loss in one report).
         for buffer_ms in [50, 20] {
             let r = simulate(Link { buffer_ms, ..WIFI }, 40_000, 90);
             print(&format!("16 Mbit/s, {buffer_ms} ms buffer"), &r);
-            assert!(r.lost_pct < 7.0, "{:.2} % lost", r.lost_pct);
-            assert!(r.delivered_kbps >= 16_000.0 * 0.6, "{}", r.delivered_kbps);
+            assert!(r.lost_pct < 2.0, "{:.2} % lost", r.lost_pct);
+            assert!(r.delivered_kbps >= 16_000.0 * 0.75, "{}", r.delivered_kbps);
         }
     }
 }

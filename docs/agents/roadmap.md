@@ -118,18 +118,19 @@ target), **planned**, **idea**. Update this file when an item moves.
         report for > 1 s while sending could cut hard and stop forcing keyframes.
       - The remaining overruns come from the budget sitting far above what is sent (27.5 vs
         10–15 Mbit/s), so a content burst hits the link at once: item 4.
-      - **Shallow bottleneck buffers** (≤ 50 ms, a router or USB link rather than Wi-Fi): the
-        queue never reaches the 40 ms that marks loss as congestion, so the budget climbs past
-        the link until loss is heavy (sim: 4.9–5.5 % lost, ~23 % per overrun; testing.md §3.3).
-        Item 4's "climb slowly above the last cut" would bound it; or count loss as congestion
-        when it starts while the budget is above the last good value.
+      - **Shallow bottleneck buffers: done (2026-11-16).** With ≤ 50 ms (a router or USB link)
+        the queue never reached the 40 ms that marks loss as congestion, so the budget climbed
+        past the link until loss was heavy. Now near the budget that failed last, loss counts
+        and the climb is slow (item 4). Sim: 4.9–5.5 → 0.7–1.2 % lost (testing.md §3.3).
    3. **Ignore loss right after a keyframe or VAAPI reopen** so reopen, then IDR burst, then another
       cut can't loop; spread IDR parity across frames. ~60–100 LOC. (Viewer keyframe requests are
       now limited to one per 2 × RTT, 2026-11-15.)
    4. **Hysteresis and probing:** remember the last good budget, climb slowly near it, probe with
       extra FEC before more video, start from the last good value per peer. ~100–150 LOC.
-      (Done 2026-11-15: slow start from 10 Mbit/s and no growth while unused. Still open: last
-      good value per peer, probing with FEC. Note for VAAPI: slow start changes the rate each
+      (Done 2026-11-15: slow start from 10 Mbit/s and no growth while unused. Done 2026-11-16:
+      each cut remembers what the link did not carry; from 90 % to 115 % of it the climb is a
+      quarter as fast and flat-queue loss counts as congestion (testing.md §3.3). Still open:
+      last good value per peer, probing with FEC. Note for VAAPI: slow start changes the rate each
       report, but VAAPI reopens at most every 5 s, so it reaches 40 Mbit/s in steps; untested
       on the T480s.)
    5. **Don't cut when FEC recovered everything** (`unrecoverable == 0`); smooth the loss shared by

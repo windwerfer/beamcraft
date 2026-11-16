@@ -177,29 +177,36 @@ on its own: the excess-loss rule needs 3 points above the background loss.
 model (60 fps, sends min(target, content demand)), auto FEC parity, `LossSim`, a FIFO bottleneck
 (150 ms buffer unless noted; overload shows as delay first, then as loss) and a `DelayMeter` as
 the viewer has, with a 500 ms report. There is no QUIC, so the backlog trigger is not exercised.
-Results with the controller as of 2026-11-16 (queue + loss only, no RTT rule), 40 Mbit/s
-ceiling, 60–90 s; in brackets the 2026-11-15 controller (loss + RTT, drop-only token-bucket
-bottleneck) where it differs:
+Results with the controller as of 2026-11-16 (queue + loss, hysteresis around the budget that
+failed last), 40 Mbit/s ceiling, 60–90 s; in brackets the controller before the hysteresis
+("no hyst.", same day) and the 2026-11-15 controller ("old": loss + RTT, drop-only
+token-bucket bottleneck) where they differ:
 
 | Link | Cuts (triggers) | Budget at end | Video delivered | Packets lost | Queue mean / p95 |
 |---|---|---|---|---|---|
 | no limit, 0 % / 2 % random | 0 | 40.0 | 36.8 / 33.8 Mbit/s | 0 / 2.0 % | 0 |
 | no limit, 5 % random | 0 (old: 3, loss, until learned as background) | 40.0 | 30.5 Mbit/s | 5.1 % | 0 |
 | content needs 15 Mbit/s, 2 % random | 0 | 24.4 | 15.2 Mbit/s | 2.0 % | 0 |
-| content 12 Mbit/s with 24 Mbit/s bursts, 20 Mbit/s bottleneck | 6 queue (old 4) | 21.0 | 13.2 Mbit/s | 0 % (old 0.74 %) | 5.3 / 47.7 ms |
-| 20 Mbit/s bottleneck, 0 % | 15 queue (old 11 heavy loss) | 17.7 | 16.7 Mbit/s (old 16.0) | 0 % (old 1.5 %) | 10.5 / 58.9 ms |
-| 20 Mbit/s bottleneck, 2 % | 15 (2 loss, then queue) | 19.8 | 16.0 Mbit/s | 2.1 % | 11.2 / 56.9 ms |
-| 8 Mbit/s bottleneck, 2 % | 22 (queue, 1 heavy loss) | 8.0 | 6.3 Mbit/s | 2.2 % (old 2.9 %) | 23.3 / 123 ms |
-| 16 Mbit/s, 300 ms FIFO (`WIFI`) | 16 queue (RTT rule: 19) | 14.2 | 13.8 Mbit/s (RTT rule: 13.0) | 0 % | 18.1 / 70.5 ms (RTT rule: 25.9 / 129) |
-| 16 Mbit/s, **50 ms** FIFO | 10 (1 queue, 9 heavy loss) | 18.4 | 11.7 Mbit/s | **4.9 %** | 10.1 / 34.4 ms |
-| 16 Mbit/s, **20 ms** FIFO | 10 heavy loss | 13.6 | 11.3 Mbit/s | **5.5 %** | 1.5 / 4.4 ms |
+| content 12 Mbit/s with 24 Mbit/s bursts, 20 Mbit/s bottleneck | 5 queue (no hyst. 6, old 4) | 16.9 (21.0) | 13.2 Mbit/s | 0 % (old 0.74 %) | 1.8 / 14.0 ms (5.3 / 47.7) |
+| 20 Mbit/s bottleneck, 0 % | 11 queue (no hyst. 15, old 11 heavy loss) | 18.8 (17.7) | 16.6 Mbit/s (16.7, old 16.0) | 0 % (old 1.5 %) | 5.4 / 36.0 ms (10.5 / 58.9) |
+| 20 Mbit/s bottleneck, 2 % | 9 (2 loss, then queue; no hyst. 15) | 19.8 | 15.8 Mbit/s (16.0) | 2.1 % | 9.2 / 47.7 ms (11.2 / 56.9) |
+| 8 Mbit/s bottleneck, 2 % | 17 (queue, 1 heavy loss; no hyst. 22) | 8.1 (8.0) | 6.3 Mbit/s | 2.1 % (old 2.9 %) | 8.8 / 50.7 ms (23.3 / 123) |
+| 16 Mbit/s, 300 ms FIFO (`WIFI`) | 13 queue (no hyst. 16, RTT rule: 19) | 14.4 (14.2) | 13.3 Mbit/s (13.8, RTT rule: 13.0) | 0 % | 7.3 / 41.4 ms (18.1 / 70.5, RTT rule: 25.9 / 129) |
+| 16 Mbit/s, **50 ms** FIFO | 12 (1 queue, then loss at 4–7 %; no hyst. 10: 9 heavy loss) | 13.9 (18.4) | 13.3 Mbit/s (11.7) | **0.72 %** (4.9 %) | 7.7 / 34.2 ms (10.1 / 34.4) |
+| 16 Mbit/s, **20 ms** FIFO | 12 (3 heavy loss, then loss at 4–7 %; no hyst. 10 heavy loss) | 13.4 (13.6) | 13.0 Mbit/s (11.3) | **1.19 %** (5.5 %) | 1.1 / 4.3 ms (1.5 / 4.4) |
 
-Weak spots left (roadmap item 0): a bottleneck is still found by overrunning it every ~6 s (the
-additive climb of 1.6 Mbit/s per second; item 0.4). With a **shallow** bottleneck buffer
-(≤ 50 ms) the queue never reaches the 40 ms that marks loss as congestion, so loss counts as
-random until it is heavy: each overrun loses ~23 % of a report's packets. Wi-Fi to the tablet
-buffered ~290 ms, so it does not hit this; a shallow router or USB link would
-(`sim_shallow_buffer_overruns_until_heavy_loss` pins it).
+**Hysteresis (2026-11-16).** Each cut remembers what the link did not carry (the budget, or
+what was sent if less). From 90 % to 115 % of that value the budget climbs at a quarter of the
+normal step, and from 90 % up loss above the background is congestion even with a flat queue.
+With a **shallow** bottleneck buffer (≤ 50 ms) the queue never reaches the 40 ms that marks loss
+as congestion, so before this, loss counted as random until it was heavy and each overrun lost
+~23 % of a report's packets; now, after the first overrun, the next ones are cut at 4–7 % and
+packet loss falls 4.9 → 0.7 % (50 ms) and 5.5 → 1.2 % (20 ms) with more video delivered
+(`sim_shallow_buffer_is_found_without_heavy_loss`). The slow climb near the last failure also
+lowers the queue p95 on the deep-buffer links (−16 to −71 %) with fewer cuts, for 0–4 % less
+video there (`WIFI` 13.8 → 13.3 Mbit/s); the shallow links cut a little more often (10 → 12). Tried and not better overall: 0.95
+or 0.85 instead of 90 %, a half or 35 % step instead of a quarter. Weak spot left (roadmap item
+0): a bottleneck is still found by overrunning it, now every ~7–9 s.
 
 ### 3.4 Real Wi-Fi: presenter in the dev container, Android tablet viewer (2026-11-15)
 
@@ -264,6 +271,23 @@ queue mean 12 / p95 44 ms (within the spread of the four "queue" runs above). A 
 desktop viewer (e298736) against this presenter is rejected with `version mismatch: the
 presenter speaks protocol 2, the viewer 1; update the viewer …` in its connect steps and the
 presenter's attempt list.
+
+**Hysteresis (2026-11-16, protocol 3 APK rebuilt):** same setup (tablet RSSI −71 dBm, 11n,
+52–58 Mbit/s link speed), presenter before (328d63a) and after the hysteresis, alternated, 60 s
+each. The Wi-Fi buffer is deep, so every cut came from the queue and no run lost a packet; the
+change shows as fewer cuts and a lower queue for a little less video, as in the `WIFI` sim:
+
+| Run | Unrecoverable frames | Keyframes | Cuts (all queue) | Video sent | Queue mean / p95 |
+|---|---|---|---|---|---|
+| before | 0 | 5 | 9 | 13.9 Mbit/s | 13 / 45 ms |
+| after | 0 | 5 | 4 | 13.1 Mbit/s | 12 / 34 ms |
+| before | 0 | 6 | 8 | 14.8 Mbit/s | 13 / 45 ms |
+| after | 0 | 6 | 4 | 14.3 Mbit/s | 13 / 40 ms |
+
+Loopback with the viewer's shallow simulated bottleneck (`--simulate-bandwidth 16`, 30 ms
+tail-drop buffer), x264, 3 × 30 s each, alternated: packet loss 4.0–5.5 → 2.7–2.9 %,
+unrecoverable frames 70–78 → 42–53, video 7.9–8.5 → 9.2–9.5 Mbit/s, capture→decoded
+unchanged (24.6–25.8 / 30–32 ms mean / p95).
 
 ## 4. Real hardware
 
