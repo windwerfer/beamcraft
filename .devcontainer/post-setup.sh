@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "==> Running post-setup for beamcraft"
+echo "==> Running post-setup for mirrorwire"
 
 # =====================
 # OWNERSHIP (safe to run again)

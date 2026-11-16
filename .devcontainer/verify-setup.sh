@@ -1,7 +1,7 @@
 #!/bin/bash
 
 echo "=============================================="
-echo "   beamcraft  —  Setup Verification"
+echo "   mirrorwire  —  Setup Verification"
 echo "=============================================="
 echo ""
 
@@ -149,7 +149,7 @@ fi
 
 echo ""
 echo "=============================================="
-echo "Desktop:  cargo run --release -p beamcraft-egui"
-echo "Web:      cd apps/beamcraft-egui && trunk serve --release"
-echo "Android:  cd apps/beamcraft-android/android && ./gradlew assembleDebug"
+echo "Desktop:  cargo run --release -p mirrorwire-egui"
+echo "Web:      cd apps/mirrorwire-egui && trunk serve --release"
+echo "Android:  cd apps/mirrorwire-android/android && ./gradlew assembleDebug"
 echo "=============================================="

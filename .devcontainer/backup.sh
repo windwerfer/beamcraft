@@ -3,7 +3,7 @@ set -euo pipefail
 
 #  ====================
 #
-#   beamcraft Rust dev container backup/restore script
+#   mirrorwire Rust dev container backup/restore script
 #   Run this FROM INSIDE the container (as vscode user).
 #
 #   Backs up:
@@ -12,14 +12,14 @@ set -euo pipefail
 #     - ~/.local/share/zed     → one file (agents)
 #     - ~/android-sdk          → one file
 #
-#   Destination: /opt/backups/beamcraft/
+#   Destination: /opt/backups/mirrorwire/
 #
 # ====================
 
 # =====================
 # Configuration
 # =====================
-DEFAULT_BACKUP_DIR="/opt/backups/beamcraft/"
+DEFAULT_BACKUP_DIR="/opt/backups/mirrorwire/"
 
 # =====================
 # Helper Functions

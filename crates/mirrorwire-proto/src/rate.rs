@@ -875,7 +875,25 @@ mod tests {
         /// tablet showed ~290 ms before loss), so overload first shows as
         /// delay, then as loss.
         buffer_ms: u32,
+        keyframes: Keyframes,
     }
+
+    /// How the simulated encoder makes keyframes.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Keyframes {
+        /// None at all (tests of the rate logic alone).
+        Off,
+        /// One at connect and one for each lost frame (at most one per
+        /// 500 ms, the presenter's gate on a LAN RTT); the rate follows the
+        /// budget live (x264).
+        Live,
+        /// Like `Live`, but the rate only changes by a reopen, and each
+        /// reopen starts with a keyframe (h264_vaapi).
+        Reopen,
+    }
+
+    /// A keyframe is this many times a delta frame at the same rate.
+    const KEYFRAME_SIZE: usize = 10;
 
     /// A bottleneck with a FIFO buffer: packets wait behind the backlog and
     /// are dropped when the wait would exceed the buffer.
@@ -923,6 +941,9 @@ mod tests {
         /// (ms): mean and 95th percentile.
         queue_mean_ms: f32,
         queue_p95_ms: f32,
+        keyframes: u32,
+        /// Frames with more packets lost than parity sent (after 10 s).
+        lost_frames: u32,
     }
 
     fn simulate(link: Link, ceiling_kbps: u32, secs: u64) -> SimResult {
@@ -939,6 +960,10 @@ mod tests {
         let (mut cuts, mut min_kbps, mut late_bytes) = (Vec::new(), u32::MAX, 0usize);
         let (mut total_sent, mut total_lost, mut window_sent) = (0u64, 0u64, 0u64);
         let frame_us = 1_000_000 / 60;
+        let mut want_key = link.keyframes != Keyframes::Off;
+        let (mut keyframes, mut lost_frames) = (0u32, 0u32);
+        let (mut last_key_us, mut last_reopen_us) = (None::<u64>, None::<u64>);
+        let mut reopened_kbps = None::<u32>;
         for frame in 0..secs * 60 {
             let t_us = frame * frame_us;
             let overhead = FecMode::Auto
@@ -951,22 +976,52 @@ mod tests {
             } else {
                 link.demand_kbps
             };
-            let target = encoder_kbps(c.budget_kbps(), Some(overhead)).min(demand);
-            let data = (target as usize * 1000 / 8 / 60).div_ceil(PKT).max(1);
-            let parity = (data as f32 * overhead).ceil() as usize;
+            let wanted = encoder_kbps(c.budget_kbps(), Some(overhead));
+            let target = if link.keyframes == Keyframes::Reopen {
+                let cur = *reopened_kbps.get_or_insert(wanted);
+                // The pipeline's rule (`bitrate_action` in mirrorwire-media):
+                // down by 10 % after 1 s, up by 15 % after 5 s.
+                let (gap_us, rel) = if wanted < cur {
+                    (1_000_000, 0.10)
+                } else {
+                    (5_000_000, 0.15)
+                };
+                let rested = last_reopen_us.is_none_or(|t| t_us - t >= gap_us);
+                if rested && wanted.abs_diff(cur) as f32 >= rel * cur as f32 {
+                    (reopened_kbps, last_reopen_us, want_key) = (Some(wanted), Some(t_us), true);
+                }
+                reopened_kbps.unwrap_or(wanted)
+            } else {
+                wanted
+            }
+            .min(demand);
+            let key = std::mem::take(&mut want_key);
+            let mut data = (target as usize * 1000 / 8 / 60).div_ceil(PKT).max(1);
+            let mut parity = (data as f32 * overhead).ceil() as usize;
+            if key {
+                data *= KEYFRAME_SIZE;
+                let o = FecMode::Auto.overhead(smoothed_loss, 0.0, true).unwrap_or(0.0);
+                parity = (data as f32 * o).ceil() as usize;
+                (keyframes, last_key_us) = (keyframes + 1, Some(t_us));
+            }
             let mut frame_seen = false;
+            let mut frame_lost = 0usize;
             for k in 0..data + parity {
                 // Paced at 500 Mbit/s: 1200 bytes every ~19 us.
                 let at = t_us + k as u64 * 19;
                 expected += 1;
                 (total_sent, window_sent) = (total_sent + 1, window_sent + 1);
                 if lossy.drop_next() {
+                    frame_lost += 1;
                     continue;
                 }
                 let wait = match fifo.as_mut() {
                     Some(f) => match f.offer(PKT, at) {
                         Some(w) => w,
-                        None => continue,
+                        None => {
+                            frame_lost += 1;
+                            continue;
+                        }
                     },
                     None => 0,
                 };
@@ -980,6 +1035,10 @@ mod tests {
                 if k < data && t_us >= (secs - 20) * 1_000_000 {
                     late_bytes += PKT;
                 }
+            }
+            if frame_lost > parity && link.keyframes != Keyframes::Off {
+                lost_frames += u32::from(t_us >= 10_000_000);
+                want_key |= last_key_us.is_none_or(|t| t_us - t >= 500_000);
             }
             if (frame + 1) % 30 == 0 {
                 total_lost += expected - received;
@@ -1019,19 +1078,23 @@ mod tests {
             lost_pct: 100.0 * total_lost as f32 / total_sent.max(1) as f32,
             queue_mean_ms: queue_samples.summary().mean as f32,
             queue_p95_ms: queue_samples.summary().p95 as f32,
+            keyframes,
+            lost_frames,
         }
     }
 
     fn print(name: &str, r: &SimResult) {
         eprintln!(
-            "{name}: {} cuts, final {} kbit/s, min after 10 s {}, delivered video {:.0} kbit/s, lost {:.2} %, queue mean {:.1} p95 {:.1} ms",
+            "{name}: {} cuts, final {} kbit/s, min after 10 s {}, delivered video {:.0} kbit/s, lost {:.2} %, queue mean {:.1} p95 {:.1} ms, {} keyframes, {} lost frames",
             r.cuts.len(),
             r.final_kbps,
             r.min_kbps,
             r.delivered_kbps,
             r.lost_pct,
             r.queue_mean_ms,
-            r.queue_p95_ms
+            r.queue_p95_ms,
+            r.keyframes,
+            r.lost_frames
         );
         for cut in r.cuts.iter().take(8) {
             eprintln!("  {:>6} ms {cut}", cut.at_ms);
@@ -1046,6 +1109,7 @@ mod tests {
         busy_every_s: 0,
         busy_kbps: 0,
         buffer_ms: 150,
+        keyframes: Keyframes::Off,
     };
 
     /// The tablet link of 2026-11-15 (second run): ~16 Mbit/s, deep buffer.
@@ -1193,6 +1257,41 @@ mod tests {
             print(&format!("16 Mbit/s, {buffer_ms} ms buffer"), &r);
             assert!(r.lost_pct < 2.0, "{:.2} % lost", r.lost_pct);
             assert!(r.delivered_kbps >= 16_000.0 * 0.75, "{}", r.delivered_kbps);
+        }
+    }
+
+    #[test]
+    fn sim_keyframes_and_reopens() {
+        // Keyframes at connect and after each lost frame, 10x a delta frame.
+        // With x264 (live rate) they change nothing measurable. With
+        // VAAPI-style reopens, a cut that waited 5 s for the reopen kept
+        // overrunning the link and the controller cut on every report:
+        //   16 Mbit/s, 300 ms: min 3.5 Mbit/s, 6.4 delivered, 3.32 % lost,
+        //     queue p95 284 ms -> min 9.8, 10.8, 0.00 %, p95 95 (1 s gap down)
+        //   20 Mbit/s, 150 ms: min 4.5, 11.4, 3.80 %, p95 134
+        //     -> min 12.0, 12.0, 0.14 %, p95 83
+        //   16 Mbit/s, 50 ms: 12.5 delivered, 6.43 %, 18 lost frames
+        //     -> 5.1, 3.14 %, 16: a keyframe larger than the buffer is lost
+        //     however low the rate, until the rate makes it small (no fix
+        //     here: keyframe pacing, roadmap).
+        // A "grace" that ignored loss for 1 s after each keyframe was tried
+        // and rejected: an upward reopen also starts with a keyframe, so it
+        // hid that overrun (20 Mbit/s: 21-97 lost frames instead of 3).
+        for (name, link, min_kbps, max_lost_pct) in [
+            ("no limit", LAN, 39_000, 0.01),
+            ("16 Mbit/s, 300 ms buffer", WIFI, 9_000, 0.2),
+            ("20 Mbit/s, 150 ms buffer", Link { bottleneck_kbps: 20_000, ..LAN }, 11_000, 0.5),
+        ] {
+            for keyframes in [Keyframes::Live, Keyframes::Reopen] {
+                let mode = if keyframes == Keyframes::Live { "live" } else { "reopen" };
+                let r = simulate(Link { keyframes, ..link }, 40_000, 90);
+                print(&format!("{mode}: {name}"), &r);
+                assert!(r.lost_pct < max_lost_pct, "{mode} {name}: {:.2} % lost", r.lost_pct);
+                assert!(r.lost_frames <= 5, "{mode} {name}: {} lost frames", r.lost_frames);
+                if keyframes == Keyframes::Live || link.bottleneck_kbps > 0 {
+                    assert!(r.min_kbps >= min_kbps, "{mode} {name}: min {}", r.min_kbps);
+                }
+            }
         }
     }
 }

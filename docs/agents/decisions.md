@@ -135,16 +135,16 @@ Newest first. Add an entry when the owner decides something non-obvious.
   out to be non-Metal.
 - **2026-11 (name):** "MirrorWire" (ScreenBeam, MirrorCast, QuickMirror and "Wi-Fi Display"
   were taken or trademarked).
-- **2026-11-15 (rename):** the owner renamed the app to **BeamCraft** (repo
-  `github.com/windwerfer/beamcraft`), before any release. Full rename, clean break: every D5
-  identifier moved from `mirrorwire`/`MirrorWire` to `beamcraft`/`BeamCraft` (app id, mDNS
-  service, ALPN, URI scheme, config dir, binary, crates, `BEAMCRAFT_*` env vars, firewalld
+- **2026-11-15 (rename):** the owner renamed the app to **mirrorwire** (repo
+  `github.com/windwerfer/mirrorwire`), before any release. Full rename, clean break: every D5
+  identifier moved from `mirrorwire`/`MirrorWire` to `mirrorwire`/`mirrorwire` (app id, mDNS
+  service, ALPN, URI scheme, config dir, binary, crates, `mirrorwire_*` env vars, firewalld
   service, Android package). Port 47800 is unchanged. No migration of the old `mirrorwire`
-  config dir: viewers pair again once. MirrorWire builds and BeamCraft builds cannot see or
+  config dir: viewers pair again once. MirrorWire builds and mirrorwire builds cannot see or
   talk to each other.
 - **2026-11-16 (rename back):** the owner changed the name back to **MirrorWire**. Every D5
-  identifier moved from `beamcraft`/`BeamCraft` back to `mirrorwire`/`MirrorWire` (same list as
+  identifier moved from `mirrorwire`/`mirrorwire` back to `mirrorwire`/`MirrorWire` (same list as
   above, `MIRRORWIRE_*` env vars). The GitHub repo and the SonarCloud project key stay
-  `windwerfer/beamcraft` / `windwerfer_beamcraft` until the owner renames them. Port 47800 is
-  unchanged. No migration of the `beamcraft` config dir: viewers pair again once. BeamCraft
+  `windwerfer/mirrorwire` / `windwerfer_mirrorwire` until the owner renames them. Port 47800 is
+  unchanged. No migration of the `mirrorwire` config dir: viewers pair again once. mirrorwire
   builds and MirrorWire builds cannot see or talk to each other.

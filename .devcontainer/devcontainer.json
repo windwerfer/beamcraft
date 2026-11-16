@@ -6,9 +6,9 @@
     //   bash .devcontainer_rs/android-setup.sh
     //   bash .devcontainer_rs/verify-setup.sh
     // Optional shell tools: bash .devcontainer_rs/quality_of_life.sh
-    // Home is the volume beamcraft_home, separate from the Flutter container.
+    // Home is the volume mirrorwire_home, separate from the Flutter container.
     // /opt/backups is the shared cache, so the Android cmdline-tools zip is reused.
-    "name": "beamcraft",
+    "name": "mirrorwire",
     "build": {
         "dockerfile": "Dockerfile"
     },
@@ -39,7 +39,7 @@
     "runArgs": [
         "--userns=keep-id:uid=1000,gid=1000",
         "--name",
-        "beamcraft",
+        "mirrorwire",
 
         // pass usb into container (for adb, if you dont forward adb from the host with: 'adb -a nodaemon server start')
         // "--privileged",
@@ -72,7 +72,7 @@
         "UV_CACHE_DIR": "/home/vscode/.cache/uv",
         "DEBUGPY_PROCESS_SPAWN_TIMEOUT": "90",
         "ANDROID_ADB_SERVER_ADDRESS": "127.0.0.1",
-        "VIRTUAL_ENV": "/workspaces/beamcraft/.venv",
+        "VIRTUAL_ENV": "/workspaces/mirrorwire/.venv",
         "ANDROID_HOME": "/home/vscode/android-sdk",
         "ANDROID_SDK_ROOT": "/home/vscode/android-sdk",
         "ANDROID_NDK_HOME": "/home/vscode/android-sdk/ndk/27.2.12479018",

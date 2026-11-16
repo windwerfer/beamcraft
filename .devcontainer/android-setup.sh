@@ -1,11 +1,11 @@
 #!/bin/bash
 set -e
 
-echo "==> Running android-setup for beamcraft"
+echo "==> Running android-setup for mirrorwire"
 
 CACHE_DIR="/opt/backups"
 ANDROID_HOME="$HOME/android-sdk"
-# Pinned by apps/beamcraft-android/android/app/build.gradle.kts
+# Pinned by apps/mirrorwire-android/android/app/build.gradle.kts
 NDK_VERSION="27.2.12479018"
 
 # =====================
@@ -96,7 +96,7 @@ setup_android_components() {
     echo "==> Accepting Android licenses (non-interactive)..."
     yes | sdkmanager --licenses || true
 
-    # compileSdk 35 + ndkVersion in apps/beamcraft-android.
+    # compileSdk 35 + ndkVersion in apps/mirrorwire-android.
     local packages=(
         "platform-tools"
         "build-tools;35.0.0"
@@ -135,7 +135,7 @@ setup_rust_android() {
     # shellcheck disable=SC1091
     [[ -f "$HOME/.cargo/env" ]] && source "$HOME/.cargo/env"
 
-    # ABIs in apps/beamcraft-android/android/gradle.properties:
+    # ABIs in apps/mirrorwire-android/android/gradle.properties:
     # arm64-v8a, armeabi-v7a, x86_64
     for target in aarch64-linux-android armv7-linux-androideabi x86_64-linux-android; do
         if rustup target list --installed 2>/dev/null | grep -q "$target"; then
@@ -171,4 +171,4 @@ sudo chown -R vscode:vscode "${ANDROID_HOME}"
 echo ""
 echo "==> Android setup complete!"
 echo "    Run 'bash .devcontainer_rs/verify-setup.sh' to see status."
-echo "    Build: cd apps/beamcraft-android/android && ./gradlew assembleDebug"
+echo "    Build: cd apps/mirrorwire-android/android && ./gradlew assembleDebug"

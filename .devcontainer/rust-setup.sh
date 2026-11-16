@@ -6,7 +6,7 @@ has_cmd() {
     command -v "$1" >/dev/null 2>&1
 }
 
-echo "==> Running rust-setup for beamcraft"
+echo "==> Running rust-setup for mirrorwire"
 
 # =====================
 # OWNERSHIP (safe to run again)
@@ -46,7 +46,7 @@ else
     rustup target add wasm32-unknown-unknown
 fi
 
-# trunk serves the egui web app (apps/beamcraft-egui, port 8080).
+# trunk serves the egui web app (apps/mirrorwire-egui, port 8080).
 if has_cmd trunk; then
     echo "    [x] trunk already installed"
 else

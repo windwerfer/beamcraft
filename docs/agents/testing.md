@@ -344,7 +344,7 @@ screen**, not logs. So:
   and don't add logic files to it. The project uses the built-in *Sonar way*
   gate (new code coverage ≥ 80 %); custom gates need a paid plan. **Automatic Analysis must
   be off** under SonarCloud Administration › Analysis method for
-  `windwerfer_beamcraft`; if it is still on, the upload fails and should
+  `windwerfer_mirrorwire`; if it is still on, the upload fails and should
   not be worked around in the workflow.
 - `codeql.yml` (push to `main`, pull requests, weekly Wednesday cron, and
   `workflow_dispatch`; also called from Build on `v*` tags and
@@ -376,5 +376,5 @@ screen**, not logs. So:
 - **Re-runs hide artifacts:** if a job is re-run, the run page shows the latest attempt, which
   only has the re-run job's artifact. The others are on `…/actions/runs/<id>/attempts/1`. When
   you hand out links, check every artifact exists and link the attempt that has it (`gh api
-  repos/windwerfer/beamcraft/actions/runs/<id>/artifacts`).
+  repos/windwerfer/mirrorwire/actions/runs/<id>/artifacts`).
 - Do not change workflows as a side effect of a feature. A workflow change is its own commit.

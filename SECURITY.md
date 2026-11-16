@@ -20,12 +20,12 @@ beyond current `main`.
 
 ## What this project does
 
-- **Static analysis.** [SonarQube Cloud](https://sonarcloud.io/project/overview?id=windwerfer_beamcraft)
+- **Static analysis.** [SonarQube Cloud](https://sonarcloud.io/project/overview?id=windwerfer_mirrorwire)
   is run from GitHub Actions on `main` and on pull requests from this
   repository (a Clippy report and unit-test lcov coverage are uploaded with
   the scan). Fork pull requests skip the upload when `SONAR_TOKEN` is
   unavailable. Automatic Analysis must stay off on the SonarCloud project,
-  or the CI upload is rejected. [GitHub CodeQL](https://github.com/windwerfer/beamcraft/security/code-scanning)
+  or the CI upload is rejected. [GitHub CodeQL](https://github.com/windwerfer/mirrorwire/security/code-scanning)
   is a second, separate scan of the Rust code and GitHub Actions workflows
   (`build-mode: none`) on `main`, pull requests, and a weekly schedule.
   Results appear under the repository's Security › Code scanning tab.

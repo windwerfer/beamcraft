@@ -1,13 +1,13 @@
 # MirrorWire
 
 <p>
-  <a href="https://github.com/windwerfer/beamcraft/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/windwerfer/beamcraft/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square"></a>
-  <a href="https://github.com/windwerfer/beamcraft/actions/workflows/build.yml"><img alt="Build" src="https://github.com/windwerfer/beamcraft/actions/workflows/build.yml/badge.svg?branch=main&style=flat-square"></a>
+  <a href="https://github.com/windwerfer/mirrorwire/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/windwerfer/mirrorwire/actions/workflows/ci.yml/badge.svg?branch=main&style=flat-square"></a>
+  <a href="https://github.com/windwerfer/mirrorwire/actions/workflows/build.yml"><img alt="Build" src="https://github.com/windwerfer/mirrorwire/actions/workflows/build.yml/badge.svg?branch=main&style=flat-square"></a>
   <a href="#license"><img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue?style=flat-square"></a>
   <br>
-  <a href="https://sonarcloud.io/project/overview?id=windwerfer_beamcraft"><img alt="Scanned by SonarCloud" src="https://img.shields.io/badge/Scanned_by-SonarCloud-4b9fd5?style=flat-square&logo=sonarqubecloud&logoColor=white"></a>
-  <a href="https://sonarcloud.io/summary/new_code?id=windwerfer_beamcraft"><img alt="Quality Gate Status" src="https://sonarcloud.io/api/project_badges/measure?project=windwerfer_beamcraft&metric=alert_status"></a>
-  <a href="https://github.com/windwerfer/beamcraft/security/code-scanning"><img alt="CodeQL" src="https://github.com/windwerfer/beamcraft/actions/workflows/codeql.yml/badge.svg?branch=main&style=flat-square"></a>
+  <a href="https://sonarcloud.io/project/overview?id=windwerfer_mirrorwire"><img alt="Scanned by SonarCloud" src="https://img.shields.io/badge/Scanned_by-SonarCloud-4b9fd5?style=flat-square&logo=sonarqubecloud&logoColor=white"></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=windwerfer_mirrorwire"><img alt="Quality Gate Status" src="https://sonarcloud.io/api/project_badges/measure?project=windwerfer_mirrorwire&metric=alert_status"></a>
+  <a href="https://github.com/windwerfer/mirrorwire/security/code-scanning"><img alt="CodeQL" src="https://github.com/windwerfer/mirrorwire/actions/workflows/codeql.yml/badge.svg?branch=main&style=flat-square"></a>
 </p>
 
 Low-latency screen mirroring over a LAN, written in Rust. One binary (`mirrorwire`) runs in

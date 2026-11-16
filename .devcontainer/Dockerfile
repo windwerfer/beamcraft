@@ -46,17 +46,17 @@ RUN mkdir -p /opt/download-cache /home/vscode
 RUN chown -R vscode:vscode /home/vscode /opt/download-cache
 
 USER $USERNAME
-WORKDIR /workspaces/beamcraft
+WORKDIR /workspaces/mirrorwire
 
 RUN mkdir -p /home/vscode/android-sdk
 
-# Populated by the beamcraft_home volume + rust-setup.sh / android-setup.sh.
-# NDK matches apps/beamcraft-android/android/app/build.gradle.kts (ndkVersion).
+# Populated by the mirrorwire_home volume + rust-setup.sh / android-setup.sh.
+# NDK matches apps/mirrorwire-android/android/app/build.gradle.kts (ndkVersion).
 ENV ANDROID_HOME="/home/vscode/android-sdk"
 ENV ANDROID_NDK_HOME="${ANDROID_HOME}/ndk/27.2.12479018"
 ENV JAVA_HOME="/usr/lib/jvm/java-21-openjdk-amd64"
 ENV PATH="/home/vscode/.cargo/bin:${ANDROID_HOME}/cmdline-tools/latest/bin:${ANDROID_HOME}/platform-tools:${PATH}"
-ENV PATH="/workspaces/beamcraft/.venv/bin:/root/.local/bin:/home/vscode/.local/bin:/home/vscode/.opencode/bin:/home/vscode/.grok/bin:${PATH}"
+ENV PATH="/workspaces/mirrorwire/.venv/bin:/root/.local/bin:/home/vscode/.local/bin:/home/vscode/.opencode/bin:/home/vscode/.grok/bin:${PATH}"
 
 # Best-effort: mark helper scripts executable in the image.
 # The workspace is bind-mounted at runtime, so post-setup.sh also chmod's.

@@ -285,9 +285,9 @@ target), **planned**, **idea**. Update this file when an item moves.
   `mirrorwire-film` behind the existing `VideoDecoder`/`open_decoder` path. Plan, numbers and
   the upgrade checklist: [filmcraft.md](filmcraft.md). The presenter keeps FFmpeg for encoding.
 - **Name back to MirrorWire (owner 2026-11-16):** done in the code, packaging and docs (D5
-  history in [decisions.md](decisions.md)). Still `beamcraft`: the GitHub repo
-  (`windwerfer/beamcraft`), the SonarCloud project key (`windwerfer_beamcraft`) and the dev
-  container's workspace path and `beamcraft_home` volume. They change only when the owner renames
+  history in [decisions.md](decisions.md)). Still `mirrorwire`: the GitHub repo
+  (`windwerfer/mirrorwire`), the SonarCloud project key (`windwerfer_mirrorwire`) and the dev
+  container's workspace path and `mirrorwire_home` volume. They change only when the owner renames
   the repo and the SonarCloud project. Before friends install it: check the name is free
   (Flathub, app stores, trademarks).
 - **Android presenter** later (MediaProjection + MediaCodec encode; needs Java/JNI glue).
