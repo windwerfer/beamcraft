@@ -93,13 +93,44 @@ jobs:
         run: |
           cargo build --release --locked --target ${{ matrix.target }} \
             -p beamcraft-app --no-default-features --features gui,static-ffmpeg
+      - name: Smoke test
+        run: target/${{ matrix.target }}/release/beamcraft --version
+      # Each slice keeps its own minimum macOS (arm64 11.0, x86_64 10.13); the
+      # macos-universal job merges them with lipo into one .app / DMG.
+      - name: Stage binary
+        run: cp target/${{ matrix.target }}/release/beamcraft beamcraft-${{ matrix.arch }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-bin-${{ matrix.arch }}
+          path: beamcraft-${{ matrix.arch }}
+          retention-days: 1
+          if-no-files-found: error
+
+  macos-universal:
+    name: macOS universal DMG
+    needs: macos
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: macos-bin-*
+          path: bin
+          merge-multiple: true
+      - name: lipo
+        run: |
+          lipo -create bin/beamcraft-arm64 bin/beamcraft-x86_64 -output bin/beamcraft
+          chmod +x bin/beamcraft
+          lipo -info bin/beamcraft
       - name: Bundle .app and DMG
         id: bundle
-        run: |
-          packaging/macos/bundle.sh target/${{ matrix.target }}/release/beamcraft \
-            ${{ matrix.arch }} ${{ matrix.min_macos }} dist
+        # LSMinimumSystemVersion is the lowest slice (Intel, 10.13); the arm64
+        # slice needs 11.0, which every Apple Silicon Mac has anyway.
+        run: packaging/macos/bundle.sh bin/beamcraft universal 10.13 dist
       - name: Smoke test
-        run: dist/BeamCraft.app/Contents/MacOS/beamcraft --version
+        run: |
+          dist/BeamCraft.app/Contents/MacOS/beamcraft --version
+          arch -x86_64 dist/BeamCraft.app/Contents/MacOS/beamcraft --version
       # archive: false (upload-artifact v7+) uploads the bare .dmg; the artifact
       # name is the filename, so the Actions download is not wrapped in a zip.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -230,7 +261,7 @@ jobs:
   release:
     name: GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [macos, appimage, flatpak, android]
+    needs: [macos-universal, appimage, flatpak, android]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

@@ -65,7 +65,7 @@ packaging/
   audit.yml          cargo audit and cargo-deny (also a weekly scheduled run)
   sonarcloud.yml     CI SonarCloud scan (clippy report + lcov); also called from Build on tags
   codeql.yml         GitHub CodeQL (Rust + Actions); also called from Build on tags
-  build.yml          macOS arm64 + Intel DMG, Flatpak, AppImage; Release on v* tags
+  build.yml          macOS universal DMG, Flatpak, AppImage, APK; Release on v* tags
 .github/dependabot.yml  weekly updates for Actions SHA pins and Cargo
 ```
 
@@ -76,8 +76,7 @@ then Artifacts). A `v*` tag also attaches them to a GitHub Release:
 
 | artifact | for | notes |
 |---|---|---|
-| `BeamCraft-<ver>-macos-x86_64.dmg` | Intel Macs, macOS 10.13 or newer | FFmpeg statically linked, no Homebrew needed |
-| `BeamCraft-<ver>-macos-arm64.dmg` | Apple Silicon Macs, macOS 11 or newer | FFmpeg statically linked |
+| `BeamCraft-<ver>-macos-universal.dmg` | Intel Macs (macOS 10.13+) and Apple Silicon (macOS 11+) | one app for both, FFmpeg statically linked, no Homebrew needed |
 | `BeamCraft-x86_64.flatpak` | Linux (Fedora, …) | `flatpak install --user BeamCraft-x86_64.flatpak` |
 | `BeamCraft-x86_64.AppImage` | Linux, glibc 2.39 or newer (Fedora 40+, Ubuntu 24.04+) | needs `libva` and `libpipewire` from the system |
 | `BeamCraft-arm64-v8a.apk` | Android 8+ phones and tablets (64-bit ARM), **viewer only** | debug-signed: allow "install unknown apps"; uninstall an older build first |

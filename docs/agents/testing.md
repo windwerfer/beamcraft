@@ -368,7 +368,7 @@ screen**, not logs. So:
   `--ignore` for `cargo audit` if needed) and report it; do not silently pass a vulnerability.
 - `build.yml` (push to `main`, `v*` tags): the macOS, AppImage and Flatpak jobs all `needs:
   audit`, so a vulnerable or policy-violating lockfile never produces an artifact. Then:
-  macOS arm64 DMG (`macos-15`), macOS x86_64 DMG (`macos-15-intel`, min 10.13), Flatpak,
+  macOS universal DMG (arm64 slice built on `macos-15`, x86_64 slice on `macos-15-intel` with min 10.13, merged with `lipo`), Flatpak,
   AppImage (Ubuntu 24.04); a `v*` tag creates a GitHub Release with all four. The Intel Mac
   job is the slowest (static FFmpeg build on older runners); that is normal.
 - Artifacts are uploaded with `archive: false`, so each download is the bare `.dmg` /
