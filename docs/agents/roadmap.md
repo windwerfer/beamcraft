@@ -143,8 +143,14 @@ target), **planned**, **idea**. Update this file when an item moves.
       on the T480s.)
    5. **Don't cut when FEC recovered everything** (`unrecoverable == 0`); smooth the loss shared by
       FEC and rate control. ~40–80 LOC.
-   6. **Live VAAPI bitrate without a reopen** (VA-API misc-param buffers or a QP clamp), removing
-      the reopen limits (up 5 s, down 1 s since 2026-11-16) and their keyframes. ~200–300 LOC FFI, hardware-dependent.
+   6. **Live VAAPI bitrate without a reopen**, removing the reopen limits (up 5 s, down 1 s since
+      2026-11-16) and their keyframes. **Waits for FilmCraft's codec in its own crate** (owner,
+      2026-11-16). Not possible through FFmpeg: FFmpeg 7.1 `vaapi_encode.c` sends the rate-control
+      and HRD parameters (incl. qmin/qmax, so no QP clamp either) only with an IDR (lines 349–354),
+      from a private context computed once at open. Glass is no reference here: its GStreamer VA
+      encoder also reconfigures with a keyframe. Other VA-API encoder crates (cros-codecs) were
+      rejected by the owner: encoding stays on FFmpeg or FilmCraft. Cost until then (sim, §3.3):
+      VAAPI behind a 20–50 ms buffer freezes 6–16 % of the time; deep buffers and x264 are fine.
    7. Small fixes: `lan_cc.rs` window never grows back after persistent congestion; the UI should
       say CQP/ICQ ignore adaptive bitrate.
    Alongside: fuzz the proto parsers (fragment, fec, cursor, control) and remove the panicking
@@ -389,6 +395,9 @@ need access a browser cannot give).
 
 Found while writing these docs (2026-11-12, commit `f7677c7`). Fix them in their own commits.
 
+- **Viewer route through a VPN is silent (2026-11-16):** an Android always-on VPN routed the
+  USB-tethering subnet into `tun0`; the viewer just never reached the presenter, with no hint in
+  the window (AGENTS.md §1.8). The viewer could name the interface its route uses.
 - **Hardcoded 2000×1000:** `--width/--height` default to 2000×1000 and the GUI presenter uses
   them, so a 1920×1080 screen is scaled and distorted. The docs describe native resolution as
   the goal. (Being fixed under Next 1.)
