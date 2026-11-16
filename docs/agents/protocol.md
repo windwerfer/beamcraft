@@ -141,7 +141,8 @@ lower) in slow start: ×1.25 per second until the first cut, through loss below 
 threshold. The budget only grows while the presenter sends ≥ 80 % of it (wire rate, video +
 parity, per 1 s send window), so it stays near what has actually been sent. Loss that stays at ≥ 70 % of its level for 3 s after a
 cut is learned as background loss (random Wi-Fi loss that FEC covers). x264 takes the new rate
-live (no keyframe); VAAPI/FilmCraft reopen (keyframe), at most every 5 s and only for ≥ 15 %.
+live (no keyframe); VAAPI/FilmCraft reopen (keyframe): down by ≥ 10 % at most every 1 s, up by
+≥ 15 % at most every 5 s.
 
 **Loss accounting**: the viewer counts, per frame, packets sent (`data_count + parity_count`)
 against packets received, once the frame is 30 frames old (so late packets still count). Frames

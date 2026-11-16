@@ -424,13 +424,20 @@ pub enum BitrateAction {
     Reopen,
 }
 
-/// Network-driven changes reopen an encoder at most this often.
+/// A network-driven increase reopens an encoder at most this often…
 pub const ADAPTIVE_REOPEN_GAP: Duration = Duration::from_secs(5);
+/// …a decrease at most this often (the controller cuts at most once a second).
+pub const ADAPTIVE_REOPEN_DOWN_GAP: Duration = Duration::from_secs(1);
 
 /// Decide how to reach `wanted` kbit/s from `current`. A change of the
 /// user's setting is applied at once; network-driven changes are applied
-/// live when the encoder can, else by reopening, but only every
-/// [`ADAPTIVE_REOPEN_GAP`] and only for a change of 15 % or more.
+/// live when the encoder can, else by reopening: an increase of 15 % or
+/// more every [`ADAPTIVE_REOPEN_GAP`], a decrease of 10 % or more every
+/// [`ADAPTIVE_REOPEN_DOWN_GAP`]. A cut that waited 5 s left the encoder
+/// overrunning the link, and the controller cut again on every report
+/// (simulated h264_vaapi on a 16 Mbit/s link with a 300 ms buffer:
+/// budget down to 3.5 Mbit/s, 3.3 % lost; with the 1 s gap 9.8 Mbit/s,
+/// 0.0 %; `rate.rs` `sim_keyframes_and_reopens`).
 pub fn bitrate_action(
     current: u32,
     wanted: u32,
@@ -452,8 +459,13 @@ pub fn bitrate_action(
         return BitrateAction::Live;
     }
     let rel = (wanted as f64 - current as f64).abs() / current.max(1) as f64;
-    let rested = since_reopen.is_none_or(|d| d >= ADAPTIVE_REOPEN_GAP);
-    if rel >= 0.15 && rested {
+    let (gap, min_rel) = if wanted < current {
+        (ADAPTIVE_REOPEN_DOWN_GAP, 0.10)
+    } else {
+        (ADAPTIVE_REOPEN_GAP, 0.15)
+    };
+    let rested = since_reopen.is_none_or(|d| d >= gap);
+    if rel >= min_rel && rested {
         BitrateAction::Reopen
     } else {
         BitrateAction::Keep
@@ -614,11 +626,18 @@ mod tests {
         assert_eq!(bitrate_action(8000, 4000, true, true, s(0)), Live);
         // Network changes: live when possible (x264)…
         assert_eq!(bitrate_action(8000, 7900, false, true, s(0)), Live);
-        // …else a reopen only every 5 s and for a 15 % change.
-        assert_eq!(bitrate_action(8000, 7000, false, false, s(10)), Keep);
-        assert_eq!(bitrate_action(8000, 6000, false, false, s(2)), Keep);
-        assert_eq!(bitrate_action(8000, 6000, false, false, s(5)), Reopen);
+        // …else a reopen: up by 15 % every 5 s…
+        assert_eq!(bitrate_action(8000, 9000, false, false, s(10)), Keep);
+        assert_eq!(bitrate_action(8000, 9500, false, false, s(2)), Keep);
+        assert_eq!(bitrate_action(8000, 9500, false, false, s(5)), Reopen);
         assert_eq!(bitrate_action(8000, 9500, false, false, None), Reopen);
+        // …down by 10 % every second.
+        assert_eq!(bitrate_action(8000, 7500, false, false, s(10)), Keep);
+        assert_eq!(
+            bitrate_action(8000, 7000, false, false, Some(Duration::from_millis(900))),
+            Keep
+        );
+        assert_eq!(bitrate_action(8000, 7000, false, false, s(1)), Reopen);
         assert_eq!(effective_bitrate(40_000, 0), 40_000);
         assert_eq!(effective_bitrate(40_000, 12_000), 12_000);
         assert_eq!(effective_bitrate(5_000, 12_000), 5_000);

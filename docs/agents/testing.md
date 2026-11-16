@@ -30,7 +30,7 @@ Build dependencies (Fedora and Ubuntu package lists) are in the README and in
 | Unit (FilmCraft) | `mirrorwire-media/src/filmcraft.rs`, feature `filmcraft` | FilmCraft output via the real `Encoder` decodes with FFmpeg, markers read back, keyframe on request; an `#[ignore]` x264-vs-FilmCraft benchmark |
 | Unit (app) | `#[cfg(test)]` in `mirrorwire-app` | CLI parsing, capture/FEC preference precedence, process log, and `presenter::tests::test_source_streams_to_an_in_process_viewer`: test-pattern presenter (x264) → QUIC → viewer with 1 % loss in one process, live FEC/bitrate/cursor changes, markers read back (needs FFmpeg with libx264; part of the coverage report) |
 | Unit (firewall) | `mirrorwire-net/src/firewall.rs` | hint and notice for every firewalld/ufw state, a fake `Firewalld` proving the startup probe makes no privileged call, one click = one authorization and cancel = no further prompts (D14), D-Bus error classification, zone merging, open-port messages (the D-Bus/process glue is `firewall/system.rs`) |
-| Unit (rate) | `mirrorwire-proto/src/rate.rs`, `fec.rs`, `mirrorwire-media/src/pipeline.rs` | AIMD controller (cuts on queue/loss/backlog, floor 3 Mbit/s, ceiling = user setting, learned random-loss baseline), closed-loop sims with a FIFO bottleneck, auto FEC caps 35 %/60 %, token-bucket bandwidth simulator (viewer `--simulate-bandwidth-kbps`), x264 bitrate change live without a keyframe, VAAPI reopen rate-limited |
+| Unit (rate) | `mirrorwire-proto/src/rate.rs`, `fec.rs`, `mirrorwire-media/src/pipeline.rs` | AIMD controller (cuts on queue/loss/backlog, floor 3 Mbit/s, ceiling = user setting, learned random-loss baseline), closed-loop sims with a FIFO bottleneck, auto FEC caps 35 %/60 %, token-bucket bandwidth simulator (viewer `--simulate-bandwidth-kbps`), x264 bitrate change live without a keyframe, VAAPI reopen rate-limited (down 1 s, up 5 s), keyframe/reopen sim |
 | Loopback (end to end) | `scripts/loopback-test.sh` | test pattern → encoder → QUIC (pinned TLS, pairing) → reassembly → decoder, on localhost, with latency stats |
 | Real Wi-Fi (Android) | `scripts/android-wifi-run.sh`, `scripts/run-stats.py` | test pattern → x264 → QUIC over real Wi-Fi → the Android viewer on an adb-attached device; per-run video, cuts, queue, loss (§3.4) |
 | Real hardware | the owner's T480s + iMac | portal capture, VAAPI, Wi-Fi, OpenGL on a non-Metal Mac (only he can run this) |
@@ -208,6 +208,27 @@ lowers the queue p95 on the deep-buffer links (−16 to −71 %) with fewer cuts
 video there (`WIFI` 13.8 → 13.3 Mbit/s); the shallow links cut a little more often (10 → 12). Tried and not better overall: 0.95
 or 0.85 instead of 90 %, a half or 35 % step instead of a quarter. Weak spot left (roadmap item
 0): a bottleneck is still found by overrunning it, now every ~7–9 s.
+
+**Keyframes and VAAPI reopens (2026-11-16, `sim_keyframes_and_reopens`).** The rows above
+have no keyframes. This test adds one at connect and one per lost frame (≤ 1 per 500 ms, 10× a
+delta frame), with the rate either live (x264) or changed only by a reopen that starts with a
+keyframe (h264_vaapi). x264: no measurable change. VAAPI, reopen down after 1 s / up after 5 s
+(before: both 5 s):
+
+| Link | Cuts | Lowest budget after 10 s | Video delivered | Packets lost | Lost frames | Queue p95 |
+|---|---|---|---|---|---|---|
+| 16 Mbit/s, 300 ms FIFO | 13 (15) | 9.8 (3.5) | 10.8 Mbit/s (6.4) | 0.00 % (3.32 %) | 0 (2) | 95 ms (284) |
+| 20 Mbit/s, 150 ms FIFO | 12 (13) | 12.0 (4.5) | 12.0 Mbit/s (11.4) | 0.14 % (3.80 %) | 3 (5) | 83 ms (134) |
+| 16 Mbit/s, 50 ms FIFO | 15 (9) | 5.4 (6.6) | 5.1 Mbit/s (12.5) | 3.14 % (6.43 %) | 16 (18) | 0 ms (34) |
+
+With the 5 s gap a cut left the encoder overrunning the link for up to 5 s; the controller cut on
+every report meanwhile (down to 3.5 Mbit/s) and learned the loss that did not follow the cut as
+~12 % background loss. The 50 ms row is a different limit: a keyframe larger than the buffer
+(here ~150 KB vs ~100 KB) is lost whatever the rate, re-requested and lost again, until the rate
+makes keyframes small enough; it needs keyframe pacing (roadmap), not a rate rule. Tried and
+rejected: ignoring loss/queue for 1 s after each keyframe (roadmap item 0.3). An upward reopen
+also starts with a keyframe, so the grace hid exactly that overrun: 20 Mbit/s row 1.6–3.1 % lost
+and 21–97 lost frames instead of 0.14 % and 3; forgiving only one report did not fix it.
 
 ### 3.4 Real Wi-Fi: presenter in the dev container, Android tablet viewer (2026-11-15)
 

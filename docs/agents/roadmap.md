@@ -122,9 +122,18 @@ target), **planned**, **idea**. Update this file when an item moves.
         the queue never reached the 40 ms that marks loss as congestion, so the budget climbed
         past the link until loss was heavy. Now near the budget that failed last, loss counts
         and the climb is slow (item 4). Sim: 4.9–5.5 → 0.7–1.2 % lost (testing.md §3.3).
-   3. **Ignore loss right after a keyframe or VAAPI reopen** so reopen, then IDR burst, then another
-      cut can't loop; spread IDR parity across frames. ~60–100 LOC. (Viewer keyframe requests are
-      now limited to one per 2 × RTT, 2026-11-15.)
+   3. **Keyframes and VAAPI reopens: measured (2026-11-16), grace rejected.** The closed-loop
+      sim now has keyframes and VAAPI-style reopens (testing.md §3.3). No reopen → IDR → cut loop
+      showed up; ignoring loss after a keyframe made things worse (an upward reopen's keyframe
+      hid its overrun: 3 → 21–97 lost frames). What did show: a cut waited up to 5 s for the
+      reopen, so the encoder kept overrunning and the controller cut on every report (budget
+      down to 3.5 Mbit/s, 3.3 % lost). Fixed: a decrease reopens after 1 s (≥ 10 %), an increase
+      still every 5 s (16 Mbit/s / 300 ms: 0.0 % lost, lowest budget 9.8). Untested on the
+      T480s. Still open: **keyframe pacing**: a keyframe larger than a shallow bottleneck
+      buffer (50 ms: ~100 KB at 16 Mbit/s) is lost at any rate and re-requested; pace keyframe
+      packets to ~2× the budget over a few frame intervals (and spread their parity) instead
+      of bursting at 500 Mbit/s. (Viewer keyframe requests are limited to one per 2 × RTT,
+      2026-11-15.)
    4. **Hysteresis and probing:** remember the last good budget, climb slowly near it, probe with
       extra FEC before more video, start from the last good value per peer. ~100–150 LOC.
       (Done 2026-11-15: slow start from 10 Mbit/s and no growth while unused. Done 2026-11-16:
@@ -136,7 +145,7 @@ target), **planned**, **idea**. Update this file when an item moves.
    5. **Don't cut when FEC recovered everything** (`unrecoverable == 0`); smooth the loss shared by
       FEC and rate control. ~40–80 LOC.
    6. **Live VAAPI bitrate without a reopen** (VA-API misc-param buffers or a QP clamp), removing
-      the 5 s reopen limit. ~200–300 LOC FFI, hardware-dependent.
+      the reopen limits (up 5 s, down 1 s since 2026-11-16) and their keyframes. ~200–300 LOC FFI, hardware-dependent.
    7. Small fixes: `lan_cc.rs` window never grows back after persistent congestion; the UI should
       say CQP/ICQ ignore adaptive bitrate.
    Alongside: fuzz the proto parsers (fragment, fec, cursor, control) and remove the panicking

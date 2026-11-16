@@ -1000,7 +1000,9 @@ mod tests {
             let mut parity = (data as f32 * overhead).ceil() as usize;
             if key {
                 data *= KEYFRAME_SIZE;
-                let o = FecMode::Auto.overhead(smoothed_loss, 0.0, true).unwrap_or(0.0);
+                let o = FecMode::Auto
+                    .overhead(smoothed_loss, 0.0, true)
+                    .unwrap_or(0.0);
                 parity = (data as f32 * o).ceil() as usize;
                 (keyframes, last_key_us) = (keyframes + 1, Some(t_us));
             }
@@ -1280,14 +1282,34 @@ mod tests {
         for (name, link, min_kbps, max_lost_pct) in [
             ("no limit", LAN, 39_000, 0.01),
             ("16 Mbit/s, 300 ms buffer", WIFI, 9_000, 0.2),
-            ("20 Mbit/s, 150 ms buffer", Link { bottleneck_kbps: 20_000, ..LAN }, 11_000, 0.5),
+            (
+                "20 Mbit/s, 150 ms buffer",
+                Link {
+                    bottleneck_kbps: 20_000,
+                    ..LAN
+                },
+                11_000,
+                0.5,
+            ),
         ] {
             for keyframes in [Keyframes::Live, Keyframes::Reopen] {
-                let mode = if keyframes == Keyframes::Live { "live" } else { "reopen" };
+                let mode = if keyframes == Keyframes::Live {
+                    "live"
+                } else {
+                    "reopen"
+                };
                 let r = simulate(Link { keyframes, ..link }, 40_000, 90);
                 print(&format!("{mode}: {name}"), &r);
-                assert!(r.lost_pct < max_lost_pct, "{mode} {name}: {:.2} % lost", r.lost_pct);
-                assert!(r.lost_frames <= 5, "{mode} {name}: {} lost frames", r.lost_frames);
+                assert!(
+                    r.lost_pct < max_lost_pct,
+                    "{mode} {name}: {:.2} % lost",
+                    r.lost_pct
+                );
+                assert!(
+                    r.lost_frames <= 5,
+                    "{mode} {name}: {} lost frames",
+                    r.lost_frames
+                );
                 if keyframes == Keyframes::Live || link.bottleneck_kbps > 0 {
                     assert!(r.min_kbps >= min_kbps, "{mode} {name}: min {}", r.min_kbps);
                 }
