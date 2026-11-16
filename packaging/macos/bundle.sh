@@ -37,7 +37,8 @@ iconutil -c icns "$ICONSET" -o "$APP/Contents/Resources/BeamCraft.icns"
 
 echo "== linked libraries"
 otool -L "$APP/Contents/MacOS/beamcraft"
-if otool -L "$APP/Contents/MacOS/beamcraft" | tail -n +2 | grep -vE '^\s*(/usr/lib/|/System/Library/)'; then
+# A universal binary prints one "<path> (architecture X):" header per slice; skip those.
+if otool -L "$APP/Contents/MacOS/beamcraft" | grep -vE ':$' | grep -vE '^\s*(/usr/lib/|/System/Library/)'; then
   echo "error: binary links libraries outside the OS" >&2
   exit 1
 fi
