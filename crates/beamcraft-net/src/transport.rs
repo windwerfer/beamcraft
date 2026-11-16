@@ -16,8 +16,8 @@ use beamcraft_proto::control::{hello_protocol, Control, CursorMode, QueueDelay, 
 use beamcraft_proto::cursor::{
     is_pointer_datagram, CursorEvent, CursorImage, PointerUpdate, ViewerCursor, MAX_IMAGE_STREAM,
 };
-use beamcraft_proto::fec::{fec_fragment, FecHeader, FecMode, LinkStats};
-use beamcraft_proto::fragment::{fragment, FrameTiming};
+use beamcraft_proto::fec::{FecMode, LinkStats};
+use beamcraft_proto::fragment::{fragment, FrameTiming, PacketHeader};
 use beamcraft_proto::rate::{AdaptiveBitrate, Sample};
 use beamcraft_proto::stats::StageStats;
 use beamcraft_proto::PROTOCOL_VERSION;
@@ -730,10 +730,7 @@ async fn send_loop(
             sent_us,
         };
         let overhead = fec.overhead(frame.keyframe);
-        let packets = match overhead {
-            Some(o) => fec_fragment(frame.frame_id, frame.keyframe, timing, &frame.data, max, o),
-            None => fragment(frame.frame_id, frame.keyframe, timing, &frame.data, max),
-        };
+        let packets = fragment(frame.frame_id, frame.keyframe, timing, &frame.data, max, overhead);
         let wire_len: usize = packets.iter().map(|p| p.len()).sum();
         if should_drop_for_backlog(frame.keyframe, wire_len, conn.datagram_send_buffer_space()) {
             // The network is behind (big scene change on Wi-Fi). Sending this
@@ -754,7 +751,7 @@ async fn send_loop(
         if overhead.is_some() {
             window_parity += packets
                 .first()
-                .and_then(|p| FecHeader::parse(p))
+                .and_then(|p| PacketHeader::parse(p))
                 .map_or(0, |(h, _)| h.parity_count as usize);
         }
         for datagram in packets {
@@ -1300,7 +1297,7 @@ mod tests {
                 if viewer.handle_pointer_datagram(&d) {
                     continue;
                 }
-                assert_eq!(d[0], beamcraft_proto::fec::FEC_WIRE_VERSION);
+                assert_eq!(d[0], beamcraft_proto::fragment::WIRE_VERSION);
                 if !first_dropped {
                     first_dropped = true; // lose one packet: parity must cover it
                     continue;

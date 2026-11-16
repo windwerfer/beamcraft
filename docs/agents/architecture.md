@@ -63,9 +63,9 @@ xdg-desktop-portal ScreenCast  (one-time dialog, restore token)
        optional intra refresh, CBR-ish rate control
   -> VideoSink (QUIC)                                          QUIC endpoint (pinned cert)
        fragment frame into <= max_datagram_size pieces           reassemble fragments by frame_id,
-       34-byte header each, unreliable datagrams  ---------->    detect loss, request keyframe
-       (FEC viewers: 44-byte v2 header, Reed-Solomon             (FEC: rebuild a block from any
-        parity per block, overhead from LinkReport)               k of n packets, report loss)
+       44-byte header each, unreliable datagrams  ---------->    detect loss, request keyframe
+       (FEC: Reed-Solomon parity per block,                      (FEC: rebuild a block from any
+        overhead from LinkReport)                                 k of n packets, report loss)
        control stream: Hello/StreamInfo/Ping/Pong/   <------>    over control stream
        RequestKeyframe/LinkReport/Rejected/Bye                             -> VideoDecoder (FFmpeg VideoToolbox/VAAPI
                                                                     by default, else FilmCraft or

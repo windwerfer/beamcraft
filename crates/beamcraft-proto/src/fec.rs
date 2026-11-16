@@ -1,24 +1,15 @@
-//! Forward error correction for video datagrams (wire version 2).
+//! Forward error correction for the video packets of [`crate::fragment`].
 //!
-//! Each frame's payload is cut into equal-size data shards (the last one is
-//! sent unpadded). Data shard `i` belongs to block `i % blocks`, so
-//! consecutive packets land in different blocks and a short burst of loss
-//! costs each block only a packet or two. Every block gets Reed-Solomon
-//! parity shards (`reed-solomon-simd`); the viewer rebuilds a block as soon as
-//! any `k` of its `k + m` shards have arrived, without a round trip.
+//! Data shard `i` of a frame belongs to block `i % blocks`, so consecutive
+//! packets land in different blocks and a short burst of loss costs each
+//! block only a packet or two. Every block gets Reed-Solomon parity shards
+//! (`reed-solomon-simd`); the viewer rebuilds a block as soon as any `k` of
+//! its `k + m` shards have arrived, without a round trip. Also here: the FEC
+//! setting, the viewer's link counters and test simulators of a lossy or
+//! narrow link.
 
-use crate::fragment::FrameTiming;
-use bytes::{BufMut, Bytes, BytesMut};
-use std::borrow::Cow;
-
-pub const FEC_WIRE_VERSION: u8 = 2;
-pub const FEC_HEADER_LEN: usize = 44;
-/// Data shards per block before a frame is split into more blocks.
-pub const MAX_BLOCK_DATA: usize = 64;
-const MAX_BLOCKS: usize = 255;
-/// Bigger claimed frames are rejected (hostile input).
-pub const MAX_FRAME_LEN: usize = 64 << 20;
-const FLAG_KEYFRAME: u8 = 0b0000_0001;
+use crate::fragment::PacketHeader;
+use bytes::Bytes;
 
 /// Presenter setting: no FEC, adaptive, or a fixed overhead percentage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -102,202 +93,10 @@ pub fn block_len(total: usize, blocks: usize, b: usize) -> usize {
     total / blocks + usize::from(b < total % blocks)
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FecHeader {
-    pub keyframe: bool,
-    pub frame_id: u32,
-    /// `0..data_count` are data shards, `data_count..data_count+parity_count` parity.
-    pub index: u16,
-    pub data_count: u16,
-    pub parity_count: u16,
-    pub frame_len: u32,
-    pub shard_len: u16,
-    pub blocks: u8,
-    pub timing: FrameTiming,
-}
-
-impl FecHeader {
-    fn write(&self, buf: &mut BytesMut) {
-        buf.put_u8(FEC_WIRE_VERSION);
-        buf.put_u8(if self.keyframe { FLAG_KEYFRAME } else { 0 });
-        buf.put_u32(self.frame_id);
-        buf.put_u16(self.index);
-        buf.put_u16(self.data_count);
-        buf.put_u16(self.parity_count);
-        buf.put_u32(self.frame_len);
-        buf.put_u16(self.shard_len);
-        buf.put_u8(self.blocks);
-        buf.put_u8(0);
-        buf.put_u64(self.timing.capture_us);
-        buf.put_u64(self.timing.encoded_us);
-        buf.put_u64(self.timing.sent_us);
-    }
-
-    /// Parses and validates a version-2 packet. Inconsistent headers (from a
-    /// broken or hostile sender) return `None`.
-    pub fn parse(d: &[u8]) -> Option<(Self, &[u8])> {
-        if d.len() < FEC_HEADER_LEN || d[0] != FEC_WIRE_VERSION {
-            return None;
-        }
-        let u16_at = |o: usize| u16::from_be_bytes([d[o], d[o + 1]]);
-        let u32_at = |o: usize| u32::from_be_bytes(d[o..o + 4].try_into().unwrap());
-        let u64_at = |o: usize| u64::from_be_bytes(d[o..o + 8].try_into().unwrap());
-        let h = Self {
-            keyframe: d[1] & FLAG_KEYFRAME != 0,
-            frame_id: u32_at(2),
-            index: u16_at(6),
-            data_count: u16_at(8),
-            parity_count: u16_at(10),
-            frame_len: u32_at(12),
-            shard_len: u16_at(16),
-            blocks: d[18],
-            timing: FrameTiming {
-                capture_us: u64_at(20),
-                encoded_us: u64_at(28),
-                sent_us: u64_at(36),
-            },
-        };
-        let payload = &d[FEC_HEADER_LEN..];
-        if !h.layout_ok() || payload.len() != h.payload_len(h.index as usize) {
-            return None;
-        }
-        Some((h, payload))
-    }
-
-    fn layout_ok(&self) -> bool {
-        let (k, sl, len) = (
-            self.data_count as usize,
-            self.shard_len as usize,
-            self.frame_len as usize,
-        );
-        k >= 1
-            && sl >= 2
-            && sl % 2 == 0
-            && self.blocks >= 1
-            && self.blocks as usize <= k
-            && (self.index as usize) < k + self.parity_count as usize
-            && k + self.parity_count as usize <= u16::MAX as usize
-            && len <= MAX_FRAME_LEN
-            && len <= k * sl
-            && (k == 1 || len > (k - 1) * sl)
-    }
-
-    /// Bytes carried by packet `index` (data shards are unpadded).
-    pub fn payload_len(&self, index: usize) -> usize {
-        let sl = self.shard_len as usize;
-        if index >= self.data_count as usize {
-            return sl;
-        }
-        sl.min((self.frame_len as usize).saturating_sub(index * sl))
-    }
-
-    /// Whether two packets describe the same frame layout.
-    pub fn same_layout(&self, o: &Self) -> bool {
-        (
-            self.data_count,
-            self.parity_count,
-            self.frame_len,
-            self.shard_len,
-            self.blocks,
-        ) == (
-            o.data_count,
-            o.parity_count,
-            o.frame_len,
-            o.shard_len,
-            o.blocks,
-        )
-    }
-}
-
-/// Splits one encoded frame into data and parity packets no larger than
-/// `max_datagram`. Data packets come first, in order (consecutive ones belong
-/// to different blocks), then the parity packets, also interleaved.
-pub fn fec_fragment(
-    frame_id: u32,
-    keyframe: bool,
-    timing: FrameTiming,
-    payload: &[u8],
-    max_datagram: usize,
-    overhead: f32,
-) -> Vec<Bytes> {
-    let max_shard = (max_datagram.saturating_sub(FEC_HEADER_LEN) & !1).max(2);
-    let shard_len = if payload.len() < max_shard {
-        (payload.len().max(1) + 1) & !1
-    } else {
-        max_shard
-    };
-    let k = payload.len().div_ceil(shard_len).max(1);
-    assert!(
-        k < u16::MAX as usize && payload.len() <= MAX_FRAME_LEN,
-        "frame too large to fragment"
-    );
-    let blocks = k.div_ceil(MAX_BLOCK_DATA).min(MAX_BLOCKS);
-    let parity = parity_count(k, blocks, overhead, keyframe);
-    let mut header = FecHeader {
-        keyframe,
-        frame_id,
-        index: 0,
-        data_count: k as u16,
-        parity_count: parity as u16,
-        frame_len: payload.len() as u32,
-        shard_len: shard_len as u16,
-        blocks: blocks as u8,
-        timing,
-    };
-    let shard = |i: usize| -> Cow<'_, [u8]> {
-        let start = (i * shard_len).min(payload.len());
-        let end = (start + shard_len).min(payload.len());
-        let s = &payload[start..end];
-        if s.len() == shard_len {
-            Cow::Borrowed(s)
-        } else {
-            let mut v = s.to_vec();
-            v.resize(shard_len, 0);
-            Cow::Owned(v)
-        }
-    };
-    let packet = |h: &FecHeader, body: &[u8]| {
-        let mut buf = BytesMut::with_capacity(FEC_HEADER_LEN + body.len());
-        h.write(&mut buf);
-        buf.extend_from_slice(body);
-        buf.freeze()
-    };
-
-    let mut out = Vec::with_capacity(k + parity);
-    for i in 0..k {
-        header.index = i as u16;
-        let len = header.payload_len(i);
-        out.push(packet(
-            &header,
-            &payload[i * shard_len..i * shard_len + len],
-        ));
-    }
-    // recovery[b][pos] is parity shard `b + pos * blocks`.
-    let mut recovery: Vec<Vec<Vec<u8>>> = Vec::with_capacity(blocks);
-    for b in 0..blocks {
-        let m = block_len(parity, blocks, b);
-        if m == 0 {
-            recovery.push(Vec::new());
-            continue;
-        }
-        let originals: Vec<Cow<'_, [u8]>> = (b..k).step_by(blocks).map(shard).collect();
-        recovery
-            .push(reed_solomon_simd::encode(originals.len(), m, &originals).unwrap_or_default());
-    }
-    for j in 0..parity {
-        let Some(body) = recovery[j % blocks].get(j / blocks) else {
-            continue;
-        };
-        header.index = (k + j) as u16;
-        out.push(packet(&header, body));
-    }
-    out
-}
-
 /// Rebuilds the missing data shards of block `b` from whatever data and
 /// parity shards are present. Returns `(data index, unpadded bytes)`.
 pub(crate) fn recover_block(
-    h: &FecHeader,
+    h: &PacketHeader,
     b: usize,
     data: &[Option<Bytes>],
     parity: &[Option<Bytes>],
@@ -542,7 +341,7 @@ impl BandwidthSim {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::fragment::Reassembler;
+    use crate::fragment::{fragment, FrameTiming, Reassembler, HEADER_LEN};
 
     const T: FrameTiming = FrameTiming {
         capture_us: 1,
@@ -619,8 +418,8 @@ mod tests {
 
     #[test]
     fn header_roundtrip_and_validation() {
-        let pkts = fec_fragment(9, true, T, &payload(5000), 1200, 0.2);
-        let (h, body) = FecHeader::parse(&pkts[0]).unwrap();
+        let pkts = fragment(9, true, T, &payload(5000), 1200, Some(0.2));
+        let (h, body) = PacketHeader::parse(&pkts[0]).unwrap();
         assert_eq!(
             (h.frame_id, h.keyframe, h.index, h.frame_len, h.timing),
             (9, true, 0, 5000, T)
@@ -629,15 +428,15 @@ mod tests {
         assert!(pkts.iter().all(|p| p.len() <= 1200));
         let mut bad = pkts[0].to_vec();
         bad[18] = 0; // zero blocks
-        assert!(FecHeader::parse(&bad).is_none());
+        assert!(PacketHeader::parse(&bad).is_none());
         let mut bad = pkts[0].to_vec();
         bad[12..16].copy_from_slice(&u32::MAX.to_be_bytes()); // frame_len too big
-        assert!(FecHeader::parse(&bad).is_none());
+        assert!(PacketHeader::parse(&bad).is_none());
         assert!(
-            FecHeader::parse(&pkts[0][..FEC_HEADER_LEN + 3]).is_none(),
+            PacketHeader::parse(&pkts[0][..HEADER_LEN + 3]).is_none(),
             "truncated"
         );
-        assert!(FecHeader::parse(&[2u8; 10]).is_none());
+        assert!(PacketHeader::parse(&[2u8; 10]).is_none());
     }
 
     #[test]
@@ -650,8 +449,8 @@ mod tests {
             (300_000, 0.25),
         ] {
             let data = payload(len);
-            let pkts = fec_fragment(1, len > 100_000, T, &data, 1200, overhead);
-            let (h, _) = FecHeader::parse(&pkts[0]).unwrap();
+            let pkts = fragment(1, len > 100_000, T, &data, 1200, Some(overhead));
+            let (h, _) = PacketHeader::parse(&pkts[0]).unwrap();
             let (k, p, blocks) = (
                 h.data_count as usize,
                 h.parity_count as usize,
@@ -682,7 +481,7 @@ mod tests {
         // 300 data packets in 5 blocks, 2 parity each at minimum: a burst of
         // 10 consecutive data packets costs each block exactly 2.
         let data = payload(300 * 1156);
-        let pkts = fec_fragment(1, true, T, &data, 1200, 0.0);
+        let pkts = fragment(1, true, T, &data, 1200, Some(0.0));
         assert_eq!(
             deliver(&pkts, |i| !(40..50).contains(&i)).as_deref(),
             Some(&data[..])
@@ -696,14 +495,14 @@ mod tests {
 
     #[test]
     fn hostile_mixed_layouts_do_not_panic() {
-        let a = fec_fragment(3, false, T, &payload(4000), 1200, 0.5);
-        let b = fec_fragment(3, false, T, &payload(9000), 1000, 0.5);
+        let a = fragment(3, false, T, &payload(4000), 1200, Some(0.5));
+        let b = fragment(3, false, T, &payload(9000), 1000, Some(0.5));
         let mut r = Reassembler::new(1_000_000);
         for p in a.iter().take(2).chain(b.iter()).chain(a.iter().skip(2)) {
             let _ = r.push(p.clone(), 0);
         }
         let mut junk = a[0].to_vec();
-        junk[FEC_HEADER_LEN..].fill(0xff);
+        junk[HEADER_LEN..].fill(0xff);
         let _ = r.push(Bytes::from(junk), 0);
     }
 

@@ -41,30 +41,44 @@ unknown fields are ignored. Any change to a message bumps `PROTOCOL_VERSION` (§
 
 ## 3. Video datagrams
 
-Each encoded frame (H.264 Annex B access unit) is split into fragments that fit
-`conn.max_datagram_size()`. Every fragment starts with a **34-byte big-endian header**
-(`HEADER_LEN`):
+One packet format, with or without FEC (`beamcraft-proto/src/fragment.rs`). Each encoded frame
+(H.264 Annex B access unit) is cut into `data_count` equal data shards of `shard_len` bytes
+(even) that fit `conn.max_datagram_size()`; the last data shard goes out unpadded. While the
+presenter's FEC setting isn't `off`, `parity_count` parity shards follow (§3b); with `off` it is
+0. Data packets go out first, then parity (paced by the congestion controller like everything
+else). Every packet starts with a **44-byte big-endian header** (`HEADER_LEN`):
 
 | Offset | Size | Field |
 |---|---|---|
-| 0 | 1 | wire version (`WIRE_VERSION`, currently 1); other values are dropped |
+| 0 | 1 | wire version (`WIRE_VERSION` = 2); other values are dropped |
 | 1 | 1 | flags: bit 0 = keyframe; other bits reserved, send 0 |
 | 2 | 4 | `frame_id` (u32, increments per frame) |
-| 6 | 2 | fragment `index` |
-| 8 | 2 | fragment `count` |
-| 10 | 8 | `capture_us` (presenter clock) |
-| 18 | 8 | `encoded_us` |
-| 26 | 8 | `sent_us` |
+| 6 | 2 | `index`: `0..data_count` data, then `data_count..data_count+parity_count` parity |
+| 8 | 2 | `data_count` (≥ 1) |
+| 10 | 2 | `parity_count` |
+| 12 | 4 | `frame_len` (bytes of the encoded frame, ≤ 64 MiB) |
+| 16 | 2 | `shard_len` |
+| 18 | 1 | `blocks` (§3b; 1..=255, ≤ `data_count`) |
+| 19 | 1 | reserved, 0 |
+| 20 | 8 | `capture_us` (presenter clock) |
+| 28 | 8 | `encoded_us` |
+| 36 | 8 | `sent_us` |
 
-The receiver reassembles by `frame_id`, drops incomplete frames that are overtaken, reports the
-loss, and asks for a keyframe unless the stream uses intra refresh.
+Receivers drop packets whose header is inconsistent (zero blocks, `frame_len` not matching the
+counts, payload length not what the index implies) or whose layout differs from the first packet
+seen for that frame, and keep at most 64 partial frames. The receiver reassembles by
+`frame_id`, drops incomplete frames that are overtaken, reports the loss, and asks for a
+keyframe unless the stream uses intra refresh.
+
+The header costs 10 bytes more per packet than the old version-1 fragments (34 bytes), about
+0.7 % of a 1400-byte packet, in exchange for a single receive path.
 
 ## 3a. Cursor as coordinates (`stream_info.cursor` = `separate`)
 
 All in `beamcraft-proto/src/cursor.rs`.
 
 **Pointer datagram** (unreliable, one per change, not tied to video frames). The first byte
-`0xC1` can't collide with a video fragment (whose first byte is `WIRE_VERSION` = 1).
+`0xC1` can't collide with a video packet (whose first byte is `WIRE_VERSION` = 2).
 Exactly 32 bytes, big endian (other lengths are dropped; a later tool such as a pen with
 pressure/tilt changes the layout and bumps `PROTOCOL_VERSION`):
 
@@ -94,35 +108,14 @@ line up. The same message is meant to carry the future pen/Wacom mode.
 
 ## 3b. Forward error correction
 
-Sent while the presenter's FEC setting isn't `off` (otherwise the version-1 fragments of §3).
-Code in `beamcraft-proto/src/fec.rs` (erasure code: `reed-solomon-simd`, MIT AND BSD-3-Clause).
+Parity shards in the packets of §3, while the presenter's FEC setting isn't `off`. Code in
+`beamcraft-proto/src/fec.rs` (erasure code: `reed-solomon-simd`, MIT AND BSD-3-Clause).
 
-The frame is cut into `data_count` equal shards of `shard_len` bytes (even; the last data shard
-goes out unpadded and is zero-padded for coding). Data shard `i` belongs to block
-`i % blocks`, parity shard `j` to block `j % blocks` (`blocks = ceil(data_count / 64)`, at most
-255), so consecutive packets hit different blocks and a burst costs each block one or two
-packets. Each block is a Reed-Solomon code over its data and parity shards: **any** `k_b` of
-its `k_b + m_b` shards rebuild it, immediately, without a round trip. Data packets go out first,
-then parity (paced by the congestion controller like everything else). 44-byte header, big
-endian:
-
-| Offset | Size | Field |
-|---|---|---|
-| 0 | 1 | wire version 2 |
-| 1 | 1 | flags: bit 0 = keyframe |
-| 2 | 4 | `frame_id` |
-| 6 | 2 | `index`: `0..data_count` data, then `data_count..data_count+parity_count` parity |
-| 8 | 2 | `data_count` |
-| 10 | 2 | `parity_count` |
-| 12 | 4 | `frame_len` (bytes of the encoded frame, ≤ 64 MiB) |
-| 16 | 2 | `shard_len` |
-| 18 | 1 | `blocks` |
-| 19 | 1 | reserved, 0 |
-| 20 | 24 | `capture_us`, `encoded_us`, `sent_us` (as in §3) |
-
-Receivers drop packets whose header is inconsistent (zero blocks, `frame_len` not matching the
-counts, payload length not what the index implies) or whose layout differs from the first packet
-seen for that frame, and keep at most 64 partial frames.
+Data shard `i` belongs to block `i % blocks`, parity shard `j` to block `j % blocks`
+(`blocks = ceil(data_count / 64)`, at most 255), so consecutive packets hit different blocks and
+a burst costs each block one or two packets. Each block is a Reed-Solomon code over its data
+shards (zero-padded to `shard_len` for coding) and parity shards: **any** `k_b` of its
+`k_b + m_b` shards rebuild it, immediately, without a round trip.
 
 **Overhead** (`FecMode::overhead`): `auto` gives delta frames 10 % + 3 × loss + boost (10–35 %)
 parity and keyframes 25 % + 5 × loss + 1.5 × boost (25–60 %), from the loss the viewer reports in
