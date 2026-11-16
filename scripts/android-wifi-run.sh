@@ -4,6 +4,7 @@
 # usage: scripts/android-wifi-run.sh <seconds> <log-out> [presenter args...]
 #   MIRRORWIRE_BIN=path   presenter binary (default: build target/release/mirrorwire)
 #   ADB_SERIAL=serial    which device (default: the only one attached)
+#   ENCODER=name         presenter encoder (default: x264; e.g. vaapi)
 #   ADVERTISE_IP=ip      presenter address the device connects to (default: the local
 #                        address that routes to the device's wlan0)
 # Writes the presenter log to <log-out> and the device's `mirrorwire` logcat to <log-out>.logcat.
@@ -11,7 +12,7 @@
 # same MirrorWire release on both sides. Summarise runs with scripts/run-stats.py.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-[[ $# -ge 2 ]] || { sed -n '2,11p' "$0" >&2; exit 2; }
+[[ $# -ge 2 ]] || { sed -n '2,12p' "$0" >&2; exit 2; }
 DUR=$1; LOG=$2; shift 2
 PKG=io.github.windwerfer.mirrorwire
 ADB=(adb ${ADB_SERIAL:+-s "$ADB_SERIAL"})
@@ -27,7 +28,7 @@ if [[ -z "${ADVERTISE_IP:-}" ]]; then
 fi
 W=$(mktemp -d)
 "${ADB[@]}" shell am force-stop "$PKG"
-"$BIN" --config-dir "$W/p" present --source test --encoder x264 --no-mdns --no-pairing \
+"$BIN" --config-dir "$W/p" present --source test --encoder "${ENCODER:-x264}" --no-mdns --no-pairing \
   --uri-file "$W/uri" --advertise-ip "$ADVERTISE_IP" "$@" > "$LOG" 2>&1 &
 PP=$!
 trap 'kill -INT $PP 2>/dev/null || true; "${ADB[@]}" shell am force-stop "$PKG"; rm -rf "$W"' EXIT
