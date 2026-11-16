@@ -141,6 +141,36 @@ target), **planned**, **idea**. Update this file when an item moves.
       say CQP/ICQ ignore adaptive bitrate.
    Alongside: fuzz the proto parsers (fragment, fec, cursor, control) and remove the panicking
    index/unwrap sites in proto/net, since hostile or corrupt packets must never crash a stream.
+   **Ideas from Glass (owner, 2026-11-16; no code yet).** Glass
+   (https://github.com/Ntarasiuk/glass, MIT, reviewed at 4ba9757 / v0.15.0) is a browser-first
+   remote desktop over Tailscale with the same video core as ours (H.264, QUIC datagrams, no
+   jitter buffer, adaptive bitrate). Not a replacement: no viewer for the 2011 iMac (VideoToolbox
+   or browser only), no Android APK, Linux pen/extend/overlay missing, needs Tailscale for
+   encryption and sudo for uinput. Worth adopting, by re-implementing in our code (their code is
+   bound to their protocol and JS client; if a small piece is copied, keep their MIT notice and
+   note it in decisions.md):
+   - **NACK resend of lost fragments** (`crates/glass-host/src/retransmit.rs`, viewer side in
+     `web/video-stream.js`): the viewer asks for missing fragments of a frame before giving up,
+     the presenter keeps a short send window (Glass: 3 s / 8 MiB, repair budget 128 KiB/s).
+     Complements FEC, mainly for large IDRs; ask for a keyframe only if the resend misses its
+     deadline (~1 RTT). Needs a protocol bump. Fits item 0 between 3 and 5.
+   - **Keyframe request backoff** 250 ms doubling to 1 s, and keep acking frames while waiting
+     for a keyframe so the wait is not read as queueing (`web/video-stream.js`). Extends the
+     current one-per-2×RTT limit.
+   - **Frame integrity check before decode** (Glass: Fletcher-16 over the reassembled frame in
+     `glass-proto`). QUIC already authenticates each packet, so this only catches our own
+     reassembly/FEC bugs; cheap, never feed a mismatching frame to the decoder. Low priority.
+   - **Bitrate: frame-ack throughput as a second signal and no raise on a still screen**
+     (`crates/glass-host/src/rate.rs`). Choke-point memory is already done (item 4).
+   - **Live capture-to-display latency** from the clock offset plus a capture timestamp on each
+     frame (`web/worker.js`): feeds the bottleneck line (item 5).
+   - **In-place VAAPI bitrate with step/hold limits** (`crates/glass-host/src/linux/va_encode.rs`,
+     via GStreamer): reference for item 6.
+   - **Decoder ladder** hw-lowlatency, hw, sw (`web/video-stream.js`): matches the Android
+     fallback chain; check ours has an explicit low-latency step.
+   - Optional: **OpenH264** (BSD) as the Linux software encoder instead of x264, for GPL-free
+     builds (D8, item 4 of Next).
+   Not adopted: Tailscale/accounts (D4: LAN pairing, no accounts), uinput (D1: portal first).
 
 0b. **Structure improvements (owner, 2026-11-14): after item 0, before widening the scope**
    (bottleneck line, Extend mode, phone input, Mac presenter). Borrowed from PhotoCraft:
