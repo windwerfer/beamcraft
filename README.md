@@ -52,6 +52,8 @@ crates/
   beamcraft-app     the `beamcraft` binary: CLI, presenter, headless viewer, egui viewer
 scripts/
   loopback-test.sh   test pattern -> QUIC -> headless viewer on localhost
+  android-wifi-run.sh  test pattern -> real Wi-Fi -> Android viewer via adb (one run)
+  run-stats.py       one summary row per presenter log (video, cuts, queue, loss)
 packaging/
   build-ffmpeg.sh    minimal static FFmpeg (+ x264 on Linux) used by all release builds
   macos/             .app bundling and UDZO DMG (Info.plist, icon, ad-hoc signing)

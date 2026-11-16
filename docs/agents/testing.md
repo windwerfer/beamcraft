@@ -32,6 +32,7 @@ Build dependencies (Fedora and Ubuntu package lists) are in the README and in
 | Unit (firewall) | `beamcraft-net/src/firewall.rs` | hint and notice for every firewalld/ufw state, a fake `Firewalld` proving the startup probe makes no privileged call, one click = one authorization and cancel = no further prompts (D14), D-Bus error classification, zone merging, open-port messages (the D-Bus/process glue is `firewall/system.rs`) |
 | Unit (rate) | `beamcraft-proto/src/rate.rs`, `fec.rs`, `beamcraft-media/src/pipeline.rs` | AIMD controller (cuts on queue/loss/backlog, floor 3 Mbit/s, ceiling = user setting, learned random-loss baseline), closed-loop sims with a FIFO bottleneck, auto FEC caps 35 %/60 %, token-bucket bandwidth simulator (viewer `--simulate-bandwidth-kbps`), x264 bitrate change live without a keyframe, VAAPI reopen rate-limited |
 | Loopback (end to end) | `scripts/loopback-test.sh` | test pattern → encoder → QUIC (pinned TLS, pairing) → reassembly → decoder, on localhost, with latency stats |
+| Real Wi-Fi (Android) | `scripts/android-wifi-run.sh`, `scripts/run-stats.py` | test pattern → x264 → QUIC over real Wi-Fi → the Android viewer on an adb-attached device; per-run video, cuts, queue, loss (§3.4) |
 | Real hardware | the owner's T480s + iMac | portal capture, VAAPI, Wi-Fi, OpenGL on a non-Metal Mac (only he can run this) |
 
 ### The oracle: the frame marker
@@ -214,6 +215,27 @@ Presenter: this repo's dev container on the Fedora laptop (host network, Wi-Fi),
 x264 1920×1080@60, 40 Mbit/s setting, adaptive bitrate and FEC auto. Viewer: the MTK tablet
 (TB336FU, `c2.mtk.avc.decoder` GPU output) over the same Wi-Fi, debug APK built here. 60 s per
 run, before and after alternated so Wi-Fi conditions are comparable. "before" is 38e3290.
+
+**Reproduce** (also §3.5): install the APK of the same release (`packaging/android/build-apk.sh`,
+`adb install -r dist/BeamCraft-arm64-v8a.apk`), keep the device on USB for adb and on the same
+Wi-Fi, then alternate two presenter builds and summarise:
+
+```sh
+cp target/release/beamcraft /tmp/bc-before        # build the "before" commit first
+for i in 1 2; do for b in before after; do
+  BEAMCRAFT_BIN=/tmp/bc-$b scripts/android-wifi-run.sh 60 /tmp/tab-$b-$i.log   # extra args go to `present`
+done; done
+scripts/run-stats.py /tmp/tab-*.log
+```
+
+`android-wifi-run.sh` starts the presenter (`--no-pairing --no-mdns`, test pattern, x264),
+opens its `beamcraft://` link on the device with `am start`, waits, stops both, and keeps the
+device's `beamcraft` logcat next to the log. `ADB_SERIAL` picks a device; `ADVERTISE_IP`
+overrides the presenter address (default: the local address that routes to the device's
+wlan0). The UDP port (47800) must be open in the host firewall. `run-stats.py` reads the
+per-second `presenter:` lines and the `adaptive bitrate: cut` lines; its columns are the ones
+in the tables below (unrecoverable frames, keyframes, cuts by trigger, video sent, queue mean /
+p95 of the per-second viewer queue, QUIC packets lost).
 
 | Run | Unrecoverable frames | Keyframes sent | Viewer requests honoured / ignored | Cuts | 1 s windows with RTT > 150 ms | Video sent (mean) |
 |---|---|---|---|---|---|---|
