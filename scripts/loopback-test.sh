@@ -24,4 +24,4 @@ trap 'kill -INT ${PP:-0} 2>/dev/null || true; rm -rf "$WORK"' EXIT
 PP=$!
 for _ in $(seq 100); do [[ -s "$WORK/uri" ]] && break; sleep 0.1; done
 "$BIN" --config-dir "$WORK/v" view --headless --duration "$DUR" "$@" "$(cat "$WORK/uri")"
-grep -E "presenter:" "$WORK/present.log" | tail -1
+grep -E " presenter: [0-9.]+ fps" "$WORK/present.log" | tail -1
