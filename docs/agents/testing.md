@@ -249,6 +249,24 @@ Paced: a keyframe at 1.25 × the budget, frames that waited behind a paced one a
 - Left: VAAPI behind a 20–50 ms buffer still freezes 6–16 % of the time; a live VAAPI rate
   (roadmap item 0.6) would remove the reopen keyframes.
 
+**Roadmap item 0.5 tried and rejected (2026-11-16).** The sim now counts lost frames (more
+packets lost than parity, pooled per frame) in every mode and passes the count of each 500 ms
+window to the controller as the viewer's `unrecoverable` would be. Three variants, each against
+the table above (same sim, same seeds):
+- *No loss cut while every frame was rebuilt* (except severe loss): on the shallow buffers the
+  budget settles above the link with a standing loss FEC covers. 16 Mbit/s / 50 ms: 12 → 1 cuts,
+  packet loss 0.72 → 5.42 %, video 13.3 → 12.9 Mbit/s, the test fails; VAAPI 16/50 paced
+  291 → 401 frozen frames. The loss there is our own overrun, and FEC covering it now says
+  nothing about the next keyframe (5× a delta frame).
+- *The same, but not near the budget that failed last* (the hysteresis zone): the shallow rows
+  are unchanged, but nothing improves either. 20 Mbit/s / 2 %: 9 → 11 cuts, video 15.8 → 15.6;
+  VAAPI 16/50 paced still 291 → 401 frozen. Without the hysteresis zone, random loss already
+  holds the rate (flat queue = random, learned background loss), so the rule has little left to
+  act on.
+- *Rate control on the smoothed loss FEC uses* (rise ×0.5, decay ×0.15): worse. x264 16/50
+  paced 0 → 25 frozen frames and 0.82 → 3.81 % lost; shallow 20 ms 1.19 → 2.27 % lost (test
+  fails). The slow decay keeps cutting after the loss is gone.
+
 ### 3.4 Real Wi-Fi: presenter in the dev container, Android tablet viewer (2026-11-15)
 
 Presenter: this repo's dev container on the Fedora laptop (host network, Wi-Fi), test pattern,

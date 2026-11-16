@@ -141,8 +141,14 @@ target), **planned**, **idea**. Update this file when an item moves.
       last good value per peer, probing with FEC. Note for VAAPI: slow start changes the rate each
       report, but VAAPI reopens at most every 5 s, so it reaches 40 Mbit/s in steps; untested
       on the T480s.)
-   5. **Don't cut when FEC recovered everything** (`unrecoverable == 0`); smooth the loss shared by
-      FEC and rate control. ~40–80 LOC.
+   5. **Don't cut when FEC recovered everything; smooth the loss: tried and rejected in the
+      simulation (2026-11-16, testing.md §3.3).** Skipping loss cuts while every frame was rebuilt
+      lets the budget sit above a shallow-buffer link (16/50: loss 0.72 → 5.42 %, VAAPI frozen
+      frames 291 → 401); limited to outside the hysteresis zone it changes almost nothing, since
+      flat-queue loss already counts as random. Feeding rate control the smoothed FEC loss keeps
+      cutting after the loss ends (x264 16/50: 0 → 25 frozen). Fewer VAAPI reopens have to come
+      from item 6 instead. Open: real-hardware cut logs could still show recovered-loss cuts the
+      sim does not have (the sim pools parity per frame, real FEC is per block).
    6. **Live VAAPI bitrate without a reopen**, removing the reopen limits (up 5 s, down 1 s since
       2026-11-16) and their keyframes. **Waits for FilmCraft's codec in its own crate** (owner,
       2026-11-16). Not possible through FFmpeg: FFmpeg 7.1 `vaapi_encode.c` sends the rate-control
