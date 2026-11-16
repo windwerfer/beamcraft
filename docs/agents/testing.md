@@ -32,7 +32,7 @@ the diff readable. See [roadmap.md](roadmap.md) "Known debt".
 | Unit (FilmCraft) | `beamcraft-media/src/filmcraft.rs`, feature `filmcraft` | FilmCraft output via the real `Encoder` decodes with FFmpeg, markers read back, keyframe on request; an `#[ignore]` x264-vs-FilmCraft benchmark |
 | Unit (app) | `#[cfg(test)]` in `beamcraft-app` | CLI parsing, capture/FEC preference precedence, process log, and `presenter::tests::test_source_streams_to_an_in_process_viewer`: test-pattern presenter (x264) → QUIC → viewer with 1 % loss in one process, live FEC/bitrate/cursor changes, markers read back (needs FFmpeg with libx264; part of the coverage report) |
 | Unit (firewall) | `beamcraft-net/src/firewall.rs` | hint and notice for every firewalld/ufw state, a fake `Firewalld` proving the startup probe makes no privileged call, one click = one authorization and cancel = no further prompts (D14), D-Bus error classification, zone merging, open-port messages (the D-Bus/process glue is `firewall/system.rs`) |
-| Unit (rate) | `beamcraft-proto/src/rate.rs`, `fec.rs`, `beamcraft-media/src/pipeline.rs` | AIMD controller (cuts on loss/RTT/backlog, floor 3 Mbit/s, ceiling = user setting, learned random-loss baseline), auto FEC caps 35 %/60 %, token-bucket bandwidth simulator, x264 bitrate change live without a keyframe, VAAPI reopen rate-limited |
+| Unit (rate) | `beamcraft-proto/src/rate.rs`, `fec.rs`, `beamcraft-media/src/pipeline.rs` | AIMD controller (cuts on queue/loss/backlog, floor 3 Mbit/s, ceiling = user setting, learned random-loss baseline), closed-loop sims with a FIFO bottleneck, auto FEC caps 35 %/60 %, token-bucket bandwidth simulator (viewer `--simulate-bandwidth-kbps`), x264 bitrate change live without a keyframe, VAAPI reopen rate-limited |
 | Loopback (end to end) | `scripts/loopback-test.sh` | test pattern → encoder → QUIC (pinned TLS, pairing) → reassembly → decoder, on localhost, with latency stats |
 | Real hardware | the owner's T480s + iMac | portal capture, VAAPI, Wi-Fi, OpenGL on a non-Metal Mac (only he can run this) |
 
@@ -176,34 +176,32 @@ on its own: the excess-loss rule needs 3 points above the background loss.
 ### 3.3 Adaptive bitrate, closed-loop simulation (unit test)
 
 `cargo test -p beamcraft-proto sim_ -- --nocapture` runs the controller against an encoder
-model (60 fps, sends min(target, content demand)), auto FEC parity, `LossSim` and
-`BandwidthSim` (150 ms bucket), with a 500 ms report and a constant 3 ms RTT. There is no QUIC,
-so the backlog trigger is not exercised. The `WIFI` link instead uses a FIFO bottleneck with a
-300 ms buffer (overload shows as delay first, then loss; the RTT includes the queue) and a
-`DelayMeter` as the viewer has, with and without queue reports. Results (40 Mbit/s ceiling,
-60–90 s):
+model (60 fps, sends min(target, content demand)), auto FEC parity, `LossSim`, a FIFO bottleneck
+(150 ms buffer unless noted; overload shows as delay first, then as loss) and a `DelayMeter` as
+the viewer has, with a 500 ms report. There is no QUIC, so the backlog trigger is not exercised.
+Results with the controller as of 2026-11-16 (queue + loss only, no RTT rule), 40 Mbit/s
+ceiling, 60–90 s; in brackets the 2026-11-15 controller (loss + RTT, drop-only token-bucket
+bottleneck) where it differs:
 
-The sim feeds the sent wire rate into the controller and can add content bursts (busy
-content for 2 s every 10 s). Results with the controller as of 2026-11-15 (slow start from
-10 Mbit/s, budget grows only while ≥ 80 % used), 40 Mbit/s ceiling, 60–90 s; in brackets the
-old controller (starts at the ceiling, grows while unused) where it differs:
+| Link | Cuts (triggers) | Budget at end | Video delivered | Packets lost | Queue mean / p95 |
+|---|---|---|---|---|---|
+| no limit, 0 % / 2 % random | 0 | 40.0 | 36.8 / 33.8 Mbit/s | 0 / 2.0 % | 0 |
+| no limit, 5 % random | 0 (old: 3, loss, until learned as background) | 40.0 | 30.5 Mbit/s | 5.1 % | 0 |
+| content needs 15 Mbit/s, 2 % random | 0 | 24.4 | 15.2 Mbit/s | 2.0 % | 0 |
+| content 12 Mbit/s with 24 Mbit/s bursts, 20 Mbit/s bottleneck | 6 queue (old 4) | 21.0 | 13.2 Mbit/s | 0 % (old 0.74 %) | 5.3 / 47.7 ms |
+| 20 Mbit/s bottleneck, 0 % | 15 queue (old 11 heavy loss) | 17.7 | 16.7 Mbit/s (old 16.0) | 0 % (old 1.5 %) | 10.5 / 58.9 ms |
+| 20 Mbit/s bottleneck, 2 % | 15 (2 loss, then queue) | 19.8 | 16.0 Mbit/s | 2.1 % | 11.2 / 56.9 ms |
+| 8 Mbit/s bottleneck, 2 % | 22 (queue, 1 heavy loss) | 8.0 | 6.3 Mbit/s | 2.2 % (old 2.9 %) | 23.3 / 123 ms |
+| 16 Mbit/s, 300 ms FIFO (`WIFI`) | 16 queue (RTT rule: 19) | 14.2 | 13.8 Mbit/s (RTT rule: 13.0) | 0 % | 18.1 / 70.5 ms (RTT rule: 25.9 / 129) |
+| 16 Mbit/s, **50 ms** FIFO | 10 (1 queue, 9 heavy loss) | 18.4 | 11.7 Mbit/s | **4.9 %** | 10.1 / 34.4 ms |
+| 16 Mbit/s, **20 ms** FIFO | 10 heavy loss | 13.6 | 11.3 Mbit/s | **5.5 %** | 1.5 / 4.4 ms |
 
-| Link | Cuts (triggers) | Budget at end | Video delivered | Packets lost |
-|---|---|---|---|---|
-| no limit, 0 % / 2 % random | 0 | 40.0 | 36.8 / 33.8 Mbit/s | 0 / 2.0 % |
-| no limit, 5 % random | 3 in the first 3 s (loss), then learned as background | 40.0 (min after 10 s: 11.7; old 31.0, since slow start begins at 10) | 30.4 Mbit/s | 5.1 % |
-| content needs 15 Mbit/s, 2 % random | 0 | 24.4 (old 40.0) | 15.2 Mbit/s | 2.0 % |
-| content 12 Mbit/s with 24 Mbit/s bursts, 20 Mbit/s bottleneck | 4 (old 10) | 21.3 | 13.3 Mbit/s | 0.74 % (old 2.40 %) |
-| 20 Mbit/s bottleneck, 0 % | 11 (heavy loss), sawtooth 16.8 ↔ 22.4 every ~8 s | 22.4 | 16.0 Mbit/s | 1.5 % |
-| 20 Mbit/s bottleneck, 2 % | 3 (heavy loss, loss) | 18.1 | 15.0 Mbit/s | 2.3 % |
-| 8 Mbit/s bottleneck, 2 % | 11 (heavy loss, loss) | 6.4 (min 4.7) | 6.1 Mbit/s | 2.9 % |
-| no limit, 5 % random, **queue reports** | 0 (queue flat: loss is random) | 40.0 | 30.5 Mbit/s | 5.1 % |
-| 16 Mbit/s, 300 ms FIFO, RTT only (older viewer) | 19 (rtt) | 17.3 (min 12.4) | 13.0 Mbit/s | 0 %, queue mean 25.9 / p95 129 ms |
-| 16 Mbit/s, 300 ms FIFO, **queue reports** | 16 (queue) | 14.2 | 13.8 Mbit/s | 0 %, queue mean 18.1 / p95 70.5 ms |
-
-Weak spots left (roadmap item 0): without queue reports, cuts keep firing while the random-loss
-probe is still watching (5 % random loss costs three cuts); with them, a bottleneck is still found
-by overrunning it every ~6–8 s (the additive climb of 1.6 Mbit/s per second; item 0.4).
+Weak spots left (roadmap item 0): a bottleneck is still found by overrunning it every ~6 s (the
+additive climb of 1.6 Mbit/s per second; item 0.4). With a **shallow** bottleneck buffer
+(≤ 50 ms) the queue never reaches the 40 ms that marks loss as congestion, so loss counts as
+random until it is heavy: each overrun loses ~23 % of a report's packets. Wi-Fi to the tablet
+buffered ~290 ms, so it does not hit this; a shallow router or USB link would
+(`sim_shallow_buffer_overruns_until_heavy_loss` pins it).
 
 ### 3.4 Real Wi-Fi: presenter in the dev container, Android tablet viewer (2026-11-15)
 

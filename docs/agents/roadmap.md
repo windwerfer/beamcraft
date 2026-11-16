@@ -22,7 +22,7 @@ target), **planned**, **idea**. Update this file when an item moves.
 | 60 fps / max frame-rate setting, negotiated rate shown | built (2026-11-13); KWin's reported max untested |
 | Click-freeze in the viewer (egui nested input lock) | fixed (2026-11-13), untested on the iMac |
 | Forward error correction for video (Reed-Solomon per block, interleaved, adaptive from viewer loss reports; `--fec auto|off|N`, Quality panel) | built (2026-11-13), loopback-tested with simulated random and bursty loss (protocol.md §3b); untested on real Wi-Fi and on Android hardware |
-| Adaptive bitrate (AIMD on viewer loss + one-way queueing delay, QUIC RTT for older viewers, FEC parity inside the budget, auto FEC capped at 35 %/60 %; `--adaptive-bitrate`, Quality panel) | built (2026-11-13), loopback-tested with a simulated bottleneck (testing.md §3.2); queue delay tested over real Wi-Fi to the Android tablet (§3.5), not yet T480s → iMac |
+| Adaptive bitrate (AIMD on viewer loss + one-way queueing delay, FEC parity inside the budget, auto FEC capped at 35 %/60 %; `--adaptive-bitrate`, Quality panel) | built (2026-11-13), loopback-tested with a simulated bottleneck (testing.md §3.2); queue delay tested over real Wi-Fi to the Android tablet (§3.5), not yet T480s → iMac |
 | Latency spikes on scene changes (2 s VBV, unbounded QUIC queue, 4-frame decode backlog, no pacing) | fixed (2026-11-13): 100 ms VBV, 2 MiB datagram queue with delta-frame drop, 2-frame decode queue flushed on overflow, 500 Mbit/s pacing; untested on Wi-Fi hardware |
 
 ## Next (owner-agreed order)
@@ -107,8 +107,8 @@ target), **planned**, **idea**. Update this file when an item moves.
       keyframe per 2 × RTT. 66–198 → 3–41 unrecoverable frames per minute. The rest is item 2.
    2. **Delay signal: done (2026-11-15).** The viewer measures each frame's one-way queueing
       delay (first packet, `sent_us` vs arrival, minus the 30 s minimum; protocol.md §3c) and
-      sends mean, max and trend in `link_report` (optional fields, no version bump: older peers
-      ignore them). The presenter cuts on one report of a building or standing queue, to ≤ 90 %
+      sends mean, max and trend in `link_report` (a required `queue` object since protocol 2,
+      2026-11-16, when the RTT fallback for older viewers was removed). The presenter cuts on one report of a building or standing queue, to ≤ 90 %
       of what was sent, and treats loss with a flat queue as random. Tablet over Wi-Fi
       (testing.md §3.5): queue p95 −35 to −58 % in 4 of 4 runs for ~7 % less video; lost
       frames not separable from noise in 4 min. Simulation: 5 % random loss 3 → 0 cuts.
@@ -118,6 +118,11 @@ target), **planned**, **idea**. Update this file when an item moves.
         report for > 1 s while sending could cut hard and stop forcing keyframes.
       - The remaining overruns come from the budget sitting far above what is sent (27.5 vs
         10–15 Mbit/s), so a content burst hits the link at once: item 4.
+      - **Shallow bottleneck buffers** (≤ 50 ms, a router or USB link rather than Wi-Fi): the
+        queue never reaches the 40 ms that marks loss as congestion, so the budget climbs past
+        the link until loss is heavy (sim: 4.9–5.5 % lost, ~23 % per overrun; testing.md §3.3).
+        Item 4's "climb slowly above the last cut" would bound it; or count loss as congestion
+        when it starts while the budget is above the last good value.
    3. **Ignore loss right after a keyframe or VAAPI reopen** so reopen, then IDR burst, then another
       cut can't loop; spread IDR parity across frames. ~60–100 LOC. (Viewer keyframe requests are
       now limited to one per 2 × RTT, 2026-11-15.)

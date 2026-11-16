@@ -127,16 +127,15 @@ keyframes 1.5 × N %. At least one parity packet per block (two for keyframes). 
 from the bitrate budget: the encoder target is budget / (1 + delta overhead).
 
 **Adaptive bitrate** (presenter; `beamcraft-proto/src/rate.rs`): the same `link_report`
-(loss, and the queueing delay of §3c when the viewer sends it) plus the presenter's QUIC RTT
-and backlog drops drive an AIMD controller. Its ceiling is the bitrate setting, its floor
+(loss and the queueing delay of §3c) and the presenter's backlog drops drive an AIMD
+controller (the QUIC RTT is shown in the status line but not used). Its ceiling is the bitrate setting, its floor
 3 Mbit/s. Congestion cuts the budget ×0.85 (×0.75 at ≥ 10 points excess loss, ×0.6 at ≥ 20),
 at most once per second. Congestion is: a backlog drop; loss ≥ 3 points above the learned
-background loss in two reports in a row, or ≥ 10 points once; or a queue. With queue reports,
+background loss in two reports in a row, or ≥ 10 points once; or a queue:
 one report with a queue building (mean ≥ 25 ms or max ≥ 50 ms, and rising ≥ 30 ms/s) or standing
 (mean ≥ 60 ms, not within 2 s of a cut while it drains) is enough, and that cut also goes to
 ≤ 90 % of the wire rate sent in the last second. Loss with no frame waiting ≥ 40 ms in this or
-the previous report counts as random (no cut, FEC covers it) unless it is ≥ 20 points. Without
-queue reports (older viewers): RTT > 1.5 × min + 25 ms in two reports instead; a clean link (< 1.5 points excess, no queue) adds 4 % of the ceiling
+the previous report counts as random (no cut, FEC covers it) unless it is ≥ 20 points. A clean link (< 1.5 points excess, no queue) adds 4 % of the ceiling
 per second from 4 s after the last cut. A new viewer starts at 10 Mbit/s (or the ceiling if
 lower) in slow start: ×1.25 per second until the first cut, through loss below the cut
 threshold. The budget only grows while the presenter sends ≥ 80 % of it (wire rate, video +

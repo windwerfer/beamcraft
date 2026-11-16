@@ -101,7 +101,7 @@ pub struct FecState {
     pub adaptive: bool,
     /// AIMD controller; its ceiling is the user's bitrate setting.
     pub rate: AdaptiveBitrate,
-    /// Latest QUIC RTT estimate (ms).
+    /// Latest QUIC RTT estimate (ms); shown, not used by the controller.
     pub rtt_ms: f32,
     /// What the presenter sent on the wire (video + parity, kbit/s) in the
     /// last send window; the budget only grows while it is used.
@@ -235,7 +235,6 @@ impl FecControl {
         recovered: u32,
         unrecoverable: u32,
         queue: Option<QueueDelay>,
-        rtt: Option<Duration>,
     ) {
         let now_ms = self.now_ms();
         let mut s = self.lock();
@@ -251,17 +250,13 @@ impl FecControl {
             .unwrap_or(0.5);
         s.recovered_per_s = recovered as f32 / secs;
         s.unrecoverable += unrecoverable as u64;
-        let rtt_ms = rtt.map(|r| r.as_secs_f32() * 1000.0);
-        if let Some(r) = rtt_ms {
-            s.rtt_ms = r;
-        }
         // The controller runs even when adaptive is off, so switching it on
         // starts from what it learned; it only decides the budget when on.
         let sent_kbps = s.sent_kbps;
         if queue.is_some() {
             s.queue = queue;
         }
-        s.rate.on_sample(Sample { loss_pct: Some(loss), rtt_ms, backlog_drops: 0, sent_kbps, queue }, now_ms);
+        s.rate.on_sample(Sample { loss_pct: Some(loss), backlog_drops: 0, sent_kbps, queue }, now_ms);
         log_cut(&s);
         s.boost_pct = if unrecoverable > 0 && !s.rate.congested() {
             (s.boost_pct + 5.0 * unrecoverable.min(3) as f32).min(MAX_FEC_BOOST)
@@ -273,17 +268,14 @@ impl FecControl {
     }
 
     /// The presenter's own view, once per send window: frames dropped for
-    /// backlog, the wire rate, and the RTT (for viewers that send no reports).
-    fn on_send_window(&self, backlog_drops: u32, sent_kbps: f32, rtt: Option<Duration>) {
+    /// backlog, the wire rate, and the RTT (for the status line only).
+    fn on_send_window(&self, backlog_drops: u32, sent_kbps: f32, rtt: Duration) {
         let now_ms = self.now_ms();
         let mut s = self.lock();
         s.sent_kbps = Some(sent_kbps);
-        let rtt_ms = rtt.map(|r| r.as_secs_f32() * 1000.0);
-        if let Some(r) = rtt_ms {
-            s.rtt_ms = r;
-        }
-        if backlog_drops > 0 || s.reports == 0 {
-            s.rate.on_sample(Sample { loss_pct: None, rtt_ms, backlog_drops, sent_kbps: Some(sent_kbps), queue: None }, now_ms);
+        s.rtt_ms = rtt.as_secs_f32() * 1000.0;
+        if backlog_drops > 0 {
+            s.rate.on_sample(Sample { loss_pct: None, backlog_drops, sent_kbps: Some(sent_kbps), queue: None }, now_ms);
             log_cut(&s);
         }
     }
@@ -609,7 +601,7 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
                         loss_permille as f32 / 10.0,
                         queue.map_or(String::new(), |q| format!(", {q}"))
                     );
-                    shared.fec.on_report(loss_permille, recovered, unrecoverable, queue, Some(conn.rtt()));
+                    shared.fec.on_report(loss_permille, recovered, unrecoverable, queue);
                 }
                 Control::Bye => return Ok::<_, anyhow::Error>(()),
                 other => tracing::debug!("ignoring {other:?}"),
@@ -807,7 +799,7 @@ async fn send_loop(
                 fec_summary(&fec.snapshot(), window_parity, window_packets),
                 stats.report()
             );
-            fec.on_send_window(backlog_drops, (window_wire as f64 * 8.0 / secs / 1000.0) as f32, Some(conn.rtt()));
+            fec.on_send_window(backlog_drops, (window_wire as f64 * 8.0 / secs / 1000.0) as f32, conn.rtt());
             backlog_drops = 0;
             window_wire = 0;
             (window_parity, window_packets) = (0, 0);

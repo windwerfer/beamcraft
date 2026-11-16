@@ -1,5 +1,6 @@
 //! Adaptive bitrate for the presenter: an AIMD controller driven by the
-//! viewer's `link_report` (packet loss) and the QUIC RTT.
+//! viewer's `link_report` (packet loss and one-way queueing delay) and the
+//! presenter's own send queue.
 //!
 //! The controller owns the **total budget** on the wire (video + FEC
 //! parity). [`encoder_kbps`] turns it into the encoder target by leaving
@@ -12,8 +13,8 @@
 //!   presenter dropping frames for backlog. Then the budget is cut
 //!   multiplicatively (×0.85, ×0.75 heavy, ×0.6 severe), at most once per
 //!   second, never below the floor.
-//! * Queue: a viewer that reports its one-way queueing delay
-//!   ([`crate::delay`]) gets a cut as soon as one report shows a queue
+//! * Queue: the viewer's one-way queueing delay ([`crate::delay`]) cuts as
+//!   soon as one report shows a queue
 //!   building (mean ≥ [`QUEUE_MS`] or max ≥ [`QUEUE_MAX_MS`], and rising
 //!   ≥ [`QUEUE_TREND_MS_PER_S`]) or
 //!   standing (≥ [`QUEUE_STANDING_MS`], not in the 2 s after a cut while it
@@ -22,7 +23,8 @@
 //!   the MTK tablet (2026-11-15) the queue rose for ~1 s before packets were
 //!   dropped. Loss while no frame waited [`QUEUE_LOSS_MS`] in a queue is
 //!   random loss: FEC covers it and the rate stays (except ≥ 20 points).
-//!   Older viewers fall back to the QUIC RTT (well above the lowest seen).
+//!   The QUIC RTT is not used: it reacts later (ack delay, smoothing) and
+//!   says nothing the queue does not.
 //! * Start: the budget begins at [`START_KBPS`] (or the ceiling if lower)
 //!   and grows ×1.25 per second until the first cut (slow start), so a
 //!   new viewer on weak Wi-Fi is not hit with the full ceiling at once
@@ -58,7 +60,7 @@ const INCREASE_AFTER_CUT_MS: u64 = 4_000;
 /// How long after a cut the loss is watched to see whether it followed the rate.
 const PROBE_MS: u64 = 3_000;
 const MAX_RANDOM_LOSS: f32 = 15.0;
-/// Queue trigger (viewers that report the one-way queueing delay): a mean
+/// Queue trigger: a mean
 /// queue of at least `QUEUE_MS` (or one frame waiting `QUEUE_MAX_MS`) that
 /// is still rising by `QUEUE_TREND_MS_PER_S`…
 pub const QUEUE_MS: f32 = 25.0;
@@ -82,14 +84,13 @@ const QUEUE_CUT_OF_SENT: f32 = 0.9;
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
 pub struct Sample {
     pub loss_pct: Option<f32>,
-    pub rtt_ms: Option<f32>,
     /// Delta frames the presenter dropped because the send queue was full.
     pub backlog_drops: u32,
     /// What the presenter actually sent (video + parity, kbit/s) over the
     /// last window; `None` when unknown (then the budget counts as used).
     pub sent_kbps: Option<f32>,
     /// The viewer's one-way queueing delay over its report window; `None`
-    /// from older viewers and in the presenter's own samples.
+    /// in the presenter's own samples and when no frame arrived.
     pub queue: Option<QueueDelay>,
 }
 
@@ -102,9 +103,6 @@ pub enum CutTrigger {
     HeavyLoss,
     /// Loss above the background loss for two reports in a row.
     Loss,
-    /// RTT well above the lowest seen (a queue is building up; viewers
-    /// without queue reports only).
-    Rtt,
     /// The viewer's one-way queueing delay is building up or standing.
     Queue,
 }
@@ -120,14 +118,13 @@ pub struct Cut {
     pub loss_pct: Option<f32>,
     /// Loss treated as background at the time (percent).
     pub random_loss_pct: f32,
-    pub rtt_ms: Option<f32>,
-    pub min_rtt_ms: Option<f32>,
-    /// The viewer's queueing delay, if it reports one.
+    /// The viewer's queueing delay in that report.
     pub queue: Option<QueueDelay>,
 }
 
 impl Cut {
-    /// Short reason, e.g. `loss 5.2 % (background 1.8 %)` or `rtt 48 ms (min 3 ms)`.
+    /// Short reason, e.g. `loss 5.2 % (background 1.8 %)` or
+    /// `queue 30 ms (max 60, +100 ms/s)`.
     pub fn reason(&self) -> String {
         let loss = || {
             format!(
@@ -140,11 +137,6 @@ impl Cut {
             CutTrigger::Backlog { drops } => format!("send queue full, {drops} frames dropped"),
             CutTrigger::HeavyLoss => format!("heavy {}", loss()),
             CutTrigger::Loss => loss(),
-            CutTrigger::Rtt => format!(
-                "rtt {:.0} ms (min {:.0} ms)",
-                self.rtt_ms.unwrap_or(0.0),
-                self.min_rtt_ms.unwrap_or(0.0)
-            ),
             CutTrigger::Queue => self
                 .queue
                 .map_or_else(|| "queue".to_owned(), |q| q.to_string()),
@@ -168,7 +160,6 @@ impl std::fmt::Display for Cut {
 pub struct AdaptiveBitrate {
     ceiling_kbps: u32,
     budget_kbps: f32,
-    min_rtt_ms: Option<f32>,
     last_sample_ms: Option<u64>,
     last_cut_ms: Option<u64>,
     lossy_streak: u32,
@@ -208,7 +199,6 @@ impl AdaptiveBitrate {
         Self {
             ceiling_kbps,
             budget_kbps: start_kbps.clamp(floor, ceiling_kbps) as f32,
-            min_rtt_ms: None,
             last_sample_ms: None,
             last_cut_ms: None,
             lossy_streak: 0,
@@ -286,23 +276,7 @@ impl AdaptiveBitrate {
             .min(1_000);
         self.last_sample_ms = Some(now_ms);
         self.cut_now = false;
-        let rtt_in = s.rtt_ms.filter(|r| r.is_finite() && *r > 0.0);
 
-        let rtt_high = match rtt_in {
-            Some(rtt) => {
-                let min = self.min_rtt_ms.get_or_insert(rtt);
-                // Follow route changes slowly upwards, instantly downwards.
-                *min = if rtt < *min {
-                    rtt
-                } else {
-                    *min + 0.005 * (rtt - *min)
-                };
-                rtt > *min * 1.5 + 25.0
-            }
-            None => false,
-        };
-        // The viewer's one-way queue, when it reports one, replaces the RTT
-        // rule: it reacts within one report and has no ack delay in it.
         let queue = s.queue;
         let queue_growing = match queue {
             Some(q) => {
@@ -316,7 +290,7 @@ impl AdaptiveBitrate {
                     || ((q.mean_ms() >= QUEUE_MS || q.max_ms() >= QUEUE_MAX_MS)
                         && q.trend_ms_per_s() >= QUEUE_TREND_MS_PER_S)
             }
-            None => rtt_high,
+            None => false,
         };
         // Loss with a flat queue is random (Wi-Fi retries, interference):
         // cutting would not reduce it.
@@ -346,9 +320,8 @@ impl AdaptiveBitrate {
         let lossy = excess >= 3.0 || queue_growing;
         self.lossy_streak = if lossy { self.lossy_streak + 1 } else { 0 };
         let heavy = excess >= 10.0;
-        // A reported queue is direct evidence: one report is enough.
-        let queue_now = queue.is_some() && queue_growing;
-        self.congested = heavy || s.backlog_drops > 0 || queue_now || self.lossy_streak >= 2;
+        // A queue is direct evidence: one report is enough.
+        self.congested = heavy || s.backlog_drops > 0 || queue_growing || self.lossy_streak >= 2;
 
         let floor = self.floor_kbps() as f32;
         let ceiling = self.ceiling_kbps as f32;
@@ -366,7 +339,7 @@ impl AdaptiveBitrate {
                 };
                 let from_kbps = self.budget_kbps();
                 let mut target = self.budget_kbps * factor;
-                let queue_cut = s.backlog_drops == 0 && !heavy && excess < 3.0 && queue.is_some();
+                let queue_cut = s.backlog_drops == 0 && !heavy && excess < 3.0;
                 if queue_cut {
                     if let Some(sent) = s.sent_kbps.filter(|k| k.is_finite() && *k > 0.0) {
                         target = target.min(sent * QUEUE_CUT_OF_SENT);
@@ -383,10 +356,8 @@ impl AdaptiveBitrate {
                     CutTrigger::HeavyLoss
                 } else if excess >= 3.0 {
                     CutTrigger::Loss
-                } else if queue_cut {
-                    CutTrigger::Queue
                 } else {
-                    CutTrigger::Rtt
+                    CutTrigger::Queue
                 };
                 self.last_cut = Some(Cut {
                     at_ms: now_ms,
@@ -395,8 +366,6 @@ impl AdaptiveBitrate {
                     to_kbps: self.budget_kbps(),
                     loss_pct: loss,
                     random_loss_pct: self.random_loss_pct,
-                    rtt_ms: rtt_in,
-                    min_rtt_ms: self.min_rtt_ms,
                     queue,
                 });
                 self.cut_now = true;
@@ -478,7 +447,6 @@ mod tests {
     fn loss(l: f32) -> Sample {
         Sample {
             loss_pct: Some(l),
-            rtt_ms: Some(5.0),
             backlog_drops: 0,
             sent_kbps: None,
             queue: None,
@@ -543,28 +511,9 @@ mod tests {
         assert!(c.cut_by_last_sample().is_none());
         assert_eq!(c.last_cut(), Some(cut));
 
-        let mut r = at_ceiling(20_000);
-        let rtt = |ms| Sample {
-            loss_pct: Some(0.0),
-            rtt_ms: Some(ms),
-            backlog_drops: 0,
-            sent_kbps: None,
-            queue: None,
-        };
-        feed(&mut r, rtt(4.0), 4, &mut t);
-        feed(&mut r, rtt(80.0), 2, &mut t);
-        let cut = r.last_cut().expect("rtt cut");
-        assert_eq!(cut.trigger, CutTrigger::Rtt);
-        assert!(
-            cut.reason().starts_with("rtt 80 ms (min "),
-            "{}",
-            cut.reason()
-        );
-
         let mut b = at_ceiling(20_000);
         let drop = Sample {
             loss_pct: None,
-            rtt_ms: None,
             backlog_drops: 3,
             sent_kbps: None,
             queue: None,
@@ -616,7 +565,6 @@ mod tests {
     fn budget_does_not_grow_while_unused() {
         let sent = |k: f32| Sample {
             loss_pct: Some(0.0),
-            rtt_ms: Some(5.0),
             backlog_drops: 0,
             sent_kbps: Some(k),
             queue: None,
@@ -679,20 +627,15 @@ mod tests {
     fn queue_growth_and_backlog_count_as_congestion() {
         let mut c = at_ceiling(20_000);
         let mut t = 0;
-        let rtt = |ms| Sample {
-            loss_pct: Some(0.0),
-            rtt_ms: Some(ms),
-            backlog_drops: 0,
-            sent_kbps: None,
-            queue: None,
-        };
-        feed(&mut c, rtt(4.0), 4, &mut t);
+        feed(&mut c, queued(0.0, 2.0, 5.0, 0.0, None), 4, &mut t);
         assert_eq!(c.budget_kbps(), 20_000);
-        assert_eq!(feed(&mut c, rtt(80.0), 2, &mut t), 17_000);
+        assert_eq!(
+            feed(&mut c, queued(0.0, 70.0, 90.0, 0.0, None), 1, &mut t),
+            17_000
+        );
         let mut b = at_ceiling(20_000);
         let drop = Sample {
             loss_pct: None,
-            rtt_ms: None,
             backlog_drops: 2,
             sent_kbps: None,
             queue: None,
@@ -701,7 +644,6 @@ mod tests {
         // Garbage input is ignored, not a panic.
         let junk = Sample {
             loss_pct: Some(f32::NAN),
-            rtt_ms: Some(f32::INFINITY),
             backlog_drops: 0,
             sent_kbps: None,
             queue: None,
@@ -751,7 +693,6 @@ mod tests {
     fn queued(loss_pct: f32, mean_ms: f32, max_ms: f32, trend: f32, sent: Option<f32>) -> Sample {
         Sample {
             loss_pct: Some(loss_pct),
-            rtt_ms: Some(5.0),
             backlog_drops: 0,
             sent_kbps: sent,
             queue: Some(QueueDelay {
@@ -792,7 +733,7 @@ mod tests {
             &mut t,
         );
         assert_eq!(c.budget_kbps(), 27_000);
-        // ...after that it does, and the RTT is ignored for such a viewer.
+        // ...after that it does.
         feed(&mut c, queued(0.0, 70.0, 90.0, -20.0, None), 1, &mut t);
         assert_eq!(c.budget_kbps(), 22_950);
         // One frame that waited 82 ms in a rising queue is enough, even
@@ -801,13 +742,6 @@ mod tests {
         let mut m = at_ceiling(40_000);
         feed(&mut m, queued(0.0, 24.0, 82.0, 193.0, None), 1, &mut t);
         assert_eq!(m.last_cut().map(|c| c.trigger), Some(CutTrigger::Queue));
-        let mut r = at_ceiling(20_000);
-        let high_rtt = Sample {
-            rtt_ms: Some(200.0),
-            ..queued(0.0, 2.0, 5.0, 0.0, None)
-        };
-        feed(&mut r, queued(0.0, 2.0, 5.0, 0.0, None), 4, &mut t);
-        assert_eq!(feed(&mut r, high_rtt, 4, &mut t), 20_000);
     }
 
     #[test]
@@ -837,20 +771,16 @@ mod tests {
         demand_kbps: u32,
         loss: f64,
         burst: f64,
+        /// 0 = no bottleneck.
         bottleneck_kbps: u32,
-        rtt_ms: f32,
         /// Every `busy_every_s` seconds the content needs `busy_kbps` for 2 s
         /// (a scene change after a quiet screen); 0 = never.
         busy_every_s: u64,
         busy_kbps: u32,
-        /// 0: the bottleneck drops what exceeds a 150 ms token bucket and
-        /// never delays (the first model). Otherwise a FIFO that holds this
-        /// many ms of data (Wi-Fi: the tablet showed ~290 ms before loss),
-        /// so overload first shows as delay, then as loss; the RTT then
-        /// includes the queue.
+        /// The bottleneck's FIFO holds this many ms of data (Wi-Fi: the
+        /// tablet showed ~290 ms before loss), so overload first shows as
+        /// delay, then as loss.
         buffer_ms: u32,
-        /// The viewer reports its one-way queueing delay (newer viewers).
-        reports_queue: bool,
     }
 
     /// A bottleneck with a FIFO buffer: packets wait behind the backlog and
@@ -902,15 +832,14 @@ mod tests {
     }
 
     fn simulate(link: Link, ceiling_kbps: u32, secs: u64) -> SimResult {
-        use crate::fec::{BandwidthSim, FecMode, LossSim};
+        use crate::fec::{FecMode, LossSim};
         const PKT: usize = 1200;
         let mut c = AdaptiveBitrate::new(ceiling_kbps);
         let mut lossy = LossSim::new(link.loss, link.burst, 0x5eed);
-        let fifo_mode = link.buffer_ms > 0 && link.bottleneck_kbps > 0;
-        let mut bw = BandwidthSim::new(link.bottleneck_kbps, 150).filter(|_| !fifo_mode);
-        let mut fifo = fifo_mode.then(|| Fifo::new(link.bottleneck_kbps, link.buffer_ms));
+        let mut fifo =
+            (link.bottleneck_kbps > 0).then(|| Fifo::new(link.bottleneck_kbps, link.buffer_ms));
         let mut meter = crate::delay::DelayMeter::default();
-        let (mut last_queue_us, mut queue_samples) = (0u64, crate::stats::Series::default());
+        let mut queue_samples = crate::stats::Series::default();
         let (mut smoothed_loss, mut reports) = (0.0f32, 0u32);
         let (mut expected, mut received) = (0u64, 0u64);
         let (mut cuts, mut min_kbps, mut late_bytes) = (Vec::new(), u32::MAX, 0usize);
@@ -937,7 +866,7 @@ mod tests {
                 let at = t_us + k as u64 * 19;
                 expected += 1;
                 (total_sent, window_sent) = (total_sent + 1, window_sent + 1);
-                if lossy.drop_next() || bw.as_mut().is_some_and(|b| !b.admit(PKT, at)) {
+                if lossy.drop_next() {
                     continue;
                 }
                 let wait = match fifo.as_mut() {
@@ -950,11 +879,8 @@ mod tests {
                 // The first packet of the frame that arrives is what the
                 // viewer measures (sent_us = frame start, +3 ms path).
                 meter.on_packet(frame as u32, t_us, at + wait + 3_000);
-                if !std::mem::replace(&mut frame_seen, true) {
-                    last_queue_us = wait;
-                    if t_us >= 10_000_000 {
-                        queue_samples.push(wait as f64 / 1000.0);
-                    }
+                if !std::mem::replace(&mut frame_seen, true) && t_us >= 10_000_000 {
+                    queue_samples.push(wait as f64 / 1000.0);
                 }
                 received += 1;
                 if k < data && t_us >= (secs - 20) * 1_000_000 {
@@ -975,14 +901,12 @@ mod tests {
                 };
                 reports += 1;
                 let now_ms = (t_us + frame_us) / 1000;
-                let queue = meter.take().filter(|_| link.reports_queue);
                 c.on_sample(
                     Sample {
                         loss_pct: Some(l),
-                        rtt_ms: Some(link.rtt_ms + last_queue_us as f32 / 1000.0),
                         backlog_drops: 0,
                         sent_kbps: Some(sent_kbps),
-                        queue,
+                        queue: meter.take(),
                     },
                     now_ms,
                 );
@@ -1025,11 +949,9 @@ mod tests {
         loss: 0.0,
         burst: 1.0,
         bottleneck_kbps: 0,
-        rtt_ms: 3.0,
         busy_every_s: 0,
         busy_kbps: 0,
-        buffer_ms: 0,
-        reports_queue: false,
+        buffer_ms: 150,
     };
 
     /// The tablet link of 2026-11-15 (second run): ~16 Mbit/s, deep buffer.
@@ -1037,21 +959,18 @@ mod tests {
         demand_kbps: 60_000,
         bottleneck_kbps: 16_000,
         buffer_ms: 300,
-        rtt_ms: 12.0,
         ..LAN
     };
 
     #[test]
     fn sim_random_loss_without_a_bottleneck_keeps_the_ceiling() {
-        // 2 % is below the 3-point excess rule: never a cut. 5 % cuts until
-        // the probe has learned it as background loss (today 3 cuts in the
-        // first 3 s, since cuts go on while the probe watches), then climbs back.
-        for (loss, max_cuts) in [(0.0, 0), (0.02, 0), (0.05, 3)] {
+        // No bottleneck, so the queue stays flat: random loss is FEC's job
+        // and the rate never drops (with the RTT rule, 5 % cost 3 cuts).
+        for loss in [0.0, 0.02, 0.05] {
             let r = simulate(Link { loss, ..LAN }, 40_000, 60);
             print(&format!("no limit, {:.0} % random", loss * 100.0), &r);
-            assert!(r.cuts.len() <= max_cuts, "random loss kept cutting");
-            assert!(r.cuts.iter().all(|c| c.at_ms < 5_000), "cut after learning");
-            assert!(r.final_kbps >= 36_000, "{}", r.final_kbps);
+            assert!(r.cuts.is_empty(), "{:?}", r.cuts);
+            assert!(r.final_kbps >= 39_000, "{}", r.final_kbps);
         }
     }
 
@@ -1097,11 +1016,13 @@ mod tests {
         let r = simulate(link, 40_000, 90);
         print("12 Mbit/s content, 24 Mbit/s bursts, 20 Mbit/s link", &r);
         // The budget stays near what is used, so most bursts are capped by
-        // the encoder instead of overrunning the link. Measured: 4 cuts and
-        // 0.74 % packets lost; the old controller (start at the ceiling,
-        // growing while unused) made 10 cuts and lost 2.40 %.
-        assert!(r.cuts.len() <= 4, "{} cuts", r.cuts.len());
-        assert!(r.lost_pct < 1.0, "{:.2} % lost", r.lost_pct);
+        // the encoder instead of overrunning the link, and the queue cuts
+        // the rest before packets are lost. Measured with a 150 ms FIFO:
+        // 6 queue cuts, 0.00 % lost (with a drop-only bottleneck and the
+        // loss/RTT rules: 4 cuts, 0.74 %; the controller before slow start
+        // and "grow only while used": 10 cuts, 2.40 %).
+        assert!(r.cuts.len() <= 6, "{} cuts", r.cuts.len());
+        assert!(r.lost_pct < 0.1, "{:.2} % lost", r.lost_pct);
     }
 
     #[test]
@@ -1125,7 +1046,6 @@ mod tests {
                 &r,
             );
             assert!(!r.cuts.is_empty());
-            assert!(r.cuts.iter().all(|c| !matches!(c.trigger, CutTrigger::Rtt)));
             // The sawtooth peaks only a little over the capacity: at most
             // 15 %, or one second of the additive step (1.6 Mbit/s here).
             let peak = r
@@ -1148,61 +1068,36 @@ mod tests {
     }
 
     #[test]
-    fn sim_queue_reports_find_the_bottleneck_before_loss() {
-        // Same deep-buffer link, old viewer (RTT only) vs a viewer that
-        // reports its queueing delay.
-        let old = simulate(WIFI, 40_000, 90);
-        print("16 Mbit/s, 300 ms buffer, rtt only", &old);
-        let new = simulate(
-            Link {
-                reports_queue: true,
-                ..WIFI
-            },
-            40_000,
-            90,
-        );
-        print("16 Mbit/s, 300 ms buffer, queue reports", &new);
+    fn sim_queue_finds_the_bottleneck_before_loss() {
+        // 16 Mbit/s with a deep Wi-Fi buffer (the tablet showed ~290 ms):
+        // every cut comes from the queue, before a packet is lost.
+        // Measured: 16 cuts, 0.00 % lost, queue p95 70.5 ms, 13.8 Mbit/s
+        // video delivered (the RTT rule on the same link: 19 cuts, p95
+        // 129 ms, 13.0 Mbit/s).
+        let r = simulate(WIFI, 40_000, 90);
+        print("16 Mbit/s, 300 ms buffer", &r);
         assert!(
-            new.cuts.iter().all(|c| c.trigger == CutTrigger::Queue),
+            r.cuts.iter().all(|c| c.trigger == CutTrigger::Queue),
             "{:?}",
-            new.cuts
+            r.cuts
         );
-        assert!(
-            new.lost_pct <= old.lost_pct,
-            "{} vs {}",
-            new.lost_pct,
-            old.lost_pct
-        );
-        assert!(new.lost_pct < 0.2, "{:.2} % lost", new.lost_pct);
-        assert!(
-            new.queue_p95_ms < old.queue_p95_ms,
-            "{} vs {}",
-            new.queue_p95_ms,
-            old.queue_p95_ms
-        );
-        assert!(
-            new.delivered_kbps >= 16_000.0 * 0.6,
-            "{}",
-            new.delivered_kbps
-        );
+        assert!(r.lost_pct < 0.2, "{:.2} % lost", r.lost_pct);
+        assert!(r.queue_p95_ms < 100.0, "{}", r.queue_p95_ms);
+        assert!(r.delivered_kbps >= 16_000.0 * 0.8, "{}", r.delivered_kbps);
     }
 
     #[test]
-    fn sim_random_loss_with_a_flat_queue_does_not_cut() {
-        // 5 % random loss, no bottleneck: the queue stays flat, so the
-        // loss is FEC's job and the rate never drops (the old viewer
-        // costs three cuts, sim_random_loss_without_a_bottleneck...).
-        let r = simulate(
-            Link {
-                loss: 0.05,
-                reports_queue: true,
-                ..LAN
-            },
-            40_000,
-            60,
-        );
-        print("no limit, 5 % random, queue reports", &r);
-        assert!(r.cuts.is_empty(), "{:?}", r.cuts);
-        assert!(r.final_kbps >= 39_000, "{}", r.final_kbps);
+    fn sim_shallow_buffer_overruns_until_heavy_loss() {
+        // Known weakness (roadmap 0.4): a bottleneck that drops before a
+        // queue of QUEUE_LOSS_MS builds looks like random loss, so the
+        // budget climbs past the link until the loss is heavy. Measured:
+        // 50 ms buffer 4.9 % lost, 20 ms buffer 5.5 %, each overrun ~23 %
+        // loss in one report. Pinned so a fix shows up as a change here.
+        for buffer_ms in [50, 20] {
+            let r = simulate(Link { buffer_ms, ..WIFI }, 40_000, 90);
+            print(&format!("16 Mbit/s, {buffer_ms} ms buffer"), &r);
+            assert!(r.lost_pct < 7.0, "{:.2} % lost", r.lost_pct);
+            assert!(r.delivered_kbps >= 16_000.0 * 0.6, "{}", r.delivered_kbps);
+        }
     }
 }
