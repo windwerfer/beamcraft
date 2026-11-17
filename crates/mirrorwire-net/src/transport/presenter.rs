@@ -558,12 +558,15 @@ async fn send_loop(
             continue;
         }
         // A keyframe, and the frames that waited behind it, are spread over
-        // time at a little above the budget (`pace_spread_us`): one burst
+        // time at a little above the video's share of the budget (not a
+        // probe's: in the simulation, pacing on the probed budget froze VAAPI
+        // behind a 20 ms buffer for 1574 frames instead of 603;
+        // `pace_spread_us`): one burst
         // overflows a shallow bottleneck buffer. Other frames go out as one
         // burst (parity last) at QUIC's 500 Mbit/s pacing; send_datagram
         // queues immediately and only waits when the send buffer is full.
         let behind = paced_done_us.is_some_and(|d| frame.encoded_us < d);
-        let spread_us = pace_spread_us(wire_len, fec.budget_kbps(), frame.keyframe, behind);
+        let spread_us = pace_spread_us(wire_len, fec.video_budget_kbps(), frame.keyframe, behind);
         let pace_start = tokio::time::Instant::now();
         let n_packets = packets.len().max(1) as u64;
         let mut send_err = false;

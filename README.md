@@ -234,7 +234,11 @@ over the same path (same viewer certificate, same address) and whose link failed
 at the rate it left with, at most 60 % of what failed, instead of 10 Mbit/s: a slow link is not
 overrun at connect, and the old limit is approached slowly. This is kept in memory only; Stop
 in the presenter forgets it. The window then shows `resumed: this link failed at X Mbit/s last
-time` until the first cut. FEC parity is counted inside that budget, so more parity never pushes the
+time` until the first cut. Near the rate where the link failed last, the rate first rises by
+extra FEC parity only (up to 3 % above the video) and the video follows after 3 s without loss
+or a queue; the window shows `probing: +X Mbit/s extra parity before more video` meanwhile. If
+the link can't carry the step, the loss lands on a stream with more parity and a video that
+already fit. FEC parity is counted inside that budget, so more parity never pushes the
 stream above what the link can carry. x264 changes rate without a keyframe; VAAPI has to be
 reopened (one keyframe): a lower rate at most every second, a higher one at most every 5 s.
 Keyframes (2–5 normal frames) are not sent in one burst but spread over up to 100 ms at a

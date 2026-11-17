@@ -33,11 +33,15 @@
 //! * Clean (little loss, no queue): the budget climbs additively by 4 % of
 //!   the ceiling per second, starting 4 s after the last cut.
 //! * Hysteresis: each cut remembers what the link did not carry (the
-//!   budget, or what was sent if less). From 90 % to 115 % of that value
-//!   the climb is a quarter as fast, and from 90 % up loss above the
+//!   budget, or what was sent if less). From 90 % up loss above the
 //!   background counts as congestion even with a flat queue. A shallow
 //!   bottleneck buffer (≤ 50 ms: a router, USB) drops before a queue shows,
 //!   so without this each overrun lost ~23 % of a report's packets.
+//! * Probe with parity: from 90 % to 115 % of that value the budget grows
+//!   by extra FEC parity first, a quarter as fast, to 3 % above what the
+//!   video uses ([`AdaptiveBitrate::video_budget_kbps`], [`probe_overhead`]);
+//!   the video follows only after 3 s without loss or queue. An overrun
+//!   then hits a stream with more parity and a video that already fit.
 //! * Reconnect: a viewer whose link failed before starts from the budget it
 //!   left with, at most 60 % of what failed, and keeps that failure
 //!   ([`AdaptiveBitrate::resume`]): no overrun at connect on a known link.
@@ -99,6 +103,13 @@ const NEAR_BAD_STEP: f32 = 0.25;
 /// budget: its first keyframe (paced at 1.25 × the budget) then fits.
 /// Simulated 0.6 / 0.75 / 0.85 / 1.0: 0.6 froze least on shallow buffers.
 pub const RESUME_OF_BAD: f32 = 0.6;
+/// A probe near the last bad budget raises the wire rate this far above the
+/// video's share with FEC parity only…
+pub const FEC_PROBE_SHARE: f32 = 0.03;
+/// …and the video grows to it once the probe stayed clean this long.
+pub const FEC_PROBE_HOLD_MS: u64 = 3_000;
+/// Most parity (parity / data) a probe asks for.
+pub const MAX_PROBE_OVERHEAD: f32 = 0.6;
 
 /// One feedback sample. `loss_pct` is `None` when only the presenter's own
 /// view is known (send window without a viewer report).
@@ -210,6 +221,11 @@ pub struct AdaptiveBitrate {
     /// What the link did not carry at the last cut: the budget then, or
     /// what was sent if less. Near it the climb is slow and loss counts.
     last_bad_kbps: Option<f32>,
+    /// What the video (and its regular parity) may use; below the budget
+    /// while a parity probe runs near the last bad budget.
+    video_kbps: f32,
+    /// When the probe reached its full size (it must stay clean from then).
+    fec_probe_full_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -230,9 +246,10 @@ impl AdaptiveBitrate {
     pub fn with_start(ceiling_kbps: u32, start_kbps: u32) -> Self {
         let ceiling_kbps = ceiling_kbps.max(1);
         let floor = FLOOR_KBPS.min(ceiling_kbps);
+        let budget_kbps = start_kbps.clamp(floor, ceiling_kbps) as f32;
         Self {
             ceiling_kbps,
-            budget_kbps: start_kbps.clamp(floor, ceiling_kbps) as f32,
+            budget_kbps,
             last_sample_ms: None,
             last_cut_ms: None,
             lossy_streak: 0,
@@ -244,6 +261,8 @@ impl AdaptiveBitrate {
             cut_now: false,
             queue_was_high: false,
             last_bad_kbps: None,
+            video_kbps: budget_kbps,
+            fec_probe_full_ms: None,
         }
     }
 
@@ -291,6 +310,20 @@ impl AdaptiveBitrate {
         self.budget_kbps.round() as u32
     }
 
+    /// The part of the budget the video (with its regular FEC parity) may
+    /// use. Below [`Self::budget_kbps`] while a probe fills the rest with
+    /// extra parity ([`probe_overhead`]): near the budget that failed last,
+    /// the wire rate rises first, and the video follows only once that
+    /// stayed clean, so an overrun costs parity, not pictures.
+    pub fn video_budget_kbps(&self) -> u32 {
+        self.video_kbps.min(self.budget_kbps).round() as u32
+    }
+
+    /// A parity probe is running (the budget is above the video's share).
+    pub fn probing(&self) -> bool {
+        self.video_budget_kbps() < self.budget_kbps()
+    }
+
     pub fn congested(&self) -> bool {
         self.congested
     }
@@ -316,6 +349,7 @@ impl AdaptiveBitrate {
             .budget_kbps
             .min(ceiling_kbps as f32)
             .max(self.floor_kbps() as f32);
+        self.video_kbps = self.video_kbps.min(self.budget_kbps);
     }
 
     /// A new viewer: start again (slow start) with nothing learned.
@@ -416,6 +450,8 @@ impl AdaptiveBitrate {
                     }
                 }
                 self.budget_kbps = target.max(floor);
+                self.video_kbps = self.video_kbps.min(self.budget_kbps);
+                self.fec_probe_full_ms = None;
                 self.last_cut_ms = Some(now_ms);
                 self.slow_start = false;
                 let trigger = if s.backlog_drops > 0 {
@@ -459,37 +495,69 @@ impl AdaptiveBitrate {
                 .filter(|k| k.is_finite())
                 .is_none_or(|k| k >= USED_SHARE * self.budget_kbps);
             if rested && used {
-                let secs = dt_ms as f32 / 1000.0;
-                let step = (ceiling * 0.04).max(MIN_STEP_KBPS);
-                let step = match self.last_bad_kbps {
-                    Some(b)
-                        if self.budget_kbps >= b * NEAR_BAD_SHARE
-                            && self.budget_kbps < b * PAST_BAD_SHARE =>
-                    {
-                        step * NEAR_BAD_STEP
-                    }
-                    _ => step,
-                };
-                // Only a resumed controller has a bad budget in slow start:
-                // it grows fast up to the zone, then slowly.
-                let near_bad = self.last_bad_kbps.map(|b| b * NEAR_BAD_SHARE);
-                self.budget_kbps = if self.slow_start {
-                    let grown = self.budget_kbps * SLOW_START_PER_S.powf(secs);
-                    match near_bad {
-                        Some(cap) if grown >= cap => {
-                            self.slow_start = false;
-                            grown.min(cap).max(self.budget_kbps)
-                        }
-                        _ => grown,
-                    }
-                } else {
-                    self.budget_kbps + step * secs
-                }
-                .min(ceiling);
+                self.grow(dt_ms, now_ms);
+            } else {
+                self.fec_probe_full_ms = None;
             }
+        } else {
+            // Not clean: a probe has to start its hold again.
+            self.fec_probe_full_ms = None;
         }
         self.budget_kbps = self.budget_kbps.clamp(floor, ceiling);
+        if !self.in_fec_probe_zone() {
+            self.video_kbps = self.budget_kbps;
+            self.fec_probe_full_ms = None;
+        }
+        self.video_kbps = self.video_kbps.min(self.budget_kbps);
         self.budget_kbps()
+    }
+
+    /// From [`NEAR_BAD_SHARE`] to [`PAST_BAD_SHARE`] of the last bad budget
+    /// (after slow start): growth is probed with parity first.
+    fn in_fec_probe_zone(&self) -> bool {
+        !self.slow_start
+            && self.last_bad_kbps.is_some_and(|b| {
+                self.video_kbps >= b * NEAR_BAD_SHARE && self.video_kbps < b * PAST_BAD_SHARE
+            })
+    }
+
+    /// A clean, used sample after the rest following a cut: grow.
+    fn grow(&mut self, dt_ms: u64, now_ms: u64) {
+        let ceiling = self.ceiling_kbps as f32;
+        let secs = dt_ms as f32 / 1000.0;
+        let step = (ceiling * 0.04).max(MIN_STEP_KBPS);
+        if self.in_fec_probe_zone() {
+            // Near the last failure: raise the wire rate with parity only,
+            // hold it, and let the video follow if it stayed clean.
+            let full = (self.video_kbps * (1.0 + FEC_PROBE_SHARE)).min(ceiling);
+            if self.budget_kbps < full {
+                self.budget_kbps = (self.budget_kbps + step * NEAR_BAD_STEP * secs).min(full);
+                self.fec_probe_full_ms = None;
+            } else {
+                let since = *self.fec_probe_full_ms.get_or_insert(now_ms);
+                if now_ms.saturating_sub(since) >= FEC_PROBE_HOLD_MS {
+                    self.video_kbps = self.budget_kbps;
+                    self.fec_probe_full_ms = None;
+                }
+            }
+            return;
+        }
+        // Only a resumed controller has a bad budget in slow start: it grows
+        // fast up to the zone, then probes.
+        let near_bad = self.last_bad_kbps.map(|b| b * NEAR_BAD_SHARE);
+        self.budget_kbps = if self.slow_start {
+            let grown = self.budget_kbps * SLOW_START_PER_S.powf(secs);
+            match near_bad {
+                Some(cap) if grown >= cap => {
+                    self.slow_start = false;
+                    grown.min(cap).max(self.budget_kbps)
+                }
+                _ => grown,
+            }
+        } else {
+            self.budget_kbps + step * secs
+        }
+        .min(ceiling);
     }
 
     /// After a cut, watch the loss for a few seconds. If it stays (≥ 70 % of
@@ -547,6 +615,21 @@ pub fn pace_spread_us(wire_bytes: usize, budget_kbps: u32, keyframe: bool, behin
     let kbps = (budget_kbps as f64 * share as f64).max(1.0);
     let us = wire_bytes as f64 * 8.0 * 1000.0 / kbps;
     (us as u64).min(MAX_PACE_SPREAD_US)
+}
+
+/// Parity share (parity / data) for delta frames while a probe runs: the
+/// regular `overhead` with the video sized for `video_budget_kbps`, raised
+/// so video + parity fill `budget_kbps` ([`AdaptiveBitrate::video_budget_kbps`]).
+/// At most [`MAX_PROBE_OVERHEAD`], never below `overhead`.
+pub fn probe_overhead(overhead: f32, budget_kbps: u32, video_budget_kbps: u32) -> f32 {
+    if budget_kbps <= video_budget_kbps {
+        // No probe (and no rounding error from the encoder target).
+        return overhead;
+    }
+    let video = encoder_kbps(video_budget_kbps, Some(overhead)) as f32;
+    let fill = budget_kbps as f32 / video.max(1.0) - 1.0;
+    let o = if overhead.is_finite() { overhead } else { 0.0 };
+    fill.min(MAX_PROBE_OVERHEAD).max(o)
 }
 
 /// Encoder target that keeps video + parity within `budget_kbps`, given the
@@ -798,7 +881,10 @@ mod tests {
         let b = feed(&mut c, loss(0.0), 2, &mut t);
         assert_eq!(b, 30_800);
         assert_eq!(feed(&mut c, loss(0.0), 2, &mut t), 32_400);
-        assert_eq!(feed(&mut c, loss(0.0), 40, &mut t), 40_000);
+        // From 36 (90 % of the 40 that failed) the climb is probed with
+        // parity, so the last 10 % take longer.
+        assert_eq!(feed(&mut c, loss(0.0), 80, &mut t), 40_000);
+        assert_eq!(c.video_budget_kbps(), 40_000);
     }
 
     #[test]
@@ -842,11 +928,73 @@ mod tests {
         // 4 s rest, then +400 per report (4 % of 20 Mbit/s per second)...
         assert_eq!(feed(&mut c, loss(0.0), 7, &mut t), 12_000);
         assert_eq!(feed(&mut c, loss(0.0), 6, &mut t), 14_400);
-        // ...a quarter of that from 14.4 (90 % of 16) to 18.4 (115 %)...
+        assert_eq!(c.video_budget_kbps(), 14_400);
+        // From 14.4 (90 % of 16) to 18.4 (115 %) a probe raises the wire
+        // rate with parity only, a quarter as fast, to 3 % above the video…
         assert_eq!(feed(&mut c, loss(0.0), 1, &mut t), 14_500);
-        assert_eq!(feed(&mut c, loss(0.0), 39, &mut t), 18_400);
-        // ...then full speed again: the link got better.
-        assert_eq!(feed(&mut c, loss(0.0), 1, &mut t), 18_800);
+        assert_eq!(c.video_budget_kbps(), 14_400);
+        assert!(c.probing());
+        assert_eq!(feed(&mut c, loss(0.0), 4, &mut t), 14_832);
+        // …holds it for 3 s, and only then lets the video follow.
+        assert_eq!(feed(&mut c, loss(0.0), 6, &mut t), 14_832);
+        assert_eq!(c.video_budget_kbps(), 14_400);
+        feed(&mut c, loss(0.0), 1, &mut t);
+        assert_eq!(c.video_budget_kbps(), 14_832);
+        assert!(!c.probing());
+        // A report that is not clean restarts the hold.
+        feed(&mut c, loss(0.0), 6, &mut t);
+        assert_eq!(c.budget_kbps(), 15_277);
+        feed(&mut c, loss(0.0), 5, &mut t);
+        feed(&mut c, loss(2.0), 1, &mut t);
+        feed(&mut c, loss(0.0), 6, &mut t);
+        assert_eq!(c.video_budget_kbps(), 14_832, "hold restarted");
+        feed(&mut c, loss(0.0), 1, &mut t);
+        assert_eq!(c.video_budget_kbps(), 15_277);
+        // Past 18.4 the link got better: full speed, no probe.
+        let mut n = 0;
+        while c.video_budget_kbps() < 18_400 {
+            feed(&mut c, loss(0.0), 1, &mut t);
+            n += 1;
+            assert!(n < 200, "stuck at {}", c.budget_kbps());
+        }
+        let b = c.budget_kbps();
+        assert_eq!(feed(&mut c, loss(0.0), 1, &mut t), b + 400);
+        assert!(!c.probing());
+    }
+
+    #[test]
+    fn a_failed_probe_costs_parity_not_video() {
+        let mut c = at_ceiling(20_000);
+        let mut t = 0;
+        let overrun = Sample {
+            sent_kbps: Some(16_000.0),
+            ..loss(25.0)
+        };
+        feed(&mut c, overrun, 1, &mut t);
+        feed(&mut c, loss(0.0), 14, &mut t);
+        assert_eq!((c.budget_kbps(), c.video_budget_kbps()), (14_500, 14_400));
+        // Loss near the bad budget counts (flat queue or not): a cut, and
+        // the video is never above the budget.
+        feed(&mut c, loss(6.0), 2, &mut t);
+        assert_eq!(c.last_cut().map(|c| c.trigger), Some(CutTrigger::Loss));
+        assert!(c.budget_kbps() < 14_400);
+        assert_eq!(c.video_budget_kbps(), c.budget_kbps());
+        assert!(!c.probing());
+    }
+
+    #[test]
+    fn probe_parity_fills_the_budget_above_the_video() {
+        // No probe: the regular overhead exactly (no rounding drift).
+        assert_eq!(probe_overhead(0.35, 3_000, 3_000), 0.35);
+        // Video sized for 14.4 Mbit/s with 10 % parity (13.09 Mbit/s of
+        // video), on a 14.832 Mbit/s budget: 13.3 % parity.
+        let o = probe_overhead(0.10, 14_832, 14_400);
+        let video = encoder_kbps(14_400, Some(0.10)) as f32;
+        assert!((video * (1.0 + o) - 14_832.0).abs() < 1.0, "{o}");
+        // Capped, never below the regular overhead, garbage is harmless.
+        assert_eq!(probe_overhead(0.10, 40_000, 3_000), MAX_PROBE_OVERHEAD);
+        assert_eq!(probe_overhead(0.50, 101, 100), 0.50);
+        assert!(probe_overhead(f32::NAN, 14_832, 14_400).is_finite());
     }
 
     #[test]
@@ -1139,7 +1287,8 @@ mod tests {
             } else {
                 link.demand_kbps
             };
-            let wanted = encoder_kbps(c.budget_kbps(), Some(overhead));
+            let wanted = encoder_kbps(c.video_budget_kbps(), Some(overhead));
+            let delta_overhead = probe_overhead(overhead, c.budget_kbps(), c.video_budget_kbps());
             let target = if link.keyframes == Keyframes::Reopen {
                 let cur = *reopened_kbps.get_or_insert(wanted);
                 // The pipeline's rule (`bitrate_action` in mirrorwire-media):
@@ -1160,7 +1309,7 @@ mod tests {
             .min(demand);
             let key = std::mem::take(&mut want_key);
             let mut data = (target as usize * 1000 / 8 / 60).div_ceil(PKT).max(1);
-            let mut parity = (data as f32 * overhead).ceil() as usize;
+            let mut parity = (data as f32 * delta_overhead).ceil() as usize;
             if key {
                 data *= KEYFRAME_SIZE;
                 let o = FecMode::Auto
@@ -1177,7 +1326,7 @@ mod tests {
             let n = data + parity;
             // Unpaced: 500 Mbit/s, 1200 bytes every ~19 us.
             let spread_us = if link.pace {
-                pace_spread_us(n * PKT, c.budget_kbps(), key, start_us > t_us)
+                pace_spread_us(n * PKT, c.video_budget_kbps(), key, start_us > t_us)
             } else {
                 0
             };
@@ -1369,7 +1518,7 @@ mod tests {
         // The budget stays near what is used, so most bursts are capped by
         // the encoder instead of overrunning the link, and the queue cuts
         // the rest before packets are lost. Measured with a 150 ms FIFO:
-        // 6 queue cuts, 0.00 % lost (with a drop-only bottleneck and the
+        // 2 queue cuts with the parity probe (5 before it), 0.00 % lost (with a drop-only bottleneck and the
         // loss/RTT rules: 4 cuts, 0.74 %; the controller before slow start
         // and "grow only while used": 10 cuts, 2.40 %).
         assert!(r.cuts.len() <= 6, "{} cuts", r.cuts.len());
@@ -1422,8 +1571,9 @@ mod tests {
     fn sim_queue_finds_the_bottleneck_before_loss() {
         // 16 Mbit/s with a deep Wi-Fi buffer (the tablet showed ~290 ms):
         // every cut comes from the queue, before a packet is lost.
-        // Measured: 16 cuts, 0.00 % lost, queue p95 70.5 ms, 13.8 Mbit/s
-        // video delivered (the RTT rule on the same link: 19 cuts, p95
+        // Measured: 7 cuts, 0.00 % lost, queue p95 40.3 ms, 13.4 Mbit/s
+        // video delivered (before the parity probe: 13, 41.4 ms, 13.3;
+        // before the hysteresis: 16, 70.5 ms, 13.8) (the RTT rule on the same link: 19 cuts, p95
         // 129 ms, 13.0 Mbit/s).
         let r = simulate(WIFI, 40_000, 90);
         print("16 Mbit/s, 300 ms buffer", &r);
@@ -1442,8 +1592,9 @@ mod tests {
         // A bottleneck that drops before a queue of QUEUE_LOSS_MS builds
         // (a router or USB link) looks like random loss. Near the budget
         // that failed last time, loss counts anyway and the climb is slow.
-        // Measured: 50 ms buffer 0.72 % lost, 13.3 Mbit/s video; 20 ms
-        // 1.19 %, 13.0 (before, loss counted only once heavy: 4.92 % /
+        // Measured: 50 ms buffer 0.39 % lost, 13.4 Mbit/s video; 20 ms
+        // 0.85 %, 13.2 (before the parity probe 0.72 % / 13.3 and
+        // 1.19 % / 13.0; before, loss counted only once heavy: 4.92 % /
         // 11.7 and 5.53 % / 11.3, each overrun ~23 % loss in one report).
         for buffer_ms in [50, 20] {
             let r = simulate(Link { buffer_ms, ..WIFI }, 40_000, 90);
@@ -1519,6 +1670,8 @@ mod tests {
         //     keyframe never got through)
         //   VAAPI 16/300: 100 -> 0, 16/50: 3123 -> 291, 16/20: 4799 -> 759,
         //     20/150: 294 -> 74
+        // With the parity probe, paced: VAAPI 16/50 291 -> 107, 16/20
+        // 759 -> 603, 20/150 74 -> 32 (x264 stays at 0).
         let wifi50 = Link {
             buffer_ms: 50,
             ..WIFI
@@ -1534,9 +1687,9 @@ mod tests {
         for (name, link, max_frozen, max_lag_p95) in [
             ("no limit", LAN, 0.0, 1.0f32),
             ("16 Mbit/s, 300 ms", WIFI, 0.0, 100.0),
-            ("16 Mbit/s, 50 ms", wifi50, 600.0, 120.0),
-            ("16 Mbit/s, 20 ms", wifi20, 1_200.0, 100.0),
-            ("20 Mbit/s, 150 ms", link20, 200.0, 150.0),
+            ("16 Mbit/s, 50 ms", wifi50, 300.0, 120.0),
+            ("16 Mbit/s, 20 ms", wifi20, 900.0, 100.0),
+            ("20 Mbit/s, 150 ms", link20, 100.0, 150.0),
         ] {
             for keyframes in [Keyframes::Live, Keyframes::Reopen] {
                 let mode = if keyframes == Keyframes::Live {
@@ -1612,12 +1765,15 @@ mod tests {
         //     8/50 103 -> 47; 16/300 0 -> 0 with lag p95 257 -> 47 ms
         //   worse: VAAPI 20/150 0 -> 18.5; 20 then 8 Mbit/s: x264 37 -> 59,
         //     VAAPI 103 -> 115 (but fewer lost frames: 66 -> 48)
+        // With the parity probe (fresh -> resumed): VAAPI 16/50 28 -> 7,
+        //   16/20 440 -> 95, 5/300 93 -> 0, 8/50 82 -> 0, 20/150 0 -> 0;
+        //   20 then 8 Mbit/s still worse: x264 37 -> 58, VAAPI 82 -> 91.
         for (name, before, after, may_cost) in [
             ("no limit", LAN, LAN, 0.0),
             ("16 Mbit/s, 300 ms", WIFI, WIFI, 0.0),
             ("16 Mbit/s, 50 ms", wifi50, wifi50, 0.0),
             ("16 Mbit/s, 20 ms", wifi20, wifi20, 0.0),
-            ("20 Mbit/s, 150 ms", link20, link20, 30.0),
+            ("20 Mbit/s, 150 ms", link20, link20, 0.0),
             ("5 Mbit/s, 300 ms", link5, link5, 0.0),
             ("8 Mbit/s, 50 ms", link8, link8, 0.0),
             ("no limit, then 16 Mbit/s, 50 ms", LAN, wifi50, 0.0),

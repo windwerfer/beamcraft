@@ -149,7 +149,13 @@ target), **planned**, **idea**. Update this file when an item moves.
       60 % of its last failure) and slow-starts to 90 % of it; sim: shallow-buffer and < 10
       Mbit/s links freeze far less in the first 20 s, VAAPI 20 Mbit/s / 150 ms and a link that
       got worse a little more (testing.md §3.3). Not yet seen on hardware: the USB test link
-      never cut, so no resume fired. Still open: probing with FEC. Note for VAAPI: slow start changes the rate each
+      never cut, so no resume fired. Done 2026-11-17: probing with FEC. From 90 % to 115 % of
+      the last failure the budget grows by extra parity first (up to 3 % above the video), and
+      the video follows after 3 s clean; keyframes are paced on the video budget. Sim: 2889 →
+      2060 frozen frames and 199 → 117 cuts over all paced/reconnect cases, same video;
+      VAAPI 16/50 291 → 107, 16/20 759 → 603; cost: VAAPI 16/300 6 % less video. About a
+      third of the gain is the parity, the rest the held climb (testing.md §3.3). Untested
+      on hardware; the window says `probing: …` while one runs. Note for VAAPI: slow start changes the rate each
       report, but VAAPI reopens at most every 5 s, so it reaches 40 Mbit/s in steps; untested
       on the T480s.)
    5. **Don't cut when FEC recovered everything; smooth the loss: tried and rejected in the

@@ -207,7 +207,8 @@ packet loss falls 4.9 → 0.7 % (50 ms) and 5.5 → 1.2 % (20 ms) with more vide
 lowers the queue p95 on the deep-buffer links (−16 to −71 %) with fewer cuts, for 0–4 % less
 video there (`WIFI` 13.8 → 13.3 Mbit/s); the shallow links cut a little more often (10 → 12). Tried and not better overall: 0.95
 or 0.85 instead of 90 %, a half or 35 % step instead of a quarter. Weak spot left (roadmap item
-0): a bottleneck is still found by overrunning it, now every ~7–9 s.
+0): a bottleneck is still found by overrunning it, now every ~7–9 s (less often since the
+parity probe, below).
 
 **Keyframes, VAAPI reopens and keyframe pacing (2026-11-16,
 `sim_keyframe_pacing_keeps_the_picture`).** The rows above have no keyframes. This test adds one
@@ -293,6 +294,45 @@ help below 10 Mbit/s (5 Mbit/s: 85 frozen either way). Hardware (2026-11-16, USB
 h264_vaapi test pattern, three 40 s sessions with a force-stop between): picture within ~0.5 s
 of each reconnect, 0.0 % loss, 0 unrecoverable frames; the link never cut, so each reconnect
 started fresh (resume not exercised on hardware).
+
+**Probe with parity before more video (2026-11-17, roadmap item 0.4).** From 90 % to 115 % of
+the last bad budget the budget grows by extra FEC parity only (a quarter of the normal step),
+up to 3 % above the video budget; the video follows after 3 s of clean reports, and any report
+that is not clean restarts the 3 s. Keyframes are paced on the video budget. The tables above
+are from before this change. Same sim, same seeds, before → after:
+
+| Link | Before | After |
+|---|---|---|
+| 20 Mbit/s bottleneck, 0 % / 2 % (no keyframes) | 11 / 9 cuts, 16.6 / 15.8 Mbit/s, queue p95 36 / 48 ms | 7 / 2 cuts, 16.8 / 16.3, 26 / 20 ms |
+| 8 Mbit/s, 2 % (no keyframes) | 17 cuts, 6.3 Mbit/s, p95 51 ms | 13 cuts, 6.0, 45 ms |
+| 16 Mbit/s, 300 / 50 / 20 ms (no keyframes) | 13 / 12 / 12 cuts, 0 / 0.72 / 1.19 % lost | 7 / 7 / 7 cuts, 0 / 0.39 / 0.85 % lost, video ±0.2 Mbit/s |
+| 12 Mbit/s content with bursts, 20 Mbit/s | 5 cuts, p95 14 ms | 2 cuts, p95 0 ms |
+| VAAPI paced 16/300 | 0 frozen, 12.4 Mbit/s, lag p95 60 ms | 0 frozen, **11.7**, 10 ms |
+| VAAPI paced 16/50 | 291 frozen (59 lost), 10.4 Mbit/s | **107** (33), 11.0 |
+| VAAPI paced 16/20 | 759 frozen (93 lost), 10.1 Mbit/s | **603** (59), 10.7 |
+| VAAPI paced 20/150 | 74 frozen (16 lost), 14.5 Mbit/s | **32** (6), 14.9 |
+| x264 paced, all links | 0 frozen | 0 frozen, video −0.2 to +0.2 Mbit/s |
+| Reconnect, VAAPI resumed 16/50, 16/20, 5/300, 8/50, 20/150 | 50, 160, 30, 47, 18.5 frozen | 7, 95, 0, 0, 0 |
+| Reconnect, VAAPI fresh 16/50, 16/20, 8/50 | 64, 503, 103 | 28, 440, 82 |
+| Reconnect, 20 then 8 Mbit/s resumed (x264 / VAAPI) | 59 / 115 frozen | 58 / 91 (still more than fresh: 37 / 82) |
+
+Summed over all paced and reconnect means: 2889 → 2060 frozen frames, 199 → 117 cuts, video
+delivered 11.95 → 11.95 Mbit/s. A bottleneck is still found by overrunning it, but less often:
+7 cuts in 90 s instead of 11–13 on the 16 and 20 Mbit/s links. Cost: VAAPI behind a deep buffer
+(16/300) delivers 6 % less video, and a fresh VAAPI reconnect on 20/150 5 % less (14.0 →
+13.3 Mbit/s). Tried (sums over 20 ceilings 30–49 Mbit/s instead of 5, to see past the chaos; before:
+2983 frozen frames, 196 cuts):
+- Probe size and hold: 2 % / 2 s 2189, 3 % / 2 s 2217, **3 % / 3 s 1967**, 3 % / 4 s 2014,
+  4 % / 2 s 2449, 4 % / 3 s 2261, 5 % / 2 s 2232 (8 % and 10 % with the 10 runs: worse, and
+  reconnect asserts fail).
+- Control, the same stepped climb with no extra parity (the video waits, the wire rate does
+  not rise): 3 % / 3 s 2341, 5 % / 2 s 2954, 2 % / 2 s 2231. So about two thirds of the gain is
+  the slower, held climb and one third the parity; with a 2 % probe the parity adds nothing.
+- Pacing keyframes on the probed budget instead of the video budget: VAAPI 16/20 603 → 1574
+  frozen frames (all else unchanged).
+- Extra probe parity on keyframes too (they already get ≥ 25 %): no change; not done.
+With FEC off nothing carries a probe; the video still waits for the 3 s hold (the control
+above). Real hardware: not run yet (the USB link never cut, so it never reached the probe zone).
 
 ### 3.4 Real Wi-Fi: presenter in the dev container, Android tablet viewer (2026-11-15)
 

@@ -127,7 +127,9 @@ every report with unrecoverable frames and shrinks by 1 per clean report, becaus
 needs more parity than its average suggests; it does not grow while the adaptive bitrate sees
 congestion (parity would only add load). A fixed setting `N%` gives delta frames N % and
 keyframes 1.5 × N %. At least one parity packet per block (two for keyframes). Parity is paid
-from the bitrate budget: the encoder target is budget / (1 + delta overhead).
+from the bitrate budget: the encoder target is the video budget / (1 + delta overhead); while
+the adaptive bitrate probes (below), delta frames carry extra parity so that video + parity
+fill the whole budget (`rate::probe_overhead`, at most 60 %; keyframes keep theirs).
 
 **Adaptive bitrate** (presenter; `mirrorwire-proto/src/rate.rs`): the same `link_report`
 (loss and the queueing delay of §3c) and the presenter's backlog drops drive an AIMD
@@ -139,7 +141,12 @@ one report with a queue building (mean ≥ 25 ms or max ≥ 50 ms, and rising �
 (mean ≥ 60 ms, not within 2 s of a cut while it drains) is enough, and that cut also goes to
 ≤ 90 % of the wire rate sent in the last second. Loss with no frame waiting ≥ 40 ms in this or
 the previous report counts as random (no cut, FEC covers it) unless it is ≥ 20 points. A clean link (< 1.5 points excess, no queue) adds 4 % of the ceiling
-per second from 4 s after the last cut. A new viewer starts at 10 Mbit/s (or the ceiling if
+per second from 4 s after the last cut. Each cut remembers what the link did not carry (the
+budget, or the wire rate sent if less); from 90 % of it up, loss above the background counts
+even with a flat queue, and up to 115 % of it the budget grows by a parity probe: a quarter of
+the normal step, up to 3 % above the video budget, filled with extra FEC parity; after 3 s
+of clean reports (any report with loss ≥ 1.5 points excess or a queue restarts the 3 s) the
+video budget follows. A cut lowers both. Keyframes are paced on the video budget. A new viewer starts at 10 Mbit/s (or the ceiling if
 lower) in slow start: ×1.25 per second until the first cut, through loss below the cut
 threshold. A viewer whose link failed before (same certificate fingerprint and address, within
 10 min, presenter memory only) instead starts at min(the budget it left with, 60 % of the

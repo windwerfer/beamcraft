@@ -3,7 +3,7 @@
 
 use mirrorwire_proto::control::QueueDelay;
 use mirrorwire_proto::fec::FecMode;
-use mirrorwire_proto::rate::{AdaptiveBitrate, LinkMemory, Sample};
+use mirrorwire_proto::rate::{self, AdaptiveBitrate, LinkMemory, Sample};
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -139,12 +139,30 @@ impl LinkState {
     }
 
     /// Overhead currently applied to (delta, key) frames, or `None` when FEC
-    /// is off.
+    /// is off. While a probe runs, delta frames carry the extra parity that
+    /// fills the budget above the video's share ([`rate::probe_overhead`]).
     pub fn overheads(&self) -> Option<(f32, f32)> {
-        Some((
-            self.mode.overhead(self.loss_pct, self.boost_pct, false)?,
-            self.mode.overhead(self.loss_pct, self.boost_pct, true)?,
-        ))
+        let delta = self.mode.overhead(self.loss_pct, self.boost_pct, false)?;
+        let key = self.mode.overhead(self.loss_pct, self.boost_pct, true)?;
+        let delta = rate::probe_overhead(delta, self.budget_kbps(), self.video_budget_kbps());
+        Some((delta, key))
+    }
+
+    /// The part of the budget the video and its regular parity may use: the
+    /// budget, except while a probe holds the video below it (adaptive only).
+    pub fn video_budget_kbps(&self) -> u32 {
+        if self.adaptive {
+            self.rate.video_budget_kbps()
+        } else {
+            self.rate.ceiling_kbps()
+        }
+    }
+
+    /// Extra parity of a running probe (kbit/s), if FEC is on to carry it.
+    pub fn probe_kbps(&self) -> Option<u32> {
+        self.overheads()?;
+        let probe = self.budget_kbps().saturating_sub(self.video_budget_kbps());
+        (probe > 0).then_some(probe)
     }
 
     /// Total budget on the wire (kbit/s): the adaptive one, or the setting.
@@ -174,6 +192,12 @@ impl LinkState {
         if self.adaptive && self.rate.congested() {
             line += "  ·  lowered: the link is congested";
         }
+        if let Some(probe) = self.probe_kbps() {
+            line += &format!(
+                "  ·  probing: +{:.1} Mbit/s extra parity before more video",
+                probe as f32 / 1000.0
+            );
+        }
         match (self.rate.last_cut(), self.resumed_bad_kbps) {
             (Some(cut), _) if self.adaptive => {
                 line += &format!("  ·  last cut: {}", cut.reason());
@@ -189,9 +213,11 @@ impl LinkState {
         line
     }
 
-    /// Encoder target: the budget minus room for delta-frame parity.
+    /// Encoder target: the video's share of the budget minus room for its
+    /// regular delta-frame parity (a probe's extra parity is not video).
     pub fn encoder_kbps(&self) -> u32 {
-        mirrorwire_proto::rate::encoder_kbps(self.budget_kbps(), self.overheads().map(|o| o.0))
+        let regular = self.mode.overhead(self.loss_pct, self.boost_pct, false);
+        rate::encoder_kbps(self.video_budget_kbps(), regular)
     }
 }
 
@@ -244,6 +270,11 @@ impl LinkControl {
     /// Total budget on the wire (kbit/s), see [`LinkState::budget_kbps`].
     pub fn budget_kbps(&self) -> u32 {
         self.lock().budget_kbps()
+    }
+
+    /// See [`LinkState::video_budget_kbps`].
+    pub fn video_budget_kbps(&self) -> u32 {
+        self.lock().video_budget_kbps()
     }
 
     fn lock_peers(&self) -> std::sync::MutexGuard<'_, Peers> {
@@ -310,9 +341,10 @@ impl LinkControl {
         }
     }
 
+    /// Parity share for the next frame, see [`LinkState::overheads`].
     pub(super) fn overhead(&self, keyframe: bool) -> Option<f32> {
-        let s = self.lock();
-        s.mode.overhead(s.loss_pct, s.boost_pct, keyframe)
+        let (delta, key) = self.lock().overheads()?;
+        Some(if keyframe { key } else { delta })
     }
 
     pub(super) fn on_report(
@@ -430,6 +462,55 @@ mod tests {
             trend_us_per_s: 0,
         };
         link.on_report(300, 0, 0, Some(q));
+    }
+
+    #[test]
+    fn a_probe_is_parity_the_encoder_does_not_get() {
+        let mut s = LinkState {
+            mode: FecMode::Auto,
+            ..Default::default()
+        };
+        s.rate.set_ceiling(20_000);
+        // An overrun at 16 Mbit/s, then clean reports into the probe zone.
+        let report = |loss_pct, sent| Sample {
+            loss_pct: Some(loss_pct),
+            backlog_drops: 0,
+            sent_kbps: Some(sent),
+            queue: None,
+        };
+        let mut t = 0;
+        let mut feed = |s: &mut LinkState, loss, n| {
+            for _ in 0..n {
+                t += 500;
+                let sent = s.budget_kbps() as f32;
+                s.rate.on_sample(report(loss, sent), t);
+            }
+        };
+        feed(&mut s, 0.0, 6);
+        feed(&mut s, 30.0, 1);
+        let mut n = 0;
+        while !s.rate.probing() {
+            feed(&mut s, 0.0, 1);
+            n += 1;
+            assert!(n < 100, "never probed: {}", s.bitrate_line());
+        }
+        feed(&mut s, 0.0, 3);
+        let (budget, video) = (s.budget_kbps(), s.video_budget_kbps());
+        assert!(budget > video, "{budget} {video}");
+        // The encoder is sized for the video's share with the regular 10 %…
+        assert_eq!(s.encoder_kbps(), rate::encoder_kbps(video, Some(0.10)));
+        // …and the parity fills the rest of the budget.
+        let (delta, key) = s.overheads().unwrap();
+        let wire = s.encoder_kbps() as f32 * (1.0 + delta);
+        assert!((wire - budget as f32).abs() < 2.0, "{wire} vs {budget}");
+        assert_eq!(key, 0.25, "keyframes keep their regular parity");
+        let line = s.bitrate_line();
+        assert!(line.contains("probing: +0."), "{line}");
+        assert!(line.contains("extra parity before more video"), "{line}");
+        // Without FEC nothing carries a probe: no parity, no notice.
+        s.mode = FecMode::Off;
+        assert_eq!((s.overheads(), s.probe_kbps()), (None, None));
+        assert!(!s.bitrate_line().contains("probing"));
     }
 
     #[test]
