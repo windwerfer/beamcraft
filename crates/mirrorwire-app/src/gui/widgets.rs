@@ -16,11 +16,11 @@ pub(super) fn qr_color_image(uri: &str) -> Result<egui::ColorImage> {
     let mut rgba = vec![255u8; side * side * 4];
     for y in 0..n {
         for x in 0..n {
-            if modules[y * n + x] {
+            if modules.get(y * n + x).copied().unwrap_or(false) {
                 let i = ((y + quiet) * side + (x + quiet)) * 4;
-                rgba[i] = 0;
-                rgba[i + 1] = 0;
-                rgba[i + 2] = 0;
+                if let Some(px) = rgba.get_mut(i..i + 3) {
+                    px.fill(0);
+                }
             }
         }
     }

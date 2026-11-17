@@ -384,9 +384,13 @@ fn present_session(
         .into_iter()
         .map(|ip| SocketAddr::new(ip, presenter.local_addr.port()))
         .collect();
+    // `advertised_ips` is never empty (localhost is the last resort above).
+    let (first_addr, other_addrs) = advertised
+        .split_first()
+        .ok_or_else(|| anyhow::anyhow!("no address to advertise"))?;
     let info = ConnectInfo {
-        addr: advertised[0],
-        addrs: advertised[1..].to_vec(),
+        addr: *first_addr,
+        addrs: other_addrs.to_vec(),
         fingerprint: identity.fingerprint(),
         pairing_code: pairing_code.clone(),
         name: Some(name.clone()),

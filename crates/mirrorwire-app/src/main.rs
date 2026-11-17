@@ -1,5 +1,10 @@
 #![deny(unsafe_code)]
-#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 mod applog;
 mod bottleneck;
 mod capture_prefs;
