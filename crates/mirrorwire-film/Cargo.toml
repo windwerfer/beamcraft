@@ -9,6 +9,9 @@ description = "MirrorWire's only contact point with FilmCraft's decoders (craft-
 
 # Every FilmCraft decoder API call lives in this crate, so a FilmCraft upgrade is one rev bump
 # here plus the checks in docs/agents/filmcraft.md. Callers see only `FilmDecoder` and `Planes`.
+[lints]
+workspace = true
+
 [dependencies]
 anyhow.workspace = true
 # FilmCraft's pure-Rust H.264 decoder (MIT OR Apache-2.0, no unsafe): the software decoder

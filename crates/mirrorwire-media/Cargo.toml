@@ -13,6 +13,9 @@ static-ffmpeg = ["ffmpeg-next/static"]
 # Pure-Rust FilmCraft H.264 encoder as an optional presenter backend (`--encoder filmcraft`).
 filmcraft = ["dep:filmcraft-h264enc"]
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow.workspace = true
 bytes.workspace = true

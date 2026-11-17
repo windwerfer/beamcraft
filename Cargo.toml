@@ -12,6 +12,14 @@ repository = "https://github.com/windwerfer/mirrorwire"
 # (allow-wildcard-paths) rather than as version = "*".
 publish = false
 
+# Panicking shortcuts are denied outside tests in every product crate (AGENTS.md 1.9;
+# clippy.toml allows them in tests). xtask is a dev tool and opts out.
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+indexing_slicing = "deny"
+
 [workspace.dependencies]
 anyhow = "1"
 bytes = "1"

@@ -6,4 +6,7 @@ license.workspace = true
 publish = false
 description = "Developer tasks: `cargo xtask ci` runs the gates from AGENTS.md section 3."
 
+[lints.clippy]
+# Dev tool: panicking shortcuts are fine here, so it does not inherit [workspace.lints].
+
 [dependencies]

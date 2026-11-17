@@ -16,12 +16,6 @@
 //! no B-frames and signals `max_num_reorder_frames = 0`).
 
 #![forbid(unsafe_code)]
-#![deny(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::panic,
-    clippy::indexing_slicing
-)]
 
 use anyhow::{anyhow, Result};
 use craft_video::h264::decode::{Decoder, Picture};

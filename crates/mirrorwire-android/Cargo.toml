@@ -12,6 +12,9 @@ description = "MirrorWire viewer for Android: the Rust side of the APK (egui + M
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow.workspace = true
 # FilmCraft's pure-Rust H.264 decoder: the software fallback (decision log 2026-11-15).

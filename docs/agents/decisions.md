@@ -106,6 +106,12 @@ Newest first. Add an entry when the owner decides something non-obvious.
   `fuzz/` crate outside the workspace if a nightly CI job appears. `fragment()` now returns
   no packets for a frame over `MAX_FRAME_LEN` instead of panicking (the presenter logs it and
   asks for a keyframe). Not a wire change.
+- **2026-11-17 (Lints in `[workspace.lints.clippy]`):** unwrap/expect/panic/indexing_slicing
+  are `deny` for every product crate through the workspace table (each crate has
+  `[lints] workspace = true`), replacing per-crate attributes. Tests are exempt via
+  `clippy.toml`; integration test files carry an explicit `#![allow]` because clippy.toml does
+  not cover them. xtask has an empty `[lints.clippy]` (dev tool, no inheritance). Rejected:
+  keeping per-crate attributes (drift: media/film/android lacked indexing_slicing).
 
 - **2026-11-16 (No backwards compatibility, D6):** the owner asked whether keeping old peers
   working was worth its maintenance cost and decided: remove all of it, and from now on

@@ -17,6 +17,9 @@ portal = ["mirrorwire-media/portal"]
 filmcraft = ["mirrorwire-media/filmcraft"]
 static-ffmpeg = ["mirrorwire-media/static-ffmpeg"]
 
+[lints]
+workspace = true
+
 [dependencies]
 anyhow.workspace = true
 bytes.workspace = true

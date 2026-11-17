@@ -9,6 +9,14 @@
 //! ffmpeg -i rec.h264 -f rawvideo -pix_fmt yuv420p ref.yuv && cmp out.yuv ref.yuv
 //! ```
 
+// Integration tests are not covered by clippy.toml's allow-*-in-tests.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+
 use mirrorwire_film::FilmDecoder;
 use std::io::Write;
 use std::time::Instant;

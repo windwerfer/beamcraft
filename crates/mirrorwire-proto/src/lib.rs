@@ -1,15 +1,5 @@
 // This crate never uses `unsafe` (AGENTS.md rule 12).
 #![forbid(unsafe_code)]
-// Parsers of network input live here: no panicking shortcuts outside tests (AGENTS.md §1.9).
-#![cfg_attr(
-    not(test),
-    deny(
-        clippy::unwrap_used,
-        clippy::expect_used,
-        clippy::indexing_slicing,
-        clippy::panic
-    )
-)]
 
 pub mod backoff;
 pub mod clock;

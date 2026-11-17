@@ -2,6 +2,14 @@
 //! hostile input, never panic (AGENTS.md §1.9). A deterministic xorshift generator keeps the
 //! tests reproducible and dependency-free; see the 2026-11-17 entry in decisions.md for why this is not cargo-fuzz.
 
+// Integration tests are not covered by clippy.toml's allow-*-in-tests.
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
+
 use bytes::Bytes;
 use mirrorwire_proto::control::{hello_protocol, Control};
 use mirrorwire_proto::cursor::{CursorImage, PointerUpdate};
