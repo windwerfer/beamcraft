@@ -1,9 +1,11 @@
 # HANDOFF
 
 ## Goal
-Roadmap item 4 (system FFmpeg, owner decision in answers.md), packaging part.
+Roadmap item 5: bottleneck hint line on the Android HUD.
 
 ## Done
+- Android HUD shows `Bottleneck: stage - rating: hint` (session.rs status field, app.rs text). Not tested on a device.
+- Earlier: item 4 runtime + packaging (see git log).
 - Runtime part (earlier): `no_encoder_message`, Auto falls back VA-API -> x264.
 - Packaging switch: Flatpak manifest has no x264/FFmpeg modules, adds the ffmpeg-full extension; AppImage CI job builds against Ubuntu's FFmpeg dev packages, links dynamically, `build.sh` excludes libav*/libsw*. macOS unchanged. docs updated.
 - Gates: cargo xtask ci, Android clippy; CI, Build (Flatpak, AppImage built green), CodeQL all green.
@@ -26,4 +28,4 @@ cargo xtask ci; gh run list --branch main --limit 3
 see `git log -1`
 
 ## Next step
-Windows CI viewer build (windows-latest, MSVC; add roadmap item + decision first), or Android HUD bottleneck line / viewer size in hello for Extend.
+Windows CI viewer build (windows-latest, MSVC; add roadmap item + decision first), or viewer size in hello for Extend.
