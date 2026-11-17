@@ -261,7 +261,8 @@ target), **planned**, **idea**. Update this file when an item moves.
    need FFI too). No known pure-Rust H.264 decoder is fast enough; one written from scratch
    would likely be several times slower and break the latency budget. Best practice for that FFI layer: one small module with a safe API,
    a `// SAFETY:` invariant on every block, `clippy::undocumented_unsafe_blocks`, a CI job running
-   the media tests under AddressSanitizer, and fuzzing the decode path with corrupt H.264 input.
+   the media tests under AddressSanitizer (needs nightly, open), and fuzzing the decode path with corrupt H.264 input
+   (a `cargo test` version is done 2026-11-17: `decode::tests::corrupt_h264_never_panics_and_decoder_recovers`; the `VideoDecoder` trait with our own `YuvImage` also exists).
    Part of the same safe API: a `Decoder` trait with our own frame type (today `decode.rs`
    returns `ffmpeg_next::frame::Video`, and there is only one FFmpeg-based decoder), so other
    decoders (VideoToolbox direct, FilmCraft) can be plugged in like the encoder backends. ~1 day.

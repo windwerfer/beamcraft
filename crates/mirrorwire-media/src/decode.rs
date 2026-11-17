@@ -513,3 +513,89 @@ pub fn luma(frame: &frame::Video) -> (&[u8], usize, usize, usize) {
         frame.height() as usize,
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::encode::{Encoder, EncoderBackend, EncoderConfig};
+    use crate::frame::{PixelFormat, RawFrame};
+
+    fn frame(seq: u32, w: u32, h: u32) -> RawFrame {
+        let stride = w as usize * 4;
+        let data = (0..stride * h as usize)
+            .map(|i| (i as u32).wrapping_mul(7).wrapping_add(seq * 13) as u8)
+            .collect();
+        RawFrame {
+            seq: seq as u64,
+            width: w,
+            height: h,
+            stride,
+            format: PixelFormat::Bgrx,
+            data,
+            capture_us: 1_000 + seq as u64 * 16_667,
+            dmabuf: None,
+        }
+    }
+
+    /// Network input is hostile (AGENTS.md §1.9): bit-flipped, truncated and random access
+    /// units must give an error or nothing, never a panic, and the next keyframe must decode.
+    #[test]
+    fn corrupt_h264_never_panics_and_decoder_recovers() {
+        crate::init().unwrap();
+        let (w, h) = (320, 192);
+        let mut enc = Encoder::new(EncoderConfig {
+            width: w,
+            height: h,
+            backend: EncoderBackend::X264,
+            bitrate_kbps: 4_000,
+            ..EncoderConfig::default()
+        })
+        .unwrap();
+        let aus: Vec<Vec<u8>> = (0..8u32)
+            .flat_map(|seq| enc.encode(&frame(seq, w, h), false).unwrap())
+            .map(|f| f.data.to_vec())
+            .collect();
+        let mut dec = Decoder::new(HwDecode::None).unwrap();
+        let mut x = 0x9e37_79b9u32;
+        let mut rnd = move || {
+            x ^= x << 13;
+            x ^= x >> 17;
+            x ^= x << 5;
+            x
+        };
+        for au in &aus {
+            let mut flipped = au.clone();
+            for _ in 0..8 {
+                let i = rnd() as usize % flipped.len();
+                if let Some(b) = flipped.get_mut(i) {
+                    *b ^= 1 << (rnd() % 8);
+                }
+            }
+            let _ = dec.decode(&flipped);
+            let _ = dec.decode(au.get(..au.len() / 2).unwrap_or_default());
+        }
+        for len in [0usize, 1, 4, 64, 4096] {
+            let mut junk = vec![0u8, 0, 0, 1];
+            junk.extend((0..len).map(|_| rnd() as u8));
+            let _ = dec.decode(&junk);
+        }
+        // A fresh intact stream (starts with a keyframe) still decodes afterwards.
+        let mut enc = Encoder::new(EncoderConfig {
+            width: w,
+            height: h,
+            backend: EncoderBackend::X264,
+            bitrate_kbps: 4_000,
+            ..EncoderConfig::default()
+        })
+        .unwrap();
+        let mut decoded = 0;
+        for seq in 0..6u32 {
+            for f in enc.encode(&frame(seq, w, h), seq == 0).unwrap() {
+                if matches!(dec.decode(&f.data), Ok(Some(_))) {
+                    decoded += 1;
+                }
+            }
+        }
+        assert!(decoded >= 4, "decoder did not recover, decoded {decoded}");
+    }
+}

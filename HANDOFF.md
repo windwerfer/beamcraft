@@ -1,9 +1,10 @@
 # HANDOFF
 
 ## Goal
-Item 0b.5, sixth part: split the big files (gui.rs).
+Item 0c: review remaining unsafe, FFmpeg decode hostile-input test.
 
 ## Done
+- 0c review: `VideoDecoder` trait + `YuvImage` already exist; portal.rs borrow_raw and glow calls have no safe alternative (documented). Added `decode::tests::corrupt_h264_never_panics_and_decoder_recovers` (bit flips, truncation, junk, recovery on keyframe; x264). No unsafe, Breaks: none. xtask ci + Android clippy ok.
 - gui/mod.rs split by screen: gui/present.rs (present_ui + quality_controls), gui/video.rs (video_ui + draw_cursor); mod.rs ~570 lines. Pure move, no unsafe, Breaks: none. xtask ci + Android clippy ok.
 - gui.rs -> gui/mod.rs + gui/widgets.rs (stateless widgets/panels, pure move). No unsafe. Breaks: none. Loopback flaked once (lost 1), passed on rerun (p95 16 ms); Android clippy ok.
 - PresentArgs/SourceKind moved to `presenter/args.rs` (pure move; presenter/mod.rs now ~1020 lines). No unsafe. Breaks: none.
@@ -26,4 +27,4 @@ cargo xtask ci; gh run list --branch main --limit 3
 see `git log -1` of the gui/present.rs commit
 
 ## Next step
-0b.5 is essentially done (pipeline.rs 773 lines, rate.rs tests are the rest); next: 0c: FFmpeg unsafe behind one safe module + Decoder trait.
+0c remaining needs the owner (ASan nightly job, cargo-fuzz). Next: item 5 (bottleneck line), then 6 / 4.
