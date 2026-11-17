@@ -259,6 +259,14 @@ pub(super) fn quality_controls(ui: &mut egui::Ui, app: &mut MirrorApp, live: &En
     }
     ui.horizontal(|ui| {
         let before = app.capture;
+        ui.label("Mode");
+        egui::ComboBox::from_id_salt("capture-mode")
+            .selected_text(app.capture.mode.as_str())
+            .show_ui(ui, |ui| {
+                for m in mirrorwire_media::source::CaptureMode::all() {
+                    ui.selectable_value(&mut app.capture.mode, m, m.as_str());
+                }
+            });
         ui.label("Cursor");
         egui::ComboBox::from_id_salt("cursor")
             .selected_text(app.capture.cursor.as_str())
@@ -291,6 +299,7 @@ pub(super) fn quality_controls(ui: &mut egui::Ui, app: &mut MirrorApp, live: &En
         }
     });
     ui.weak("FEC adds parity packets so frames survive Wi-Fi loss without a keyframe round trip (auto adapts to the loss the viewer reports, up to +35 % / +60 % for keyframes). Parity is paid from the bitrate, so the video gets a bit less. Adaptive bitrate treats the bitrate as a maximum: it lowers the rate when the viewer reports loss or the delay grows, and raises it slowly when the link is clean. Both apply to the next frame and are saved.");
+    ui.weak("Mode: mirror shares an existing screen; extend asks the desktop for a virtual monitor (KDE Plasma 6, GNOME) that you arrange in the system display settings, where its resolution and position are also set. If the desktop cannot, mirror is used and the note shows why. Changing it re-opens the screen-share dialog once per mode.");
     ui.weak("Cursor and Max fps apply at once (the capture restarts without a dialog) and are saved. separate: the viewer draws the cursor from coordinates, so it moves without waiting for video; embedded: the old way, for viewers or desktops where separate misbehaves.");
     ui.weak("Apply restarts the encoder with an IDR. filmcraft is the optional pure-Rust encoder (CPU, for comparison; auto never picks it). Switching away from vaapi uses shared-memory capture until the next start. 4:4:4 chroma is not available with VAAPI on UHD 620 or with VideoToolbox decode.");
 }

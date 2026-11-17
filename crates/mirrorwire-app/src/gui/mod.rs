@@ -118,7 +118,8 @@ pub fn run(
             let initial = initial.clone();
             let log = log.clone();
             Box::new(move |cc: &eframe::CreationContext<'_>| {
-                let capture = crate::capture_prefs::resolve(None, None, None, None, &config_dir);
+                let capture =
+                    crate::capture_prefs::resolve(None, None, None, None, None, &config_dir);
                 let mut app = MirrorApp {
                     identity,
                     runtime: handle,

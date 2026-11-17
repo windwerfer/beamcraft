@@ -21,6 +21,9 @@ pub struct Settings {
     /// Presenter frame-rate cap: `30`, `60` (or another number) or `max`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fps: Option<String>,
+    /// What the presenter captures: `mirror` (default) or `extend` (virtual monitor).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<String>,
     /// Forward error correction for video: `off`, `auto` or a percentage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub fec: Option<String>,
@@ -62,6 +65,7 @@ impl Settings {
 /// the next start.
 pub fn save_capture(
     config_dir: &Path,
+    mode: &str,
     cursor: &str,
     fps: &str,
     fec: &str,
@@ -69,13 +73,15 @@ pub fn save_capture(
 ) -> Result<()> {
     let mut settings = Settings::load(config_dir);
     let adaptive = if adaptive { "on" } else { "off" };
-    if settings.cursor.as_deref() == Some(cursor)
+    if settings.mode.as_deref() == Some(mode)
+        && settings.cursor.as_deref() == Some(cursor)
         && settings.fps.as_deref() == Some(fps)
         && settings.fec.as_deref() == Some(fec)
         && settings.adaptive_bitrate.as_deref() == Some(adaptive)
     {
         return Ok(());
     }
+    settings.mode = Some(mode.to_owned());
     settings.cursor = Some(cursor.to_owned());
     settings.fps = Some(fps.to_owned());
     settings.fec = Some(fec.to_owned());
@@ -181,6 +187,7 @@ mod tests {
         let dir = temp_dir();
         let settings = Settings {
             port: Some(47901),
+            mode: Some("extend".into()),
             cursor: Some("embedded".into()),
             fps: Some("max".into()),
             fec: Some("20%".into()),
@@ -203,12 +210,13 @@ mod tests {
     fn capture_settings_keep_the_port() {
         let dir = temp_dir();
         save_port(&dir, 47555).unwrap();
-        save_capture(&dir, "separate", "60", "auto", false).unwrap();
+        save_capture(&dir, "extend", "separate", "60", "auto", false).unwrap();
         let s = Settings::load(&dir);
         assert_eq!(
             (s.port, s.cursor.as_deref(), s.fps.as_deref()),
             (Some(47555), Some("separate"), Some("60"))
         );
+        assert_eq!(s.mode.as_deref(), Some("extend"));
         assert_eq!(s.fec.as_deref(), Some("auto"));
         assert_eq!(s.adaptive_bitrate.as_deref(), Some("off"));
         std::fs::remove_dir_all(&dir).ok();

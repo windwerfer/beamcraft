@@ -1,6 +1,7 @@
 //! Live capture settings shared by the encode thread, transport and GUI.
 
 use crate::capture_prefs::{CapturePrefs, CursorPref};
+use mirrorwire_media::source::CaptureMode;
 use mirrorwire_media::source::CursorCapture;
 use mirrorwire_net::transport::{LinkControl, LinkState};
 use mirrorwire_proto::control::CursorMode;
@@ -14,6 +15,7 @@ pub struct CaptureCtl {
     pub prefs: CapturePrefs,
     /// What the current source was opened with (before portal fallback).
     pub(super) asked_cursor: CursorCapture,
+    pub(super) asked_mode: CaptureMode,
     pub(super) asked_fps: u32,
     /// What the current source delivers.
     pub(super) active_cursor: CursorCapture,
@@ -32,6 +34,7 @@ impl CaptureCtl {
             fec,
             prefs,
             asked_cursor: CursorCapture::Embedded,
+            asked_mode: prefs.mode,
             asked_fps: 0,
             active_cursor: CursorCapture::Embedded,
             cursor_note: None,
@@ -51,7 +54,9 @@ impl CaptureCtl {
 
     #[cfg_attr(not(feature = "gui"), allow(dead_code))]
     pub(super) fn needs_restart(&self) -> bool {
-        self.wanted_cursor() != self.asked_cursor || self.prefs.fps.request() != self.asked_fps
+        self.wanted_cursor() != self.asked_cursor
+            || self.prefs.mode != self.asked_mode
+            || self.prefs.fps.request() != self.asked_fps
     }
 
     #[cfg_attr(not(feature = "gui"), allow(dead_code))]

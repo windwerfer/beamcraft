@@ -13,7 +13,7 @@
 //! (changed) bitmap go to a [`CursorSink`], independent of video frames. When
 //! the portal does not offer metadata cursors, it falls back to embedded.
 
-use super::{CursorCapture, CursorSink, FrameSource};
+use super::{CaptureMode, CursorCapture, CursorSink, FrameSource};
 use crate::frame::{
     DmaBufFrame, PixelFormat, RawFrame, DRM_FORMAT_MOD_INVALID, DRM_FORMAT_MOD_LINEAR,
 };
@@ -39,7 +39,8 @@ pub struct PortalOptions {
     /// Requested cursor delivery. `Metadata` needs `cursor_sink`.
     pub cursor: CursorCapture,
     pub cursor_sink: Option<CursorSink>,
-    pub allow_virtual: bool,
+    /// Mirror asks the portal for a monitor, Extend for a virtual monitor.
+    pub mode: CaptureMode,
     /// Highest frame rate to ask the compositor for.
     pub fps: u32,
     /// Offer DMA-BUF (zero-copy) before shared memory. Only useful when the
@@ -279,14 +280,13 @@ async fn start_session(
         .map(|t| t.trim().to_owned())
         .filter(|t| !t.is_empty());
 
-    let mut sources = SourceType::MONITOR;
-    if opts.allow_virtual
-        && proxy
-            .available_source_types()
-            .await?
-            .contains(SourceType::VIRTUAL)
-    {
-        sources |= SourceType::VIRTUAL;
+    let available_sources = proxy.available_source_types().await.unwrap_or_else(|e| {
+        tracing::warn!("portal AvailableSourceTypes unreadable ({e}); assuming monitors only");
+        SourceType::MONITOR
+    });
+    let (sources, mode_note) = pick_source_type(opts.mode, available_sources);
+    if let Some(n) = &mode_note {
+        tracing::warn!("capture mode {}: {n}", opts.mode.as_str());
     }
     let available = proxy.available_cursor_modes().await.unwrap_or_else(|e| {
         tracing::warn!("portal AvailableCursorModes unreadable ({e}); assuming embedded only");
@@ -345,7 +345,7 @@ async fn start_session(
             .open_pipe_wire_remote(&session, Default::default())
             .await?,
         cursor: cursor_capture,
-        cursor_note,
+        cursor_note: join_notes(mode_note, cursor_note),
     };
     Ok((proxy, session, negotiated))
 }
@@ -372,6 +372,30 @@ fn pick_cursor_mode(
             (CursorCapture::Embedded, Some("the portal cannot hide the cursor".into()))
         }
         other => (other, None),
+    }
+}
+
+/// Choose the portal source type for a capture mode. Extend falls back to
+/// mirroring when the compositor offers no virtual monitor.
+fn pick_source_type(mode: CaptureMode, available: SourceType) -> (SourceType, Option<String>) {
+    match mode {
+        CaptureMode::Mirror => (SourceType::MONITOR, None),
+        CaptureMode::Extend if available.contains(SourceType::VIRTUAL) => {
+            (SourceType::VIRTUAL, None)
+        }
+        CaptureMode::Extend => (
+            SourceType::MONITOR,
+            Some(format!(
+                "this desktop cannot create a virtual monitor (source types {available:?}); mirroring instead"
+            )),
+        ),
+    }
+}
+
+fn join_notes(a: Option<String>, b: Option<String>) -> Option<String> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(format!("{a}; {b}")),
+        (a, b) => a.or(b),
     }
 }
 
@@ -1055,6 +1079,32 @@ mod tests {
         assert_eq!(
             pick_cursor_mode(CursorCapture::Embedded, true, all),
             (CursorCapture::Embedded, None)
+        );
+    }
+
+    #[test]
+    fn extend_asks_for_virtual_or_falls_back() {
+        let both = SourceType::MONITOR | SourceType::VIRTUAL;
+        assert_eq!(
+            pick_source_type(CaptureMode::Mirror, both),
+            (SourceType::MONITOR, None)
+        );
+        assert_eq!(
+            pick_source_type(CaptureMode::Extend, both),
+            (SourceType::VIRTUAL, None)
+        );
+        let (t, note) = pick_source_type(CaptureMode::Extend, SourceType::MONITOR);
+        assert_eq!(t, SourceType::MONITOR);
+        assert!(note.unwrap().contains("virtual monitor"));
+    }
+
+    #[test]
+    fn notes_join() {
+        assert_eq!(join_notes(None, None), None);
+        assert_eq!(join_notes(Some("a".into()), None).as_deref(), Some("a"));
+        assert_eq!(
+            join_notes(Some("a".into()), Some("b".into())).as_deref(),
+            Some("a; b")
         );
     }
 

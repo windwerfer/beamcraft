@@ -1,11 +1,12 @@
 //! Command-line arguments of `mirrorwire present` (also the GUI's defaults).
 
-use crate::capture_prefs::{parse_fps_arg, CapturePrefs, CursorPref, FpsPref};
+use crate::capture_prefs::{parse_fps_arg, parse_mode_arg, CapturePrefs, CursorPref, FpsPref};
 use anyhow::Result;
 use clap::{Args, ValueEnum};
 use mirrorwire_media::encode::{
     parse_size, EncoderBackend, EncoderConfig, RateControl, DEFAULT_BITRATE_KBPS, DEFAULT_QP,
 };
+use mirrorwire_media::source::CaptureMode;
 use mirrorwire_proto::fec::FecMode;
 use std::net::IpAddr;
 use std::path::PathBuf;
@@ -22,6 +23,12 @@ pub enum SourceKind {
 pub struct PresentArgs {
     #[arg(long, value_enum, default_value_t = SourceKind::Portal)]
     pub(super) source: SourceKind,
+    /// What to capture: mirror (default; an existing screen) or extend (a
+    /// virtual monitor the viewer shows as an extra display; needs
+    /// compositor support, otherwise mirror is used with a note). Also
+    /// MIRRORWIRE_MODE or the saved setting.
+    #[arg(long, value_parser = parse_mode_arg, value_name = "mirror|extend")]
+    pub mode: Option<CaptureMode>,
     /// Output width. 0 (default) follows the native capture size.
     #[arg(long, default_value_t = 0)]
     pub(super) width: u32,
@@ -142,6 +149,7 @@ impl PresentArgs {
     #[cfg(feature = "gui")]
     pub fn gui_defaults() -> Self {
         Self {
+            mode: None,
             source: SourceKind::Portal,
             width: 0,
             height: 0,

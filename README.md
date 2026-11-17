@@ -184,7 +184,7 @@ cargo build --release
 ```
 
 Useful presenter options: `--fps 30|60|max` (frame-rate cap asked of the compositor; default
-60, `max` = the display refresh rate; also `MIRRORWIRE_FPS`), `--cursor separate|embedded|hidden`
+60, `max` = the display refresh rate; also `MIRRORWIRE_FPS`), `--mode mirror|extend` (extend = a virtual monitor, if the desktop offers one; also `MIRRORWIRE_MODE`), `--cursor separate|embedded|hidden`
 (default `separate`, also `MIRRORWIRE_CURSOR`), `--fec auto|off|20` (forward error
 correction, default `auto`; also `MIRRORWIRE_FEC`), `--adaptive-bitrate on|off` (default on;
 also `MIRRORWIRE_ADAPTIVE_BITRATE`), `--bitrate-kbps 40000` (or `--bitrate-mbps 40`; the maximum when adaptive),

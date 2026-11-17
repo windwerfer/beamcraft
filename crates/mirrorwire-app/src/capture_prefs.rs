@@ -4,6 +4,7 @@
 //! `MIRRORWIRE_FEC`, `MIRRORWIRE_ADAPTIVE_BITRATE`), then `settings.json`,
 //! then the default (separate cursor, 60 fps, FEC auto, adaptive on).
 
+use mirrorwire_media::source::CaptureMode;
 use mirrorwire_proto::fec::FecMode;
 use std::path::Path;
 
@@ -126,6 +127,8 @@ pub const FEC_CHOICES: [FecMode; 6] = [
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CapturePrefs {
+    /// Mirror an existing screen or capture a virtual monitor (re-opens the portal).
+    pub mode: CaptureMode,
     pub cursor: CursorPref,
     pub fps: FpsPref,
     /// Forward error correction for video datagrams (applies live).
@@ -138,6 +141,7 @@ pub struct CapturePrefs {
 impl Default for CapturePrefs {
     fn default() -> Self {
         Self {
+            mode: CaptureMode::Mirror,
             cursor: CursorPref::Separate,
             fps: FpsPref::Fixed(60),
             fec: FecMode::Auto,
@@ -199,9 +203,15 @@ pub fn resolve_with(
             "MIRRORWIRE_FPS",
             d.fps,
         ),
+        mode: d.mode,
         fec: d.fec,
         adaptive: d.adaptive,
     }
+}
+
+/// clap value parser for `--mode`.
+pub fn parse_mode_arg(s: &str) -> Result<CaptureMode, String> {
+    CaptureMode::parse(s).ok_or_else(|| format!("expected mirror or extend; got {s:?}"))
 }
 
 fn resolve_fec_with(cli: Option<FecMode>, env: Option<&str>, saved: Option<&str>) -> FecMode {
@@ -226,7 +236,9 @@ fn resolve_adaptive_with(cli: Option<bool>, env: Option<&str>, saved: Option<&st
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn resolve(
+    cli_mode: Option<CaptureMode>,
     cli_cursor: Option<CursorPref>,
     cli_fps: Option<FpsPref>,
     cli_fec: Option<FecMode>,
@@ -245,6 +257,14 @@ pub fn resolve(
         saved.cursor.as_deref(),
         saved.fps.as_deref(),
     );
+    prefs.mode = pick(
+        cli_mode,
+        std::env::var("MIRRORWIRE_MODE").ok().as_deref(),
+        saved.mode.as_deref(),
+        CaptureMode::parse,
+        "MIRRORWIRE_MODE",
+        CaptureMode::Mirror,
+    );
     prefs.fec = resolve_fec_with(cli_fec, env_fec.as_deref(), saved.fec.as_deref());
     let env_adaptive = std::env::var("MIRRORWIRE_ADAPTIVE_BITRATE").ok();
     prefs.adaptive = resolve_adaptive_with(
@@ -258,6 +278,29 @@ pub fn resolve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mode_precedence() {
+        let p = |cli, env, saved| {
+            pick(
+                cli,
+                env,
+                saved,
+                CaptureMode::parse,
+                "M",
+                CaptureMode::Mirror,
+            )
+        };
+        assert_eq!(p(None, None, None), CaptureMode::Mirror);
+        assert_eq!(p(None, None, Some("extend")), CaptureMode::Extend);
+        assert_eq!(p(None, Some("mirror"), Some("extend")), CaptureMode::Mirror);
+        assert_eq!(
+            p(Some(CaptureMode::Extend), Some("mirror"), None),
+            CaptureMode::Extend
+        );
+        assert_eq!(p(None, Some("bogus"), Some("virtual")), CaptureMode::Extend);
+        assert!(parse_mode_arg("sideways").is_err());
+    }
 
     #[test]
     fn parses_values() {
@@ -315,6 +358,7 @@ mod tests {
         assert_eq!(
             saved,
             CapturePrefs {
+                mode: CaptureMode::Mirror,
                 cursor: CursorPref::Embedded,
                 fps: FpsPref::Fixed(30),
                 fec: FecMode::Auto,
@@ -332,6 +376,7 @@ mod tests {
         assert_eq!(
             env,
             CapturePrefs {
+                mode: CaptureMode::Mirror,
                 cursor: CursorPref::Hidden,
                 fps: FpsPref::Max,
                 fec: FecMode::Auto,
@@ -359,6 +404,7 @@ mod tests {
         assert_eq!(
             junk,
             CapturePrefs {
+                mode: CaptureMode::Mirror,
                 cursor: CursorPref::Embedded,
                 fps: FpsPref::Fixed(60),
                 fec: FecMode::Auto,

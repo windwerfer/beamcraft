@@ -173,6 +173,7 @@ fn main() -> Result<()> {
                 args.cursor
             };
             args.capture = capture_prefs::resolve(
+                args.mode,
                 cli_cursor,
                 args.fps,
                 args.fec,
@@ -318,8 +319,14 @@ mod tests {
         assert_eq!(args.cursor, Some(capture_prefs::CursorPref::Embedded));
         // CLI values beat whatever is saved (empty config dir here).
         let dir = std::env::temp_dir().join(format!("mirrorwire-cli-{}", std::process::id()));
-        let prefs =
-            capture_prefs::resolve(args.cursor, args.fps, args.fec, args.adaptive_bitrate, &dir);
+        let prefs = capture_prefs::resolve(
+            args.mode,
+            args.cursor,
+            args.fps,
+            args.fec,
+            args.adaptive_bitrate,
+            &dir,
+        );
         assert_eq!(prefs.fec, mirrorwire_proto::fec::FecMode::Fixed(20));
         assert_eq!(prefs.cursor, capture_prefs::CursorPref::Embedded);
     }

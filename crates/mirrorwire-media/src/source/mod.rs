@@ -33,6 +33,47 @@ impl CursorCapture {
     }
 }
 
+/// What the presenter captures: the existing screen, or a new virtual
+/// monitor the viewer shows as an extra display.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum CaptureMode {
+    /// Share an existing monitor (portal source type MONITOR).
+    #[default]
+    Mirror,
+    /// Ask the compositor for a virtual monitor (portal source type VIRTUAL).
+    Extend,
+}
+
+impl CaptureMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            CaptureMode::Mirror => "mirror",
+            CaptureMode::Extend => "extend",
+        }
+    }
+
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "mirror" | "monitor" => Some(CaptureMode::Mirror),
+            "extend" | "virtual" => Some(CaptureMode::Extend),
+            _ => None,
+        }
+    }
+
+    pub fn all() -> [CaptureMode; 2] {
+        [CaptureMode::Mirror, CaptureMode::Extend]
+    }
+
+    /// File name of the portal restore token for this mode. The portal ties
+    /// a token to the source type it was granted for, so each mode keeps its own.
+    pub fn restore_token_file(self) -> &'static str {
+        match self {
+            CaptureMode::Mirror => "portal_restore_token",
+            CaptureMode::Extend => "portal_restore_token_extend",
+        }
+    }
+}
+
 /// Receives cursor changes from the capture thread. Must not block.
 pub type CursorSink = Arc<dyn Fn(CursorEvent) + Send + Sync>;
 

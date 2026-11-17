@@ -59,12 +59,13 @@ impl PresenterHandle {
         self.controls.request_keyframe();
     }
 
-    /// Change the cursor mode or frame-rate cap: saved for the next start,
+    /// Change the capture mode, cursor mode or frame-rate cap: saved for the next start,
     /// and the capture is reopened (silently, with the portal restore token)
     /// when it changes what is asked of the compositor.
     pub fn apply_capture(&self, prefs: CapturePrefs) {
         if let Err(e) = mirrorwire_net::settings::save_capture(
             &self.config_dir,
+            prefs.mode.as_str(),
             prefs.cursor.as_str(),
             &prefs.fps.label(),
             &prefs.fec.as_string(),
@@ -91,7 +92,8 @@ impl PresenterHandle {
         };
         if restart {
             tracing::info!(
-                "capture settings changed (cursor {}, fps {}); reopening the capture",
+                "capture settings changed (mode {}, cursor {}, fps {}); reopening the capture",
+                prefs.mode.as_str(),
                 prefs.cursor.as_str(),
                 prefs.fps.label()
             );
@@ -172,9 +174,9 @@ fn open_source(
     ctl: &Mutex<CaptureCtl>,
     sink: &CursorSink,
 ) -> Result<Box<dyn FrameSource>> {
-    let (cursor, fps) = {
+    let (cursor, fps, mode) = {
         let c = ctl.lock_ok();
-        (c.wanted_cursor(), c.prefs.fps.request())
+        (c.wanted_cursor(), c.prefs.fps.request(), c.prefs.mode)
     };
     let source: Box<dyn FrameSource> = match args.source {
         SourceKind::Test => {
@@ -190,10 +192,11 @@ fn open_source(
                 Box::new(pattern)
             }
         }
-        SourceKind::Portal => open_portal(args, config_dir, cursor, fps, sink)?,
+        SourceKind::Portal => open_portal(args, config_dir, mode, cursor, fps, sink)?,
     };
     let mut c = ctl.lock_ok();
     c.asked_cursor = cursor;
+    c.asked_mode = mode;
     c.asked_fps = fps;
     c.active_cursor = source.cursor_capture();
     c.cursor_note = source.cursor_note();
@@ -251,16 +254,17 @@ fn effective_fps(asked: u32, negotiated: Option<u32>) -> u32 {
 fn open_portal(
     args: &PresentArgs,
     config_dir: &Path,
+    mode: mirrorwire_media::source::CaptureMode,
     cursor: CursorCapture,
     fps: u32,
     sink: &CursorSink,
 ) -> Result<Box<dyn FrameSource>> {
     use mirrorwire_media::source::portal::{PortalOptions, PortalSource};
     Ok(Box::new(PortalSource::open(PortalOptions {
-        restore_token_path: config_dir.join("portal_restore_token"),
+        restore_token_path: config_dir.join(mode.restore_token_file()),
         cursor,
         cursor_sink: Some(sink.clone()),
-        allow_virtual: true,
+        mode,
         fps,
         // Only VAAPI can import DMA-BUFs. With `auto` the encoder may still
         // turn out to be x264; the pipeline then asks the source to switch
@@ -275,6 +279,7 @@ fn open_portal(
 fn open_portal(
     _args: &PresentArgs,
     _config_dir: &Path,
+    _mode: mirrorwire_media::source::CaptureMode,
     _cursor: CursorCapture,
     _fps: u32,
     _sink: &CursorSink,
@@ -712,7 +717,7 @@ pub fn spawn_for_gui(
     let mut args = PresentArgs::gui_defaults();
     args.name = Some(name);
     args.port = port;
-    args.capture = crate::capture_prefs::resolve(None, None, None, None, &config_dir);
+    args.capture = crate::capture_prefs::resolve(None, None, None, None, None, &config_dir);
     spawn(runtime, args, config_dir, identity, on_update)
 }
 
@@ -883,6 +888,10 @@ mod tests {
         let mut c = CaptureCtl::new(CapturePrefs::default());
         c.asked_cursor = CursorCapture::Metadata;
         c.asked_fps = 60;
+        assert!(!c.needs_restart());
+        c.prefs.mode = mirrorwire_media::source::CaptureMode::Extend;
+        assert!(c.needs_restart());
+        c.asked_mode = mirrorwire_media::source::CaptureMode::Extend;
         assert!(!c.needs_restart());
         c.prefs.cursor = CursorPref::Embedded;
         assert_eq!(c.wanted_cursor(), CursorCapture::Embedded);
