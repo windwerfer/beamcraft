@@ -1,12 +1,12 @@
 # HANDOFF
 
 ## Goal
-Roadmap item 4 (system FFmpeg, owner decision in answers.md), runtime part.
+Roadmap item 4 (system FFmpeg, owner decision in answers.md), packaging part.
 
 ## Done
-- `no_encoder_message` (media/encode/mod.rs): when no backend opens, the error lists every backend's reason and, for a libx264-less FFmpeg (Fedora ffmpeg-free), the install command. Auto already falls back VA-API -> x264. Unit-tested.
-- decisions.md D8 updated: no bundled FFmpeg/x264 on Linux; Flatpak uses the ffmpeg-full extension, AppImage links system FFmpeg.
-- Gates: cargo xtask ci, Android clippy (cargo ndk). Not run on an ffmpeg-free host.
+- Runtime part (earlier): `no_encoder_message`, Auto falls back VA-API -> x264.
+- Packaging switch: Flatpak manifest has no x264/FFmpeg modules, adds the ffmpeg-full extension; AppImage CI job builds against Ubuntu's FFmpeg dev packages, links dynamically, `build.sh` excludes libav*/libsw*. macOS unchanged. docs updated.
+- Gates: cargo xtask ci, Android clippy; CI, Build (Flatpak, AppImage built green), CodeQL all green.
 
 ## Decisions
 - D8 (2026-11-17). Rejected: keep bundling x264 (GPL binaries).
@@ -16,7 +16,8 @@ Roadmap item 4 (system FFmpeg, owner decision in answers.md), runtime part.
 - Owner: ASan CI job for media tests (needs nightly)?
 - 60 ms loopback budget for CI runners: tighten after first CI run.
 - Extend: viewer size in hello (protocol 8)? Flatpak portal-version check for VIRTUAL untested.
-- Item 4 packaging not done: Flatpak manifest still builds x264+FFmpeg; build.yml Linux job still builds static FFmpeg. Needs: drop x264/ffmpeg modules, add the ffmpeg-full extension, link system FFmpeg dynamically (no static-ffmpeg on Linux). Which FFmpeg majors ffmpeg-next 9 supports (7.x/8?) was not verified against distro packages on this box.
+- Not verified at run time: Flatpak ffmpeg-full extension actually providing libx264 to the app; AppImage on Ubuntu FFmpeg 6.1 (built OK, never run on hardware). build-ffmpeg.sh still has a Linux branch (x264), now unused.
+- Windows build item (answers.md) not started; not yet in roadmap/decisions.
 
 ## Verify
 cargo xtask ci; gh run list --branch main --limit 3
@@ -25,4 +26,4 @@ cargo xtask ci; gh run list --branch main --limit 3
 see `git log -1`
 
 ## Next step
-Item 4 packaging switch (Flatpak manifest, build.yml Linux job, AppImage dynamic link), or Android HUD bottleneck line / viewer size in hello for Extend.
+Windows CI viewer build (windows-latest, MSVC; add roadmap item + decision first), or Android HUD bottleneck line / viewer size in hello for Extend.
