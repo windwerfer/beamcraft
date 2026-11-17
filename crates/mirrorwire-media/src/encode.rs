@@ -210,6 +210,8 @@ struct DmaImport {
     graph: ffmpeg_next::filter::Graph,
 }
 
+// SAFETY: the VAAPI frames reference and filter graph are owned by `DmaImport` alone and used only
+// through `&mut`; FFmpeg objects have no thread affinity and the type is not `Sync`.
 unsafe impl Send for DmaImport {}
 
 /// The encoder could not use a DMA-BUF frame. The capture should switch to
@@ -242,7 +244,11 @@ struct Scaler {
     src: (PixelFormat, u32, u32),
 }
 
+// SAFETY: `Scaler` (swscale context) and `VaapiVpp` (filter graph + hw references) own their FFmpeg
+// objects exclusively, are used only through `&mut`, and are not `Sync`; FFmpeg has no
+// thread affinity.
 unsafe impl Send for Scaler {}
+// SAFETY: see `Scaler` above.
 unsafe impl Send for VaapiVpp {}
 
 /// Low-latency H.264 encoder: no B-frames, no lookahead, one packet out per
@@ -282,6 +288,8 @@ pub struct Encoder {
     last_encode_us: u64,
 }
 
+// SAFETY: `Encoder` owns every FFmpeg context, frame and hw reference it holds and uses them only
+// through `&mut self`; it is not `Sync`, so no two threads use them at once.
 unsafe impl Send for Encoder {}
 
 impl Encoder {
@@ -418,6 +426,8 @@ impl Encoder {
         enc.set_frame_rate(Some((config.fps as i32, 1)));
         enc.set_max_b_frames(0);
         enc.set_gop(gop);
+        // SAFETY: `raw` points to the live, unopened `AVCodecContext` owned by `enc`, which is
+        // borrowed mutably; only plain integer fields are set.
         unsafe {
             let raw = enc.as_mut_ptr();
             (*raw).profile = ffi::FF_PROFILE_H264_HIGH;
@@ -443,6 +453,8 @@ impl Encoder {
                     config.height,
                 )?;
                 enc.set_format(Pixel::VAAPI);
+                // SAFETY: `enc` is a live, unopened context; `new_ref` gives it its own reference
+                // to the frames context, which the codec context releases when freed.
                 unsafe { (*enc.as_mut_ptr()).hw_frames_ctx = frames.new_ref() };
                 apply_vaapi_opts(&mut opts, rc, bitrate, config);
                 Upload::Vaapi {
@@ -813,6 +825,9 @@ impl Encoder {
         pts: i64,
         kind: ffmpeg_next::picture::Type,
     ) -> Result<()> {
+        // SAFETY: `frames` is a valid hw frames context reference (caller contract); `hw_frame`
+        // is a freshly allocated empty frame and `src` points to a frame owned by `self` that
+        // outlives the calls; FFmpeg fills/copies, and ownership stays with the Rust values.
         unsafe {
             let mut hw_frame = ffmpeg_next::frame::Video::empty();
             let ret = ffi::av_hwframe_get_buffer(frames, hw_frame.as_mut_ptr(), 0);
@@ -1000,6 +1015,9 @@ impl Encoder {
             std::ptr::null(),
         ];
         let src_stride = [raw.stride as i32, 0, 0, 0];
+        // SAFETY: `src[0]` points to `raw.data`, checked above to hold at least
+        // `stride * height` bytes, and the other planes are null for a packed format; `dst` is
+        // the live staging frame whose `data`/`linesize` were allocated for the configured size.
         unsafe {
             let dst = self.staging.as_mut_ptr();
             let ret = ffi::sws_scale(
@@ -1120,6 +1138,8 @@ impl VaapiVpp {
         let mut out_ctx = graph.add(&sink, "out", "")?;
         // Keep the result on a VAAPI surface so we do not download and
         // re-upload through system memory.
+        // SAFETY: `out_ctx` is a live filter context; `bytes` views the local `fmts` array
+        // (plain `i32`-sized enum values, NONE-terminated) and outlives the call, which copies it.
         unsafe {
             let fmts = [
                 ffi::AVPixelFormat::AV_PIX_FMT_VAAPI,
@@ -1175,6 +1195,10 @@ fn alloc_vaapi_buffersrc(
     h: u32,
     frames: *mut ffi::AVBufferRef,
 ) -> Result<ffmpeg_next::filter::Context> {
+    // SAFETY: `graph` and `buffer` are live; the allocated `ctx` is checked for null and is
+    // owned by the graph. `par` is checked for null, filled with plain values, and freed with
+    // `av_free` after `av_buffersrc_parameters_set` (which takes its own reference to
+    // `frames`, a valid hw frames reference by caller contract).
     unsafe {
         let ctx =
             ffi::avfilter_graph_alloc_filter(graph.as_mut_ptr(), buffer.as_ptr(), c"in".as_ptr());
@@ -1218,10 +1242,15 @@ struct DrmHolder {
     _fd: std::os::fd::OwnedFd,
 }
 
+/// # Safety
+/// FFmpeg calls this once when the buffer is freed, with the `opaque` pointer given to
+/// `av_buffer_create` (null or a `Box<DrmHolder>` turned into a raw pointer by `map_dmabuf`).
 #[cfg(unix)]
 unsafe extern "C" fn free_drm_holder(opaque: *mut std::ffi::c_void, _data: *mut u8) {
     if !opaque.is_null() {
-        drop(Box::from_raw(opaque as *mut DrmHolder));
+        // SAFETY: per the contract above `opaque` is the unique `Box<DrmHolder>` pointer and
+        // this callback runs exactly once, so reclaiming the box is sound.
+        drop(unsafe { Box::from_raw(opaque as *mut DrmHolder) });
     }
 }
 
@@ -1256,6 +1285,10 @@ fn map_dmabuf(
     desc.layers[0].planes[0].pitch = dmabuf.pitch as isize;
 
     let holder = Box::into_raw(Box::new(DrmHolder { desc, _fd: fd }));
+    // SAFETY: `holder` is a valid, unique heap pointer. `av_buffer_create` hands it to
+    // `free_drm_holder`, which frees it exactly once; on failure we free it ourselves. The DRM
+    // frame `f` owns `buf`, so the descriptor (and the dup'd fd) lives until FFmpeg drops it,
+    // and `frames` is a valid hw frames reference (caller contract).
     unsafe {
         let buf = ffi::av_buffer_create(
             std::ptr::addr_of_mut!((*holder).desc).cast(),
@@ -1306,6 +1339,9 @@ fn alloc_hw_filter(
     } else {
         Some(CString::new(args)?)
     };
+    // SAFETY: `graph`/`filter` are live; `cname`/`cargs` are NUL-terminated and outlive the
+    // calls; `ctx` is null-checked and owned by the graph; `device` is a valid buffer
+    // reference (caller contract) and `av_buffer_ref` gives the filter its own reference.
     unsafe {
         let ctx =
             ffi::avfilter_graph_alloc_filter(graph.as_mut_ptr(), filter.as_ptr(), cname.as_ptr());
@@ -1329,10 +1365,12 @@ fn alloc_hw_filter(
 
 /// FFmpeg's own name for a pixel format ("bgr0", not the Rust enum's "BGRZ").
 fn format_pixel(p: Pixel) -> String {
+    // SAFETY: pure lookup; returns null or a pointer to a static string.
     let name = unsafe { ffi::av_get_pix_fmt_name(p.into()) };
     if name.is_null() {
         return format!("{p:?}").to_ascii_lowercase();
     }
+    // SAFETY: `name` is non-null (checked above) and points to a static NUL-terminated string.
     unsafe { std::ffi::CStr::from_ptr(name) }
         .to_string_lossy()
         .into_owned()
@@ -1379,6 +1417,8 @@ fn apply_rate_control(
         RateControl::Cqp | RateControl::Icq => {
             enc.set_bit_rate(0);
             enc.set_max_bit_rate(0);
+            // SAFETY: `raw` points to the live `AVCodecContext` owned by `enc` (borrowed
+            // mutably); only plain integer fields are set.
             unsafe {
                 let raw = enc.as_mut_ptr();
                 (*raw).qmin = qp as i32;
@@ -1389,6 +1429,7 @@ fn apply_rate_control(
         _ => {
             enc.set_bit_rate(bitrate as usize);
             enc.set_max_bit_rate(maxrate as usize);
+            // SAFETY: as above, plain integer fields of the live codec context.
             unsafe {
                 let raw = enc.as_mut_ptr();
                 (*raw).rc_buffer_size = buffer;
@@ -1447,6 +1488,7 @@ fn describe_rc(
     config: &EncoderConfig,
     conversion: &str,
 ) -> String {
+    // SAFETY: `raw` points to the live codec context owned by `enc`; we only read integer fields.
     let (bit_rate, max_rate, buf, gop, profile, qmin, qmax) = unsafe {
         let raw = enc.as_ptr();
         (

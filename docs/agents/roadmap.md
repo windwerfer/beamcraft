@@ -230,7 +230,8 @@ target), **planned**, **idea**. Update this file when an item moves.
       clippy::indexing_slicing)]` in proto and net; `forbid(unsafe_code)` everywhere except media
       and the glow renderer; `clippy::undocumented_unsafe_blocks` with a `// SAFETY:` comment on
       all remaining unsafe sites; first try to remove the `unsafe` in
-      portal.rs (net/diag.rs done: tz-rs, net forbids unsafe; app/applog.rs done 2026-11-17:
+      portal.rs (reviewed 2026-11-17: `BorrowedFd::borrow_raw` on PipeWire's raw fd has no safe
+      alternative, stays, documented; media SAFETY comments + deny lint done; net/diag.rs done: tz-rs, net forbids unsafe; app/applog.rs done 2026-11-17:
       `IsTerminal`, app is `deny(unsafe_code)` except yuv_glow.rs) via safe APIs (D15); lock poisoning via `unwrap_or_else(PoisonError::into_inner)`. ~1 day.
    2. **cargo-fuzz targets** for fragment, fec, cursor and control decode, plus a CI job (if not
       already done alongside item 0). ~½ day. Replaced 2026-11-17 by `cargo test` hostile-input
@@ -440,9 +441,10 @@ Found while writing these docs (2026-11-12, commit `f7677c7`). Fix them in their
 - **Hardcoded 2000×1000:** `--width/--height` default to 2000×1000 and the GUI presenter uses
   them, so a 1920×1080 screen is scaled and distorted. The docs describe native resolution as
   the goal. (Being fixed under Next 1.)
-- **`unsafe` without `// SAFETY:` comments** in `mirrorwire-media` (`encode.rs`, `decode.rs`,
-  `hw.rs`, incl. `unsafe impl Send` for FFmpeg wrappers). No workspace lint forbids `unsafe`
-  elsewhere yet (consider `unsafe_code = "forbid"` in proto/net/app).
+- **`unsafe` outside the FFmpeg module:** proto/net forbid it, app denies it except
+  `yuv_glow.rs`. media has a `// SAFETY:` on every site, enforced by
+  `clippy::undocumented_unsafe_blocks` (2026-11-17). Still open: gather FFmpeg `unsafe` into one
+  small safe module.
 - **Panicking shortcuts in production code:** `Mutex::lock().expect(..)` throughout
   `mirrorwire-app` and `mirrorwire-net` (a poisoned lock crashes instead of recovering), plus a
   few `expect`s (`Control::encode`, scaler init, URI building) and `unwrap()` in

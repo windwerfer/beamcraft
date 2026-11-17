@@ -19,6 +19,9 @@ pub struct Decoder {
     name: String,
 }
 
+// SAFETY: the FFmpeg codec context and frames inside `Decoder` are owned by it alone and only
+// used through `&mut self`; FFmpeg contexts have no thread affinity, they only must not be
+// used from two threads at once, and `Decoder` is not `Sync`.
 unsafe impl Send for Decoder {}
 
 /// Which software H.264 decoder runs when there is no hardware decoder (or it is off).
@@ -158,6 +161,9 @@ impl Decoder {
             count: threads,
         });
         #[allow(clippy::unnecessary_cast)]
+        // SAFETY: `raw` points to the live, not yet opened `AVCodecContext` owned by `ctx`, which
+        // we borrow mutably; we only set plain fields and a `get_format` callback with the
+        // signature FFmpeg expects.
         unsafe {
             let raw = ctx.as_mut_ptr();
             (*raw).flags |= ffi::AV_CODEC_FLAG_LOW_DELAY as i32;
@@ -176,6 +182,8 @@ impl Decoder {
         );
 
         let (name, device) = if let Some((dev, label)) = hw {
+            // SAFETY: `ctx` is a live, unopened context; `new_ref` gives it its own reference to
+            // the device, which the context releases when freed.
             unsafe { (*ctx.as_mut_ptr()).hw_device_ctx = dev.new_ref() };
             (format!("h264 ({label})"), Some(dev))
         } else {
@@ -221,6 +229,9 @@ impl Decoder {
             return Ok(None);
         }
         if is_hw_format(self.hw_frame.format()) {
+            // SAFETY: both pointers come from live `frame::Video` values owned by `self`; the
+            // source holds a hardware frame (checked above) and the destination is a software
+            // frame that FFmpeg (re)allocates.
             unsafe {
                 let ret = ffi::av_hwframe_transfer_data(
                     self.sw_frame.as_mut_ptr(),
@@ -265,6 +276,10 @@ fn is_hw_format(p: Pixel) -> bool {
 /// Prefer a VAAPI/VideoToolbox pixel format when the codec offers one, so
 /// attaching `hw_device_ctx` actually uses the hardware decoder. Without this
 /// callback FFmpeg often stays on YUV420P even when a device was set.
+///
+/// # Safety
+/// Only FFmpeg may call this, as `get_format`: `pix_fmts` is then a valid array terminated by
+/// `AV_PIX_FMT_NONE`.
 unsafe extern "C" fn select_hw_pixel_format(
     _ctx: *mut ffi::AVCodecContext,
     pix_fmts: *const ffi::AVPixelFormat,
@@ -272,7 +287,9 @@ unsafe extern "C" fn select_hw_pixel_format(
     let mut i = 0isize;
     let mut first = ffi::AVPixelFormat::AV_PIX_FMT_NONE;
     loop {
-        let p = *pix_fmts.offset(i);
+        // SAFETY: per the contract above the array is valid up to and including the NONE
+        // terminator, and the loop stops at that terminator.
+        let p = unsafe { *pix_fmts.offset(i) };
         if p == ffi::AVPixelFormat::AV_PIX_FMT_NONE {
             break;
         }
@@ -389,6 +406,8 @@ pub struct RgbaConverter {
     out: frame::Video,
 }
 
+// SAFETY: the swscale context and frame are owned by the converter and used only through
+// `&mut self`; swscale has no thread affinity and the type is not `Sync`.
 unsafe impl Send for RgbaConverter {}
 
 impl Default for RgbaConverter {
@@ -462,6 +481,8 @@ impl RgbaConverter {
                 .map(|n| n.get() as i64)
                 .unwrap_or(4)
                 .clamp(1, 8);
+            // SAFETY: `ctx` is a live `SwsContext` (the `AVClass` pointer is its first field, as
+            // `av_opt_set_int` expects) and the option name is a static C string.
             unsafe {
                 let _ =
                     ffi::av_opt_set_int(ctx.as_mut_ptr().cast(), c"threads".as_ptr(), threads, 0);

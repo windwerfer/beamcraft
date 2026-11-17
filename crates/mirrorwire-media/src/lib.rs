@@ -1,3 +1,5 @@
+// Every `unsafe` block or impl needs a `// SAFETY:` comment (AGENTS.md §1.12, decisions D15).
+#![deny(clippy::undocumented_unsafe_blocks)]
 pub mod decode;
 pub mod encode;
 pub mod film_decode;

@@ -6,6 +6,8 @@ use std::ptr;
 /// Owned reference to an FFmpeg hardware device or frames context.
 pub(crate) struct HwRef(*mut ffi::AVBufferRef);
 
+// SAFETY: `HwRef` is the sole owner of one reference to an `AVBufferRef`. FFmpeg buffer
+// references are thread-safe (atomic refcount), and the wrapper exposes no aliasing `&mut`.
 unsafe impl Send for HwRef {}
 
 impl HwRef {
@@ -14,12 +16,16 @@ impl HwRef {
     }
 
     pub(crate) fn new_ref(&self) -> *mut ffi::AVBufferRef {
+        // SAFETY: `self.0` is a valid, non-null `AVBufferRef` for the life of `self`; the call
+        // returns a new, independently owned reference (the caller must unref it).
         unsafe { ffi::av_buffer_ref(self.0) }
     }
 }
 
 impl Drop for HwRef {
     fn drop(&mut self) {
+        // SAFETY: `self.0` is the reference this value owns; `av_buffer_unref` frees it and
+        // nulls the pointer, and `drop` runs once.
         unsafe { ffi::av_buffer_unref(&mut self.0) };
     }
 }
@@ -27,6 +33,8 @@ impl Drop for HwRef {
 pub(crate) fn create_device(kind: ffi::AVHWDeviceType, device: Option<&str>) -> Result<HwRef> {
     let device = device.map(CString::new).transpose()?;
     let mut buf = ptr::null_mut();
+    // SAFETY: `buf` is a valid out-pointer; `device` is null or a NUL-terminated string that
+    // outlives the call (`CString` held in `device`); no options dictionary (null).
     let ret = unsafe {
         ffi::av_hwdevice_ctx_create(
             &mut buf,
@@ -65,6 +73,10 @@ pub(crate) fn create_frames_sized(
     height: u32,
     pool: i32,
 ) -> Result<HwRef> {
+    // SAFETY: the caller passes a valid hardware device reference (`HwRef::as_ptr` or an equal
+    // one). `buf` is checked for null before use; its `data` points to an `AVHWFramesContext`
+    // that we exclusively own until `av_hwframe_ctx_init` publishes it. `frames` owns `buf`, so
+    // it is unref'd on every early return.
     unsafe {
         let buf = ffi::av_hwframe_ctx_alloc(device);
         if buf.is_null() {
