@@ -158,7 +158,7 @@ jobs:
         id: ffmpeg-cache
         with:
           path: .ffmpeg
-          key: ffmpeg-linux-ubuntu24-${{ hashFiles('packaging/build-ffmpeg.sh') }}
+          key: ffmpeg-linux-ubuntu24-${{ github.event.repository.name }}-${{ hashFiles('packaging/build-ffmpeg.sh') }}
       - name: Build static FFmpeg
         if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
         run: packaging/build-ffmpeg.sh "$FFMPEG_PREFIX"
@@ -168,6 +168,12 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: appimage
+      # The .pc files bake in the absolute prefix, so a cache restored under another path
+      # (repo rename) yields a missing libavutil/avutil.h. Fail early with a clear message.
+      - name: Check static FFmpeg
+        run: |
+          test -f "$FFMPEG_PREFIX/include/libavutil/avutil.h" || { echo "::error::static FFmpeg headers missing in $FFMPEG_PREFIX"; exit 1; }
+          grep -q "^prefix=$FFMPEG_PREFIX\$" "$FFMPEG_PREFIX/lib/pkgconfig/libavutil.pc" || { echo "::error::libavutil.pc prefix does not match $FFMPEG_PREFIX (stale cache)"; exit 1; }
       - name: Build
         env:
           PKG_CONFIG_PATH: ${{ github.workspace }}/.ffmpeg/lib/pkgconfig
@@ -191,6 +197,14 @@ jobs:
       options: --privileged
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # The image's preinstalled runtimes can no longer be updated in place on the container's
+      # overlay filesystem ("Invalid cross-device link", then flatpak-builder segfaults).
+      # Remove them so flatpak-builder installs fresh copies instead of updating.
+      - name: Reinstall runtimes fresh
+        run: |
+          flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak uninstall --system -y --noninteractive --all
+          flatpak install --system -y --noninteractive flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
       - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6.8
         with:
           bundle: MirrorWire-x86_64.flatpak
