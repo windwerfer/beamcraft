@@ -120,7 +120,7 @@ impl MirrorApp {
         if self.show_stats {
             let stream = status.stream.as_ref();
             let text = format!(
-                "{}x{}  source {:.1} fps  {:.2} Mbit/s  {} ({})  {}\n{}  decode {:.2} ms  {}  capture->texture {:.1} ms\nwindow: {}\n{}\n{}\n{}\nS: stats  1: 1:1 pixels  F / double-click: fullscreen  Esc: disconnect",
+                "{}x{}  source {:.1} fps  {:.2} Mbit/s  {} ({})  {}\n{}  decode {:.2} ms  {}  capture->texture {:.1} ms\nwindow: {}\n{}\n{}\n{}\n{}\nS: stats  1: 1:1 pixels  F / double-click: fullscreen  Esc: disconnect",
                 status.native_width.max(stream.map(|s| s.width).unwrap_or(0)),
                 status.native_height.max(stream.map(|s| s.height).unwrap_or(0)),
                 status.source_fps,
@@ -135,6 +135,7 @@ impl MirrorApp {
                 self.display_server.as_deref().unwrap_or("?"),
                 status.last_second,
                 status.link.line(),
+                status.bottleneck,
                 scale_info,
             );
             ui.painter().text(

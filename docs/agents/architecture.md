@@ -181,3 +181,14 @@ no NDK API and would otherwise need JNI (`unsafe`), handed over as a file (pendi
 list). Debug output:
 `adb logcat -s mirrorwire`.
 
+
+## Bottleneck line (viewer HUD)
+
+`crates/mirrorwire-app/src/bottleneck.rs` turns one stats window (about 1 s) into a verdict
+`stage - rating: hint`. Stages: network, viewer (decode), driver (software encoder). Ratings: good,
+OK, weak. Thresholds: network weak at loss ≥ 5 % or mean queue ≥ 40 ms, OK at ≥ 1 % or ≥ 15 ms;
+viewer weak at decode ≥ 80 % of the frame interval, OK at ≥ 50 %; driver when the source delivers
+< 80 % of the requested fps and the encoder is software (a hardware encoder with low fps is an idle
+screen, no verdict). The first matching rule wins in that order. The shown verdict changes only
+after 3 equal windows in a row (no flicker). Not yet: presenter-side line (needs a protocol message
+from the viewer), render stage.

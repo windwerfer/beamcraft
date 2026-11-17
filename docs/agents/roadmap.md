@@ -281,7 +281,7 @@ target), **planned**, **idea**. Update this file when an item moves.
 4. **Optional system FFmpeg:** ship without x264 and use an installed FFmpeg for VAAPI when the
    user wants it (Flatpak: `org.freedesktop.Platform.ffmpeg-full` extension). Would make Linux
    builds GPL-free (D8).
-5. **Bottleneck diagnosis line (next up):** a "Bottleneck: <stage> – <reason> + hint" line on
+5. **Bottleneck diagnosis line (viewer HUD half done 2026-11-17: `bottleneck.rs`, classifier + 3-window hysteresis, unit-tested, shown on the HUD from loss, queue delay, decode time, source fps and encoder; thresholds in architecture.md. Open: presenter status line and the viewer→presenter stats message, which needs a protocol bump; render stage; hw/sw encoder hint needs real hardware):** a "Bottleneck: <stage> – <reason> + hint" line on
    the viewer HUD and the presenter status, from the per-stage stats (capture fps vs requested,
    encode time and hw/sw encoder, network loss/RTT/jitter, reassembly, decode time and hw/sw
    decoder, render). Examples: "network – 22 % loss, likely Wi-Fi; cable or 5 GHz helps",

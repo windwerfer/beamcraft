@@ -84,6 +84,8 @@ pub struct ViewerStatus {
     pub cursor: Option<Arc<Mutex<ViewerCursor>>>,
     /// FEC overhead, packet loss, rebuilt packets (last ~0.5 s window).
     pub link: LinkHud,
+    /// The bottleneck verdict line (see `bottleneck.rs`), updated once a second.
+    pub bottleneck: String,
 }
 
 #[derive(Default)]
@@ -415,6 +417,7 @@ fn decode_loop(
         opts.software_decoder,
     )?;
     let mut decoder_name = decoder.name().to_owned();
+    let mut bottleneck = crate::bottleneck::Bottleneck::default();
     {
         let mut s = status.lock().expect("status lock");
         s.decoder = decoder_name.clone();
@@ -597,6 +600,21 @@ fn decode_loop(
             tracing::info!("viewer: {line}");
             {
                 let mut s = status.lock().expect("status lock");
+                let (requested_fps, encoder) = s
+                    .stream
+                    .as_ref()
+                    .map(|i| (i.fps, i.encoder.clone()))
+                    .unwrap_or_default();
+                bottleneck.update(&crate::bottleneck::Sample {
+                    loss_pct: s.link.loss_pct,
+                    queue_ms: s.link.queue.map(|q| q.mean_ms()),
+                    decode_ms,
+                    software_decoder: !decoder.is_hardware(),
+                    source_fps,
+                    requested_fps,
+                    encoder: &encoder,
+                });
+                s.bottleneck = bottleneck.line();
                 s.last_second = line;
                 s.source_fps = source_fps;
                 s.bitrate_mbps = bitrate;

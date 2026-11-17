@@ -1,5 +1,6 @@
 #![deny(unsafe_code)]
 mod applog;
+mod bottleneck;
 mod capture_prefs;
 #[cfg(feature = "gui")]
 mod gui;
