@@ -193,6 +193,15 @@ Newest first. Add an entry when the owner decides something non-obvious.
   secret and wants scans to run from GitHub Actions (Clippy report + lcov)
   instead of Automatic Analysis. Automatic Analysis must be turned off under
   Administration › Analysis method, or the CI upload is rejected.
+- **2026-11-17 (CI scan switch):** the CI SonarCloud scan failed with "Automatic Analysis is
+  enabled" and only the owner can change that in the SonarCloud web UI. The scan stays (it
+  carries clippy + coverage) but runs only when the repository variable `SONAR_CI_ANALYSIS` is
+  `true`; otherwise it skips with a notice and Automatic Analysis covers the repo. To get the CI
+  scan: turn Automatic Analysis off, then set the variable. Both at once is never valid.
+- **2026-11-17 (CI build fixes):** the AppImage job restored a static-FFmpeg cache whose `.pc`
+  files held the old repo path (rename), so headers were not found; the cache key now includes
+  the repo name and a check step fails early on a stale prefix. The Flatpak job removes and
+  reinstalls the image's runtimes first, because in-place updates fail on the container overlay.
 - **2026-11 (FilmCraft encoder):** the owner wants the FFmpeg version finished first, then the
   pure-Rust `filmcraft-h264enc` added as a switchable option for a side-by-side comparison. x264
   stays until then. Optional "use the system FFmpeg" mode accepted as a plan.
