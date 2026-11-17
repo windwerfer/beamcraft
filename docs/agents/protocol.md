@@ -31,11 +31,11 @@ followed by a JSON body (`serde`, `tag = "type"`, `snake_case`). Bodies over
 
 | `type` | Direction | Fields |
 |---|---|---|
-| `hello` | viewer → presenter | `protocol` (u32, must equal `PROTOCOL_VERSION`, currently **5**; read first, §4), `name`, `pairing_code` (string or null) |
+| `hello` | viewer → presenter | `protocol` (u32, must equal `PROTOCOL_VERSION`, currently **6**; read first, §4), `name`, `pairing_code` (string or null) |
 | `rejected` | presenter → viewer | `reason` (shown to the user) |
 | `stream_info` | presenter → viewer | `width`, `height`, `fps`, `codec`, `encoder`, `bitrate_kbps`, `intra_refresh`, `cursor` (`separate` = §3a, `embedded` = in the video, `hidden`), `fec` (the presenter's FEC setting `off`/`auto`/`20%`, for display). Sent after `hello`, and **again** whenever it changes |
 | `request_keyframe` | viewer → presenter | `reason`. The presenter forces at most one keyframe per 2 × RTT (250 ms–1 s) per viewer and ignores requests in between. The viewer asks at once, then backs off 250 ms, 500 ms, 1 s, 1 s … until a keyframe arrives (`KeyframeBackoff`), so a lost keyframe is still replaced without a request storm; frames that arrive while it waits are still counted in `link_report`. The encoder drops a request that arrives when the previous frame sent was already an IDR (`Controls::take_keyframe_request`: no forced IDR directly after an IDR) |
-| `link_report` | viewer → presenter | `loss_permille`, `packets`, `recovered`, `unrecoverable` over the last ~0.5 s, and `queue`: `{mean_us, max_us, trend_us_per_s}` (u32, u32, i32), the one-way queueing delay of the window's frames (mean, max) and its least-squares slope (§3c), or null when no frame arrived. Not sent for a window without packets |
+| `link_report` | viewer → presenter | `loss_permille`, `packets`, `recovered`, `unrecoverable`, `rx_kbps` (u32) and `window_ms` (u32) over the last ~0.5 s (`rx_kbps` = wire rate of video packets that arrived, first transmissions only, parity and headers included; `window_ms` = the window's length; §3b), and `queue`: `{mean_us, max_us, trend_us_per_s}` (u32, u32, i32), the one-way queueing delay of the window's frames (mean, max) and its least-squares slope (§3c), or null when no frame arrived. Not sent for a window without packets |
 | `ping` / `pong` | viewer ↔ presenter | `t_viewer_us`, `t_presenter_us` (clock offset + RTT) |
 | `bye` | either | — |
 
@@ -141,6 +141,16 @@ keyframes 1.5 × N %. At least one parity packet per block (two for keyframes). 
 from the bitrate budget: the encoder target is the video budget / (1 + delta overhead); while
 the adaptive bitrate probes (below), delta frames carry extra parity so that video + parity
 fill the whole budget (`rate::probe_overhead`, at most 60 %; keyframes keep theirs).
+
+**Delivery** (second bitrate signal, protocol 6): the presenter keeps what it sent per frame
+for 4 s (`rate::SentHistory`) and, when a `link_report` arrives, compares `rx_kbps` with its own
+wire rate over the same `window_ms` (ending RTT/2 ago). It is only used when at least 1 Mbit/s
+was sent. A queue cut aims at 90 % of what the link carried (`rx_kbps`, but not below half of
+what was sent in the window, and not above what was sent) instead of 90 % of what was sent, so
+a saturated bottleneck is hit in one step; and the budget does not grow while 8 points or more
+of what was sent are missing beyond both the reported packet loss and the learned random loss
+(frames lost whole, which are not in the packet counts, show up here). A still screen never
+raises the budget: it sends less than 80 % of it, which already blocked growth (`USED_SHARE`).
 
 **Adaptive bitrate** (presenter; `mirrorwire-proto/src/rate.rs`): the same `link_report`
 (loss and the queueing delay of §3c) and the presenter's backlog drops drive an AIMD

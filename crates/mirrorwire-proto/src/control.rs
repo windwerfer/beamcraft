@@ -39,6 +39,13 @@ pub enum Control {
         recovered: u32,
         /// Frames that could not be rebuilt.
         unrecoverable: u32,
+        /// What arrived over the window, in kbit/s on the wire (first transmissions of video
+        /// packets, parity included, headers included; resends do not count): the viewer's
+        /// acknowledgement of what the presenter sent, a second signal for the adaptive bitrate.
+        rx_kbps: u32,
+        /// Length of the window the report covers, in ms (so the presenter can compare `rx_kbps`
+        /// with what it sent in the same period).
+        window_ms: u32,
         /// One-way queueing delay of the window's frames; `None` when no
         /// frame arrived in the window.
         queue: Option<QueueDelay>,
@@ -227,6 +234,8 @@ mod tests {
             packets: 900,
             recovered: 2,
             unrecoverable: 0,
+            rx_kbps: 21_500,
+            window_ms: 503,
             queue: Some(QueueDelay {
                 mean_us: 12_000,
                 max_us: 30_000,
@@ -239,6 +248,13 @@ mod tests {
             text.contains(r#""queue":{"mean_us":12000,"max_us":30000,"trend_us_per_s":-4500}"#),
             "{text}"
         );
+        assert!(
+            text.contains(r#""rx_kbps":21500,"window_ms":503"#),
+            "{text}"
+        );
         assert_eq!(Control::decode_body(&body[4..]).unwrap(), report);
+        // Every field is required: a report of another protocol version does not parse.
+        let old = br#"{"type":"link_report","loss_permille":5,"packets":9,"recovered":0,"unrecoverable":0,"queue":null}"#;
+        assert!(Control::decode_body(old).is_err());
     }
 }

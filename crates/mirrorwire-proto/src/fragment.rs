@@ -506,6 +506,7 @@ impl Reassembler {
             // A resend is not a first transmission: it must not count as loss or delay.
             self.nacks.resent_received += 1;
         } else {
+            self.stats.bytes_received += datagram.len() as u64;
             self.meter(&h);
             self.delay.on_packet(h.frame_id, h.timing.sent_us, now_us);
         }

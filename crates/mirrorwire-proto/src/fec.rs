@@ -150,6 +150,10 @@ pub struct LinkStats {
     pub recovered: u64,
     /// Frames that never completed (skipped over).
     pub unrecoverable_frames: u64,
+    /// Wire bytes of video packets that arrived (first transmissions, parity included).
+    pub bytes_received: u64,
+    /// Length of the window this difference covers (µs); 0 in cumulative counters.
+    pub window_us: u64,
 }
 
 impl LinkStats {
@@ -163,6 +167,8 @@ impl LinkStats {
             unrecoverable_frames: self
                 .unrecoverable_frames
                 .saturating_sub(earlier.unrecoverable_frames),
+            bytes_received: self.bytes_received.saturating_sub(earlier.bytes_received),
+            window_us: 0,
         }
     }
 
@@ -171,6 +177,14 @@ impl LinkStats {
             return 0.0;
         }
         100.0 * self.expected.saturating_sub(self.received) as f32 / self.expected as f32
+    }
+
+    /// Throughput of the window in kbit/s (0 for a cumulative counter).
+    pub fn rx_kbps(&self) -> u32 {
+        if self.window_us == 0 {
+            return 0;
+        }
+        (self.bytes_received.saturating_mul(8_000) / self.window_us).min(u32::MAX as u64) as u32
     }
 
     pub fn overhead_pct(&self) -> f32 {
@@ -249,7 +263,8 @@ impl LinkWindow {
         if elapsed < Self::PERIOD_US {
             return None;
         }
-        let window = now.since(&self.last);
+        let mut window = now.since(&self.last);
+        window.window_us = elapsed;
         self.hud = LinkHud {
             overhead_pct: window.overhead_pct(),
             loss_pct: window.loss_pct(),
@@ -541,11 +556,15 @@ mod tests {
             parity_expected: e / 5,
             recovered: rec,
             unrecoverable_frames: 1,
+            bytes_received: e * 1000,
+            window_us: 0,
         };
         assert!(w.tick(s(0, 0, 0), 1_000).is_none());
         assert!(w.tick(s(50, 50, 0), 300_000).is_none());
         let win = w.tick(s(1000, 980, 10), 501_000).unwrap();
         assert_eq!((win.expected, win.received, win.recovered), (1000, 980, 10));
+        // 1 000 000 bytes in 500 ms = 16 Mbit/s.
+        assert_eq!((win.window_us, win.rx_kbps()), (500_000, 16_000));
         assert!((w.hud.loss_pct - 2.0).abs() < 1e-3);
         assert!((w.hud.overhead_pct - 25.0).abs() < 1e-3);
         assert!((w.hud.recovered_per_s - 20.0).abs() < 1e-3);

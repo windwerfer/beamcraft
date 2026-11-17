@@ -208,7 +208,8 @@ target), **planned**, **idea**. Update this file when an item moves.
    - **Frame integrity check before decode (done 2026-11-17, protocol 5, protocol.md §3).** Original note (Glass: Fletcher-16 over the reassembled frame in
      `glass-proto`). QUIC already authenticates each packet, so this only catches our own
      reassembly/FEC bugs; cheap, never feed a mismatching frame to the decoder. Low priority.
-   - **Bitrate: frame-ack throughput as a second signal and no raise on a still screen**
+   - **Bitrate: frame-ack throughput as a second signal and no raise on a still screen (done
+     2026-11-17, protocol 6, protocol.md §3b; sims unchanged, unit-tested, not on hardware)**
      (`crates/glass-host/src/rate.rs`). Choke-point memory is already done (item 4).
    - **Live capture-to-display latency** from the clock offset plus a capture timestamp on each
      frame (`web/worker.js`): feeds the bottleneck line (item 5).

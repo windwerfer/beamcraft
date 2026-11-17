@@ -392,13 +392,13 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
                         );
                     }
                 }
-                Control::LinkReport { loss_permille, packets, recovered, unrecoverable, queue } => {
+                Control::LinkReport { loss_permille, packets, recovered, unrecoverable, queue, rx_kbps, window_ms } => {
                     tracing::debug!(
                         "viewer link: loss {:.1}% of {packets} packets, {recovered} rebuilt, {unrecoverable} frames lost{}",
                         loss_permille as f32 / 10.0,
                         queue.map_or(String::new(), |q| format!(", {q}"))
                     );
-                    shared.fec.on_report(loss_permille, recovered, unrecoverable, queue);
+                    shared.fec.on_report(loss_permille, recovered, unrecoverable, queue, rx_kbps, window_ms);
                 }
                 Control::Bye => return Ok::<_, anyhow::Error>(()),
                 other => tracing::debug!("ignoring {other:?}"),
@@ -660,6 +660,7 @@ async fn send_loop(
                 if send_err { " (truncated)" } else { "" }
             );
         }
+        fec.on_frame_sent(wire_len);
         paced_done_us = (spread_us > 0).then_some(done_us);
         window_paced += u32::from(spread_us > 0);
         stats.record("capture_to_encoded", ms(frame.encoded_us, frame.capture_us));

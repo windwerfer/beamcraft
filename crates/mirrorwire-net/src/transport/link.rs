@@ -3,7 +3,7 @@
 
 use mirrorwire_proto::control::QueueDelay;
 use mirrorwire_proto::fec::FecMode;
-use mirrorwire_proto::rate::{self, AdaptiveBitrate, LinkMemory, Sample};
+use mirrorwire_proto::rate::{self, AdaptiveBitrate, Delivery, LinkMemory, Sample, SentHistory};
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -72,6 +72,8 @@ pub struct LinkControl {
     /// Locked before `state` when both are needed.
     peers: Mutex<Peers>,
     state: Mutex<LinkState>,
+    /// What went out on the wire, to compare with the viewer's receive rate.
+    sent: Mutex<SentHistory>,
     started: Instant,
 }
 
@@ -229,8 +231,18 @@ impl LinkControl {
                 mode,
                 ..Default::default()
             }),
+            sent: Mutex::new(SentHistory::default()),
             started: Instant::now(),
         })
+    }
+
+    /// The send loop finished sending a frame of `wire_bytes` (video + parity).
+    pub(super) fn on_frame_sent(&self, wire_bytes: usize) {
+        let now_ms = self.now_ms();
+        self.sent
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .record(now_ms, wire_bytes);
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, LinkState> {
@@ -353,9 +365,22 @@ impl LinkControl {
         recovered: u32,
         unrecoverable: u32,
         queue: Option<QueueDelay>,
+        rx_kbps: u32,
+        window_ms: u32,
     ) {
         let now_ms = self.now_ms();
         let mut s = self.lock();
+        // What the viewer received over its window against what we sent in that period (the
+        // report is one one-way delay old, so the window ended about RTT/2 ago).
+        let delivery = self
+            .sent
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .kbps(now_ms, (s.rtt_ms / 2.0) as u64, window_ms as u64)
+            .map(|sent_kbps| Delivery {
+                received_kbps: rx_kbps as f32,
+                sent_kbps,
+            });
         let loss = (loss_permille.min(1000) as f32) / 10.0;
         // Rise fast, decay slowly: a loss burst should get more parity at once.
         let w = if loss > s.loss_pct { 0.5 } else { 0.15 };
@@ -385,6 +410,7 @@ impl LinkControl {
                 backlog_drops: 0,
                 sent_kbps,
                 queue,
+                delivery,
             },
             now_ms,
         );
@@ -413,6 +439,7 @@ impl LinkControl {
                     backlog_drops,
                     sent_kbps: Some(sent_kbps),
                     queue: None,
+                    delivery: None,
                 },
                 now_ms,
             );
@@ -486,7 +513,7 @@ mod tests {
             max_us: 120_000,
             trend_us_per_s: 0,
         };
-        link.on_report(300, 0, 0, Some(q));
+        link.on_report(300, 0, 0, Some(q), 0, 500);
     }
 
     #[test]
@@ -502,6 +529,7 @@ mod tests {
             backlog_drops: 0,
             sent_kbps: Some(sent),
             queue: None,
+            delivery: None,
         };
         let mut t = 0;
         let mut feed = |s: &mut LinkState, loss, n| {

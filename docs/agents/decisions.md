@@ -40,6 +40,21 @@ without new information.
 
 Newest first. Add an entry when the owner decides something non-obvious.
 
+- **2026-11-17 (frame-ack throughput as a second ABR signal, protocol 6):** there is no
+  per-frame ack message; the viewer's `link_report` carries `rx_kbps` and `window_ms` instead
+  (arrival rate of first-transmission video packets), and the presenter aligns its own sent
+  rate to that window from a 4 s per-frame history (`SentHistory`). Two uses, both only when the
+  signals are usable (≥ 1 Mbit/s sent): a queue cut aims at 90 % of what arrived (floor: half of
+  what was sent) rather than of what was sent, and growth pauses while the shortfall exceeds the
+  reported loss and learned random loss by 8 points. Rejected: a growth gate on the raw
+  shortfall (tried first: it froze the budget just above a shallow-buffer link, because loss
+  there is treated as random and the climb to heavy loss is what produced the cut; sim:
+  16 Mbit/s / 20 ms buffer 7 cuts → 0 cuts, 0.85 → 12.9 % lost, and 5.5 instead of 3.0 % lost on
+  20 → 8 Mbit/s); counting the shortfall as loss (duplicates the loss rules). "No raise on a
+  still screen" was already enforced (`USED_SHARE`, sent < 80 % of the budget); a test now pins
+  it. Measured effect: the 40 closed-loop sim rows are unchanged (their cuts already land below
+  90 % of sent); the capacity cut and the gate are shown by unit tests only, not on real Wi-Fi.
+  Breaks: `PROTOCOL_VERSION` 5 → 6, `link_report` has two more required fields.
 - **2026-11-17 (frame checksum, protocol 5):** every video packet header carries the CRC-32
   of the whole encoded frame (offset 44, header 44 → 48 bytes, `WIRE_VERSION` 2 → 3); the
   viewer checks it when a frame completes and never decodes a mismatching one (counted as a

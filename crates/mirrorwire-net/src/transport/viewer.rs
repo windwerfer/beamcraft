@@ -167,6 +167,8 @@ impl ViewerSession {
             recovered: window.recovered.min(u32::MAX as u64) as u32,
             unrecoverable: window.unrecoverable_frames.min(u32::MAX as u64) as u32,
             queue,
+            rx_kbps: window.rx_kbps(),
+            window_ms: (window.window_us / 1000).min(u32::MAX as u64) as u32,
         });
     }
 

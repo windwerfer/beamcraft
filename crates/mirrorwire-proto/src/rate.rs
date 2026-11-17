@@ -45,6 +45,15 @@
 //! * Reconnect: a viewer whose link failed before starts from the budget it
 //!   left with, at most 60 % of what failed, and keeps that failure
 //!   ([`AdaptiveBitrate::resume`]): no overrun at connect on a known link.
+//! * Delivery (the viewer's acknowledgement of what was sent): each `link_report` carries the
+//!   wire rate that arrived in its window; the presenter compares it with what it sent in the
+//!   same period ([`Delivery`], [`SentHistory`]). (1) While clearly less arrives than was sent
+//!   (shortfall ≥ [`DELIVERY_SHORTFALL_PCT`] points beyond both the reported loss and the learned
+//!   random loss), the budget does not grow: the link has not proven it carries it, even when
+//!   loss and queue look harmless (frames lost whole are not in the packet counts). The loss
+//!   itself is not counted twice: it stays with the loss rules. (2) A queue cut aims at 90 % of
+//!   what the link carried, the arrival rate, rather than 90 % of what was sent: a saturated
+//!   bottleneck delivers its capacity, so the cut lands near it in one step.
 //! * Only while it is used: the budget does not grow while the presenter
 //!   sends less than 80 % of it (static or simple content). Otherwise it
 //!   drifts far above what was ever proven to fit, and the next busy frame
@@ -111,6 +120,38 @@ pub const FEC_PROBE_HOLD_MS: u64 = 3_000;
 /// Most parity (parity / data) a probe asks for.
 pub const MAX_PROBE_OVERHEAD: f32 = 0.6;
 
+/// Below this wire rate the delivery comparison is too noisy to use (kbit/s).
+pub const DELIVERY_MIN_SENT_KBPS: f32 = 1_000.0;
+/// Arrival shortfall (percentage points beyond the learned random loss) that stops the budget
+/// from growing.
+pub const DELIVERY_SHORTFALL_PCT: f32 = 8.0;
+/// A queue cut trusts the arrival rate down to this share of what was sent in the window
+/// (a lower reading is more likely a misaligned window than the link's capacity).
+pub const DELIVERY_CAP_MIN_SHARE: f32 = 0.5;
+
+/// The viewer's receive rate of one report window against what the presenter sent in the same
+/// period, both in wire kbit/s (video + parity).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Delivery {
+    pub received_kbps: f32,
+    pub sent_kbps: f32,
+}
+
+impl Delivery {
+    /// Whether both rates are usable.
+    fn valid(&self) -> bool {
+        self.received_kbps.is_finite()
+            && self.sent_kbps.is_finite()
+            && self.received_kbps >= 0.0
+            && self.sent_kbps >= DELIVERY_MIN_SENT_KBPS
+    }
+
+    /// Share of what was sent that did not arrive, in percent (0 when more arrived).
+    fn shortfall_pct(&self) -> f32 {
+        (100.0 * (1.0 - self.received_kbps / self.sent_kbps)).clamp(0.0, 100.0)
+    }
+}
+
 /// One feedback sample. `loss_pct` is `None` when only the presenter's own
 /// view is known (send window without a viewer report).
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -124,6 +165,9 @@ pub struct Sample {
     /// The viewer's one-way queueing delay over its report window; `None`
     /// in the presenter's own samples and when no frame arrived.
     pub queue: Option<QueueDelay>,
+    /// What arrived against what was sent over the viewer's report window; `None` in the
+    /// presenter's own samples.
+    pub delivery: Option<Delivery>,
 }
 
 /// What triggered a cut (the first that applies, in this order).
@@ -424,6 +468,13 @@ impl AdaptiveBitrate {
         // A queue is direct evidence: one report is enough.
         self.congested = heavy || s.backlog_drops > 0 || queue_growing || self.lossy_streak >= 2;
 
+        let delivery = s.delivery.filter(Delivery::valid);
+        // Missing arrival that the packet loss does not explain (frames lost whole, a window
+        // that does not line up): the loss itself is judged by the loss rules above.
+        let delivery_short = delivery.is_some_and(|d| {
+            d.shortfall_pct() - raw.max(self.random_loss_pct) >= DELIVERY_SHORTFALL_PCT
+        });
+
         let floor = self.floor_kbps() as f32;
         let ceiling = self.ceiling_kbps as f32;
         if self.congested {
@@ -446,7 +497,13 @@ impl AdaptiveBitrate {
                 let queue_cut = s.backlog_drops == 0 && !heavy && excess < 3.0;
                 if queue_cut {
                     if let Some(sent) = sent {
-                        target = target.min(sent * QUEUE_CUT_OF_SENT);
+                        // What the link carried: the arrival rate if we have it.
+                        let carried = delivery.map_or(sent, |d| {
+                            d.received_kbps
+                                .max(DELIVERY_CAP_MIN_SHARE * d.sent_kbps)
+                                .min(sent)
+                        });
+                        target = target.min(carried * QUEUE_CUT_OF_SENT);
                     }
                 }
                 self.budget_kbps = target.max(floor);
@@ -494,7 +551,7 @@ impl AdaptiveBitrate {
                 .sent_kbps
                 .filter(|k| k.is_finite())
                 .is_none_or(|k| k >= USED_SHARE * self.budget_kbps);
-            if rested && used {
+            if rested && used && !delivery_short {
                 self.grow(dt_ms, now_ms);
             } else {
                 self.fec_probe_full_ms = None;
@@ -585,6 +642,52 @@ impl AdaptiveBitrate {
     }
 }
 
+/// How long [`SentHistory`] keeps what was sent.
+const SENT_HISTORY_MS: u64 = 4_000;
+
+/// What the presenter sent on the wire, per frame, so a report window of the viewer can be
+/// compared with the same period at the sender ([`Delivery`]).
+#[derive(Debug, Default, Clone)]
+pub struct SentHistory {
+    /// (time the frame's last packet left, wire bytes), oldest first.
+    frames: std::collections::VecDeque<(u64, u32)>,
+}
+
+impl SentHistory {
+    pub fn record(&mut self, now_ms: u64, wire_bytes: usize) {
+        self.frames
+            .push_back((now_ms, wire_bytes.min(u32::MAX as usize) as u32));
+        while self
+            .frames
+            .front()
+            .is_some_and(|(t, _)| t.saturating_add(SENT_HISTORY_MS) < now_ms)
+        {
+            self.frames.pop_front();
+        }
+    }
+
+    /// Wire rate (kbit/s) over `window_ms` ending `delay_ms` before `now_ms` (the one-way path
+    /// delay: a report that arrives now describes packets that arrived a little earlier, and
+    /// those left earlier still). `None` for a window the history does not cover or an empty one.
+    pub fn kbps(&self, now_ms: u64, delay_ms: u64, window_ms: u64) -> Option<f32> {
+        if window_ms == 0 || window_ms > SENT_HISTORY_MS / 2 {
+            return None;
+        }
+        let end = now_ms.saturating_sub(delay_ms);
+        let start = end.checked_sub(window_ms)?;
+        if self.frames.front().is_none_or(|(t, _)| *t > start) {
+            return None; // history starts after the window began
+        }
+        let bytes: u64 = self
+            .frames
+            .iter()
+            .filter(|(t, _)| *t > start && *t <= end)
+            .map(|(_, b)| *b as u64)
+            .sum();
+        Some(bytes as f32 * 8.0 / window_ms as f32)
+    }
+}
+
 /// A keyframe leaves at this multiple of the budget instead of in one burst…
 pub const KEYFRAME_PACE_SHARE: f32 = 1.25;
 /// …and the frames that waited behind it at this multiple, until the send
@@ -659,6 +762,7 @@ mod tests {
             backlog_drops: 0,
             sent_kbps: None,
             queue: None,
+            delivery: None,
         }
     }
 
@@ -775,6 +879,7 @@ mod tests {
             backlog_drops: 3,
             sent_kbps: None,
             queue: None,
+            delivery: None,
         };
         feed(&mut b, drop, 1, &mut t);
         assert_eq!(
@@ -831,6 +936,7 @@ mod tests {
             backlog_drops: 0,
             sent_kbps: Some(k),
             queue: None,
+            delivery: None,
         };
         let mut t = 0;
         // Slow start: 10 Mbit/s budget, a static screen sends 2: no growth.
@@ -905,6 +1011,7 @@ mod tests {
             backlog_drops: 2,
             sent_kbps: None,
             queue: None,
+            delivery: None,
         };
         assert_eq!(feed(&mut b, drop, 1, &mut t), 17_000);
         // Garbage input is ignored, not a panic.
@@ -913,6 +1020,7 @@ mod tests {
             backlog_drops: 0,
             sent_kbps: None,
             queue: None,
+            delivery: None,
         };
         feed(&mut b, junk, 3, &mut t);
     }
@@ -1081,6 +1189,7 @@ mod tests {
                 max_us: (max_ms * 1000.0) as u32,
                 trend_us_per_s: (trend * 1000.0) as i32,
             }),
+            delivery: None,
         }
     }
 
@@ -1427,6 +1536,10 @@ mod tests {
                         backlog_drops: 0,
                         sent_kbps: Some(sent_kbps),
                         queue: meter.take(),
+                        delivery: Some(Delivery {
+                            received_kbps: (received * PKT as u64 * 8) as f32 / 1000.0 / 0.5,
+                            sent_kbps,
+                        }),
                     },
                     now_ms,
                 );
@@ -1849,5 +1962,129 @@ mod tests {
             MAX_PACE_SPREAD_US
         );
         assert_eq!(pace_spread_us(150_000, 0, true, true), MAX_PACE_SPREAD_US);
+    }
+
+    fn delivered(received: f32, sent: f32) -> Sample {
+        Sample {
+            loss_pct: Some(0.0),
+            sent_kbps: Some(sent),
+            delivery: Some(Delivery {
+                received_kbps: received,
+                sent_kbps: sent,
+            }),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn budget_does_not_grow_while_less_arrives_than_was_sent() {
+        let mut t = 0;
+        // Flat queue, no reported loss, the budget is used: grows while everything arrives.
+        let mut c = AdaptiveBitrate::new(40_000);
+        let grown = feed(&mut c, delivered(9_500.0, 9_500.0), 4, &mut t);
+        assert!(grown > START_KBPS, "{grown}");
+        // 20 % of what was sent does not arrive (frames lost whole are not in the packet
+        // counts): the budget holds.
+        let held = feed(&mut c, delivered(7_600.0, 9_500.0), 6, &mut t);
+        assert_eq!(held, grown);
+        // A shortfall the link has always had (learned random loss) does not block growth.
+        let mut r = AdaptiveBitrate::new(40_000);
+        r.random_loss_pct = 12.0;
+        assert!(feed(&mut r, delivered(8_600.0, 9_500.0), 4, &mut t) > START_KBPS);
+        // Too little traffic to judge: no effect.
+        let mut q = AdaptiveBitrate::new(40_000);
+        assert!(feed(&mut q, delivered(0.0, 900.0), 4, &mut t) == START_KBPS);
+    }
+
+    #[test]
+    fn a_queue_cut_aims_at_what_the_link_carried() {
+        let queue = |delivery| Sample {
+            loss_pct: Some(0.0),
+            sent_kbps: Some(30_000.0),
+            queue: Some(QueueDelay {
+                mean_us: 70_000,
+                max_us: 90_000,
+                trend_us_per_s: 80_000,
+            }),
+            delivery,
+            ..Default::default()
+        };
+        // Sent 30 Mbit/s into a ~20 Mbit/s link: without the arrival rate the cut lands at
+        // 90 % of 30 = 27; with it, at 90 % of 20.
+        let mut a = at_ceiling(40_000);
+        a.on_sample(queue(None), 500);
+        assert_eq!(a.budget_kbps(), 27_000);
+        let mut b = at_ceiling(40_000);
+        b.on_sample(
+            queue(Some(Delivery {
+                received_kbps: 20_000.0,
+                sent_kbps: 30_000.0,
+            })),
+            500,
+        );
+        assert_eq!(b.budget_kbps(), 18_000);
+        // An arrival rate far below the send rate is more likely a misaligned window than the
+        // capacity: trusted down to half of what was sent only.
+        let mut c = at_ceiling(40_000);
+        c.on_sample(
+            queue(Some(Delivery {
+                received_kbps: 2_000.0,
+                sent_kbps: 30_000.0,
+            })),
+            500,
+        );
+        assert_eq!(c.budget_kbps(), 13_500);
+        // Garbage is ignored.
+        let mut d = at_ceiling(40_000);
+        d.on_sample(
+            queue(Some(Delivery {
+                received_kbps: f32::NAN,
+                sent_kbps: 30_000.0,
+            })),
+            500,
+        );
+        assert_eq!(d.budget_kbps(), 27_000);
+    }
+
+    #[test]
+    fn a_still_screen_never_raises_the_budget() {
+        // A static desktop sends repeats of ~0.1 Mbit/s; whatever the viewer reports, the
+        // budget stays where the last busy content proved it.
+        let mut t = 0;
+        let mut c = AdaptiveBitrate::new(40_000);
+        feed(&mut c, delivered(9_500.0, 9_500.0), 4, &mut t);
+        let before = c.budget_kbps();
+        assert_eq!(feed(&mut c, delivered(100.0, 100.0), 40, &mut t), before);
+        let quiet = Sample {
+            loss_pct: Some(0.0),
+            sent_kbps: Some(100.0),
+            ..Default::default()
+        };
+        assert_eq!(feed(&mut c, quiet, 40, &mut t), before);
+    }
+
+    #[test]
+    fn sent_history_matches_the_report_window() {
+        let mut h = SentHistory::default();
+        // 60 frames per second of 20 000 bytes = 9.6 Mbit/s.
+        for i in 0..300u64 {
+            h.record(i * 1000 / 60, 20_000);
+        }
+        let now = 299 * 1000 / 60;
+        let kbps = h.kbps(now, 3, 500).unwrap();
+        assert!((kbps - 9_600.0).abs() < 400.0, "{kbps}");
+        assert_eq!(h.kbps(now, 3, 0), None);
+        assert_eq!(
+            h.kbps(now, 3, 3_000),
+            None,
+            "window longer than the history keeps"
+        );
+        // A window that began before the history did cannot be judged.
+        let mut young = SentHistory::default();
+        young.record(900, 20_000);
+        assert_eq!(young.kbps(1_000, 0, 500), None);
+        // Old frames are forgotten.
+        h.record(100_000, 1);
+        assert!(h.frames.len() < 5);
     }
 }
