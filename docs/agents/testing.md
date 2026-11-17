@@ -522,6 +522,14 @@ frame or two.) On loopback the RTT is ~0, so the hold time is its 6 ms minimum; 
 a lost frame costs up to 2 × RTT + 4 ms of added latency for the frames behind it, instead of a
 keyframe. Not measured on Wi-Fi.
 
+Resend budget scaled to 15 % of the ABR target (build 0c9fcc7 vs 9ab6e5f with the fixed
+128 KiB/s), 20 s, x264, loopback: 3 % loss: baseline asked 5 / resent 5, 0 lost frames, 0
+keyframe requests; new asked 1 / resent 1, 0 lost frames, 1 keyframe request (3 frames skipped;
+0 over budget, so not budget related, single-run noise). 10 %: baseline asked 13 / resent 13,
+0 lost, 0 requests; new asked 17 / resent 17, 0 lost, 0 requests. Over budget 0 in all four
+runs: on loopback at 40 Mbit/s the old 128 KiB/s already sufficed, so this shows no
+regression, not a gain; the gain is expected only for big IDRs on lossy links (not measured).
+
 Frame checksum (protocol 5), same setup, NACK build vs NACK + CRC-32, capture→decoded
 mean / p95: 0 % loss 12.5 / 15.0 → 11.9 / 14.1 ms, 3 % 11.5 / 13.6 → 12.0 / 14.3 ms, 10 %
 12.0 / 13.0 → 12.3 / 14.6 ms; checksum failures 0 in all runs (run-to-run spread is about
