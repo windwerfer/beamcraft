@@ -20,7 +20,7 @@ Item 0b.5, fifth part: split the big files (presenter.rs).
 cargo xtask ci; gh run list --branch main --limit 3
 
 ## Written at commit
-(see git log; this commit follows the capture.rs move)
+089dbd2 (capture.rs move; HANDOFF update follows)
 
 ## Next step
 Move PresentArgs (needs pub(super) fields) out of presenter/mod.rs (~1170 lines); gui.rs (1321) split; or 0c: FFmpeg unsafe behind one safe module + Decoder trait.
