@@ -1,16 +1,16 @@
 # HANDOFF
 
 ## Goal
-Roadmap item 5: bottleneck hint line on the Android HUD.
+Windows build, step 1 (roadmap 7, D16): CI check of the viewer on windows-latest (MSVC).
 
 ## Done
-- Android HUD shows `Bottleneck: stage - rating: hint` (session.rs status field, app.rs text). Not tested on a device.
-- Earlier: item 4 runtime + packaging (see git log).
-- Runtime part (earlier): `no_encoder_message`, Auto falls back VA-API -> x264.
-- Packaging switch: Flatpak manifest has no x264/FFmpeg modules, adds the ffmpeg-full extension; AppImage CI job builds against Ubuntu's FFmpeg dev packages, links dynamically, `build.sh` excludes libav*/libsw*. macOS unchanged. docs updated.
-- Gates: cargo xtask ci, Android clippy; CI, Build (Flatpak, AppImage built green), CodeQL all green.
+- New CI job `Check (Windows)`: clippy (-D warnings) and full tests of the workspace (no portal) against a BtbN shared FFmpeg 8.1 via FFMPEG_DIR. Green. CI, Build, CodeQL green.
+- Fixed non-Linux dead-code lints (net firewall helpers, media DMA-BUF types, presenter import) and gated 3 Linux-only firewall tests.
+- Roadmap item 7 and decision D16 added.
+- Earlier: bottleneck line on Android HUD (not tested on device); item 4 (system FFmpeg) done.
 
 ## Decisions
+- D16: Windows viewer first; FFmpeg DLLs may be bundled, LGPL preferred. The CI job uses the GPL build only because tests need libx264 (nothing distributed). Rejected: building FFmpeg in CI.
 - D8 (2026-11-17). Rejected: keep bundling x264 (GPL binaries).
 
 ## Open questions
@@ -19,7 +19,7 @@ Roadmap item 5: bottleneck hint line on the Android HUD.
 - 60 ms loopback budget for CI runners: tighten after first CI run.
 - Extend: viewer size in hello (protocol 8)? Flatpak portal-version check for VIRTUAL untested.
 - Not verified at run time: Flatpak ffmpeg-full extension actually providing libx264 to the app; AppImage on Ubuntu FFmpeg 6.1 (built OK, never run on hardware). build-ffmpeg.sh still has a Linux branch (x264), now unused.
-- Windows build item (answers.md) not started; not yet in roadmap/decisions.
+- Windows: nothing ran on a real Windows machine; only compile, clippy, tests in CI. Windows presenter, packaging (zip + LGPL FFmpeg DLLs + licence notes) and the firewall hint (no-op there) not done. BtbN `latest` asset names rotate; the URL in ci.yml may need updating.
 
 ## Verify
 cargo xtask ci; gh run list --branch main --limit 3
@@ -28,4 +28,4 @@ cargo xtask ci; gh run list --branch main --limit 3
 see `git log -1`
 
 ## Next step
-Windows CI viewer build (windows-latest, MSVC; add roadmap item + decision first), or viewer size in hello for Extend.
+Windows step 2: build a release viewer artifact (exe + LGPL FFmpeg DLLs + licence notes) in build.yml; or viewer size in hello for Extend.
