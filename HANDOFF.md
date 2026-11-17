@@ -1,27 +1,26 @@
 # HANDOFF
 
 ## Goal
-Make GitHub Actions on main green (AppImage, Flatpak, SonarCloud).
+Item 0c/0b (unsafe reduction), first part: remove unsafe from logging in the app crate.
 
 ## Done
-- dc89684 SonarCloud CI scan runs only if repo variable `SONAR_CI_ANALYSIS` = `true`; else skips with a notice.
-- 579a4de AppImage: real cause was a stale static-FFmpeg cache (.pc prefix from the old repo path); cache key now has the repo name, plus an early check step. No system -dev packages needed.
-- 82393e4, 08ff850 Flatpak: image runtimes can't be updated/removed on the container overlay ("Invalid cross-device link"); the job now wipes /var/lib/flatpak with rm first (mount is not available).
-- bebd7c6 decisions.md / README / testing.md.
-- Result: Build run 44066686432 and CI all jobs success (SonarCloud skipped by design).
+- 112a9e3: applog.rs `libc::isatty` -> `std::io::IsTerminal`; `libc` dep removed; mirrorwire-app is `#![deny(unsafe_code)]` with a single `allow` on `mod yuv_glow`. No new unsafe. Breaks: none.
+
+## Unsafe inventory (file: why)
+- net, proto: none (net forbids). app: only yuv_glow.rs (glow GL calls are unsafe fns; no safe glow API).
+- media: encode.rs, decode.rs, hw.rs (FFmpeg/VAAPI FFI), source/portal.rs (one site, not yet reviewed). android gpu.rs (EGL/GL FFI).
 
 ## Decisions
-decisions.md "CI scan switch" and "CI build fixes". No unsafe, no protocol change.
+No decisions.md change (follows D15).
 
 ## Open questions
-- Owner: to get the CI Sonar scan (clippy + coverage), turn off Automatic Analysis in SonarCloud, then set variable SONAR_CI_ANALYSIS=true. Until then Automatic Analysis scans.
-- Flatpak job now downloads runtimes every run (slower); revisit when the image is fixed.
+- Owner: SonarCloud switch from the previous handoff (SONAR_CI_ANALYSIS) still pending.
 
 ## Verify
-gh run list --branch main --limit 5; gh run view <Build run id>
+cargo clippy --workspace --all-targets -- -D warnings; cargo test --workspace; scripts/loopback-test.sh 10 --encoder x264; gh run list --branch main --limit 3
 
 ## Written at commit
-08ff850
+112a9e3
 
 ## Next step
-Owner flips the SonarCloud setting + variable (optional).
+0c: look at the unsafe in media source/portal.rs for a safe replacement; add SAFETY comments + clippy::undocumented_unsafe_blocks in media; then a Decoder trait with our own frame type. Alternatively 0b.3 xtask ci gate.
