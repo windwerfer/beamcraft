@@ -603,7 +603,8 @@ screen**, not logs. So:
   then clippy/tests/5 s loopback again with feature `filmcraft` and `--encoder filmcraft`,
   the reusable audit workflow, and the reusable SonarCloud scan (`needs: audit`).
 - `sonarcloud.yml` (called from CI; also from Build on `v*` tags and
-  `workflow_dispatch`; can be dispatched on its own): if `SONAR_TOKEN` is
+  `workflow_dispatch`; can be dispatched on its own): if the repository variable
+  `SONAR_CI_ANALYSIS` is not `true`, or `SONAR_TOKEN` is
   missing (fork PRs), the job succeeds and skips the upload. Otherwise it
   writes a Clippy JSON report (`cargo clippy --message-format=json`) and
   unit-test coverage (`cargo llvm-cov --lcov`), then runs
@@ -616,7 +617,7 @@ screen**, not logs. So:
   glue, the Android shell), each explained in a comment; keep it file-level
   and don't add logic files to it. The project uses the built-in *Sonar way*
   gate (new code coverage ≥ 80 %); custom gates need a paid plan. **Automatic Analysis must
-  be off** under SonarCloud Administration › Analysis method for
+  be off** (and `SONAR_CI_ANALYSIS=true` set) for the CI scan; under SonarCloud Administration › Analysis method for
   `windwerfer_mirrorwire`; if it is still on, the upload fails and should
   not be worked around in the workflow.
 - `codeql.yml` (push to `main`, pull requests, weekly Wednesday cron, and

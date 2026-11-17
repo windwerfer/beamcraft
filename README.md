@@ -348,7 +348,8 @@ when the portal only sent 6.8 fps, because PTS advanced by 1/60 s per frame.
 
 SonarQube Cloud analysis runs from GitHub Actions on `main` and on pull
 requests from this repository (clippy report and unit-test coverage are
-uploaded with the scan). Fork pull requests skip the upload, because GitHub
+uploaded with the scan) once the repository variable `SONAR_CI_ANALYSIS` is
+`true`; until then the CI scan is skipped and Automatic Analysis does the scanning. Fork pull requests skip the upload, because GitHub
 does not pass `SONAR_TOKEN`. Automatic Analysis on the SonarCloud project
 must stay off, or the CI upload is rejected. GitHub CodeQL also runs on
 `main`, on pull requests, and on a weekly schedule (Rust and GitHub Actions,

@@ -1,7 +1,10 @@
 # CI-based SonarCloud analysis (clippy JSON + lcov). Called from CI on every
 # push and pull request, and from Build on tags and workflow_dispatch (CI
 # already covers branch pushes). Automatic Analysis must be turned off under
-# SonarCloud Administration › Analysis method, or the upload is rejected.
+# SonarCloud Administration › Analysis method, or the upload is rejected, so
+# the scan only runs once the repository variable SONAR_CI_ANALYSIS is "true"
+# (Settings › Secrets and variables › Actions › Variables). Until then it is
+# skipped with a notice and Automatic Analysis does the scanning.
 name: SonarCloud
 
 on:
@@ -24,12 +27,18 @@ jobs:
           fetch-depth: 0
 
       # GitHub does not pass repository secrets to pull requests from forks.
-      - name: Check for SONAR_TOKEN
+      # SONAR_CI_ANALYSIS is the owner's switch: set it to "true" only after
+      # turning Automatic Analysis off in SonarCloud (the two are exclusive).
+      - name: Check for SONAR_TOKEN and CI analysis switch
         id: token
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          SONAR_CI_ANALYSIS: ${{ vars.SONAR_CI_ANALYSIS }}
         run: |
-          if [ -n "$SONAR_TOKEN" ]; then
+          if [ "$SONAR_CI_ANALYSIS" != "true" ]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::SONAR_CI_ANALYSIS is not 'true'; skipping the CI SonarCloud scan (SonarCloud Automatic Analysis is assumed to be on)."
+          elif [ -n "$SONAR_TOKEN" ]; then
             echo "available=true" >> "$GITHUB_OUTPUT"
           else
             echo "available=false" >> "$GITHUB_OUTPUT"
