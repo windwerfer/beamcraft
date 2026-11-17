@@ -20,7 +20,7 @@ Item 0b.5, fifth part: split the big files (presenter.rs).
 cargo xtask ci; gh run list --branch main --limit 3
 
 ## Written at commit
-8fa9c0a (no code change this session)
+61cb02b (no code change; build box still lacks pkg-config/FFmpeg/PipeWire dev packages, sudo and NDK, re-checked 2026-11-17)
 
 ## Next step
 presenter/mod.rs still ~1250 lines: move PresentArgs (needs pub(super) fields) and CaptureCtl to their own files; gui.rs (1321) split; or 0c: FFmpeg unsafe behind one safe module + Decoder trait.
