@@ -560,7 +560,7 @@ async fn send_loop(
         // A keyframe, and the frames that waited behind it, are spread over
         // time at a little above the video's share of the budget (not a
         // probe's: in the simulation, pacing on the probed budget froze VAAPI
-        // behind a 20 ms buffer for 1574 frames instead of 603;
+        // behind a 20 ms buffer for 969 frames instead of 624;
         // `pace_spread_us`): one burst
         // overflows a shallow bottleneck buffer. Other frames go out as one
         // burst (parity last) at QUIC's 500 Mbit/s pacing; send_datagram

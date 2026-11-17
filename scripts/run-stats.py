@@ -5,7 +5,8 @@ usage: scripts/run-stats.py <presenter-log>...
 
 From the per-second `presenter:` lines that carry a viewer report: mean video sent, keyframes,
 queue mean / p95 (of the per-second viewer queue), QUIC packets lost, and the viewer's
-unrecoverable frames (a running total); from `adaptive bitrate: cut` lines: cuts per trigger.
+unrecoverable frames (a running total); from `adaptive bitrate: cut` lines: cuts per trigger;
+from `adaptive bitrate: probe` lines: parity probes started / clean / ended by a cut.
 If `<presenter-log>.logcat` exists (the Android viewer's log), also: mean fps shown, frames
 skipped while waiting for a keyframe (the picture is frozen then), and seconds with a
 "Picture frozen" warning.
@@ -39,7 +40,17 @@ def summarise(path):
     p95 = queue[max(int(len(queue) * 0.95) - 1, 0)] if queue else 0
     cuts = sum(triggers.values())
     keyframes = f"{keyframes} ({paced} frames paced)" if paced else keyframes
-    return summary_line(path, rows, video, keyframes, cuts, triggers, queue, p95, lost, sent, unrec) + viewer(path + ".logcat")
+    probes = probe_part(lines)
+    return summary_line(path, rows, video, keyframes, cuts, triggers, queue, p95, lost, sent, unrec) + probes + viewer(path + ".logcat")
+
+
+def probe_part(lines):
+    started = sum("adaptive bitrate: probe +" in l for l in lines)
+    if not started:
+        return ""
+    clean = sum("adaptive bitrate: probe clean" in l for l in lines)
+    failed = sum("adaptive bitrate: probe failed" in l for l in lines)
+    return f", probes {started} ({clean} clean, {failed} cut)"
 
 
 def viewer(logcat):

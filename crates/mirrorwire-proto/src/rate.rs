@@ -1142,6 +1142,34 @@ mod tests {
         assert_eq!(s.budget_kbps(), 24_000);
     }
 
+    /// `assert!` for the averaged sim tests, except with
+    /// `MIRRORWIRE_SIM_SOFT=1`: then a failure prints `SOFT FAIL: …` and the
+    /// test goes on, so a parameter sweep still prints every row
+    /// (`scripts/sim-compare.py`, testing.md §3.3).
+    macro_rules! sim_assert {
+        ($cond:expr, $($msg:tt)+) => {
+            let ok: bool = $cond;
+            if !ok {
+                if std::env::var_os("MIRRORWIRE_SIM_SOFT").is_some_and(|v| v == "1") {
+                    eprintln!("SOFT FAIL: {}", format!($($msg)+));
+                } else {
+                    panic!($($msg)+);
+                }
+            }
+        };
+    }
+
+    /// Ceilings the averaged sim runs over: 36–44 Mbit/s (5 runs), or with
+    /// `MIRRORWIRE_SIM_WIDE=1` 30–49 Mbit/s (20 runs), to tell a real
+    /// change from the chaos of single runs when tuning.
+    fn sim_ceilings() -> Vec<u32> {
+        if std::env::var_os("MIRRORWIRE_SIM_WIDE").is_some_and(|v| v == "1") {
+            (0..20).map(|i| 30_000 + i * 1_000).collect()
+        } else {
+            vec![36_000, 38_000, 40_000, 42_000, 44_000]
+        }
+    }
+
     /// Closed-loop simulation without QUIC: encoder model -> FEC parity ->
     /// random loss -> bottleneck -> viewer report every 500 ms -> controller.
     #[derive(Clone, Copy)]
@@ -1636,7 +1664,7 @@ mod tests {
     fn mean_of(run: impl Fn(u32, u32) -> SimResult) -> Mean {
         let mut m = Mean::default();
         let mut n = 0.0;
-        for ceiling in [36_000, 38_000, 40_000, 42_000, 44_000] {
+        for ceiling in sim_ceilings() {
             for demand_kbps in [60_000, 18_000] {
                 let r = run(demand_kbps, ceiling);
                 m.cuts += r.cuts.len() as f32;
@@ -1671,7 +1699,7 @@ mod tests {
         //   VAAPI 16/300: 100 -> 0, 16/50: 3123 -> 291, 16/20: 4799 -> 759,
         //     20/150: 294 -> 74
         // With the parity probe, paced: VAAPI 16/50 291 -> 107, 16/20
-        // 759 -> 603, 20/150 74 -> 32 (x264 stays at 0).
+        // 759 -> 624, 20/150 74 -> 32 (x264 stays at 0).
         let wifi50 = Link {
             buffer_ms: 50,
             ..WIFI
@@ -1709,12 +1737,12 @@ mod tests {
                 } else {
                     max_frozen
                 };
-                assert!(
+                sim_assert!(
                     paced.frozen_frames <= max_frozen,
                     "{mode} {name}: {paced:?}"
                 );
-                assert!(paced.frozen_frames <= burst.frozen_frames, "{mode} {name}");
-                assert!(
+                sim_assert!(paced.frozen_frames <= burst.frozen_frames, "{mode} {name}");
+                sim_assert!(
                     paced.lag_p95_ms <= max_lag_p95.max(burst.lag_p95_ms),
                     "{mode} {name}: {paced:?}"
                 );
@@ -1766,7 +1794,7 @@ mod tests {
         //   worse: VAAPI 20/150 0 -> 18.5; 20 then 8 Mbit/s: x264 37 -> 59,
         //     VAAPI 103 -> 115 (but fewer lost frames: 66 -> 48)
         // With the parity probe (fresh -> resumed): VAAPI 16/50 28 -> 7,
-        //   16/20 440 -> 95, 5/300 93 -> 0, 8/50 82 -> 0, 20/150 0 -> 0;
+        //   16/20 499 -> 110, 5/300 92 -> 0, 8/50 82 -> 0, 20/150 0 -> 0;
         //   20 then 8 Mbit/s still worse: x264 37 -> 58, VAAPI 82 -> 91.
         for (name, before, after, may_cost) in [
             ("no limit", LAN, LAN, 0.0),
@@ -1797,11 +1825,11 @@ mod tests {
                 };
                 let (fresh, resumed) = (run(false), run(true));
                 eprintln!("{mode} {name}: fresh {fresh:?}\n{mode} {name}: resumed {resumed:?}");
-                assert!(
+                sim_assert!(
                     resumed.frozen_frames <= fresh.frozen_frames + may_cost,
                     "{mode} {name}"
                 );
-                assert!(resumed.lost_pct <= fresh.lost_pct + 0.5, "{mode} {name}");
+                sim_assert!(resumed.lost_pct <= fresh.lost_pct + 0.5, "{mode} {name}");
             }
         }
     }

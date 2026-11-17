@@ -152,8 +152,8 @@ target), **planned**, **idea**. Update this file when an item moves.
       never cut, so no resume fired. Done 2026-11-17: probing with FEC. From 90 % to 115 % of
       the last failure the budget grows by extra parity first (up to 3 % above the video), and
       the video follows after 3 s clean; keyframes are paced on the video budget. Sim: 2889 →
-      2060 frozen frames and 199 → 117 cuts over all paced/reconnect cases, same video;
-      VAAPI 16/50 291 → 107, 16/20 759 → 603; cost: VAAPI 16/300 6 % less video. About a
+      2154 frozen frames and 199 → 117 cuts over all paced/reconnect cases, same video;
+      VAAPI 16/50 291 → 107, 16/20 759 → 624; cost: VAAPI 16/300 6 % less video. About a
       third of the gain is the parity, the rest the held climb (testing.md §3.3). Tablet over
       weak 2.4 GHz Wi-Fi (testing.md §3.8): 15 probes, 8 clean, 6 ended by a queue cut, none
       by loss; A/B totals better but within the link's own swings. Closer to the router

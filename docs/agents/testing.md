@@ -295,6 +295,15 @@ h264_vaapi test pattern, three 40 s sessions with a force-stop between): picture
 of each reconnect, 0.0 % loss, 0 unrecoverable frames; the link never cut, so each reconnect
 started fresh (resume not exercised on hardware).
 
+**Comparing a change (tools).** Run the sims before and after, same machine:
+`MIRRORWIRE_SIM_SOFT=1 cargo test --release -p mirrorwire-proto sim_ -- --nocapture
+--test-threads=1 > F 2>&1`, then `scripts/sim-compare.py before.txt after.txt` prints totals
+(frozen frames summed over the averaged rows, mean video, cuts, failures) and every row that
+changed. `MIRRORWIRE_SIM_SOFT=1` turns the limits of the averaged tests into `SOFT FAIL` lines
+so a sweep prints every row; `MIRRORWIRE_SIM_WIDE=1` averages over 20 ceilings (30–49 Mbit/s)
+instead of 5, to tell a real change from the chaos of single runs. For a control, compare
+against the same change with one part switched off (as the no-parity probe below).
+
 **Probe with parity before more video (2026-11-17, roadmap item 0.4).** From 90 % to 115 % of
 the last bad budget the budget grows by extra FEC parity only (a quarter of the normal step),
 up to 3 % above the video budget; the video follows after 3 s of clean reports, and any report
@@ -309,26 +318,27 @@ are from before this change. Same sim, same seeds, before → after:
 | 12 Mbit/s content with bursts, 20 Mbit/s | 5 cuts, p95 14 ms | 2 cuts, p95 0 ms |
 | VAAPI paced 16/300 | 0 frozen, 12.4 Mbit/s, lag p95 60 ms | 0 frozen, **11.7**, 10 ms |
 | VAAPI paced 16/50 | 291 frozen (59 lost), 10.4 Mbit/s | **107** (33), 11.0 |
-| VAAPI paced 16/20 | 759 frozen (93 lost), 10.1 Mbit/s | **603** (59), 10.7 |
+| VAAPI paced 16/20 | 759 frozen (93 lost), 10.1 Mbit/s | **624** (61), 10.7 |
 | VAAPI paced 20/150 | 74 frozen (16 lost), 14.5 Mbit/s | **32** (6), 14.9 |
 | x264 paced, all links | 0 frozen | 0 frozen, video −0.2 to +0.2 Mbit/s |
-| Reconnect, VAAPI resumed 16/50, 16/20, 5/300, 8/50, 20/150 | 50, 160, 30, 47, 18.5 frozen | 7, 95, 0, 0, 0 |
-| Reconnect, VAAPI fresh 16/50, 16/20, 8/50 | 64, 503, 103 | 28, 440, 82 |
+| Reconnect, VAAPI resumed 16/50, 16/20, 5/300, 8/50, 20/150 | 50, 160, 30, 47, 18.5 frozen | 7, 110, 0, 0, 0 |
+| Reconnect, VAAPI fresh 16/50, 16/20, 8/50 | 64, 503, 103 | 28, 499, 82 |
 | Reconnect, 20 then 8 Mbit/s resumed (x264 / VAAPI) | 59 / 115 frozen | 58 / 91 (still more than fresh: 37 / 82) |
 
-Summed over all paced and reconnect means: 2889 → 2060 frozen frames, 199 → 117 cuts, video
+Summed over all paced and reconnect means: 2889 → 2154 frozen frames, 199 → 117 cuts, video
 delivered 11.95 → 11.95 Mbit/s. A bottleneck is still found by overrunning it, but less often:
 7 cuts in 90 s instead of 11–13 on the 16 and 20 Mbit/s links. Cost: VAAPI behind a deep buffer
 (16/300) delivers 6 % less video, and a fresh VAAPI reconnect on 20/150 5 % less (14.0 →
 13.3 Mbit/s). Tried (sums over 20 ceilings 30–49 Mbit/s instead of 5, to see past the chaos; before:
-2983 frozen frames, 196 cuts):
+2983 frozen frames, 196 cuts; the sweep ran before a rounding fix in `probe_overhead`,
+so its numbers compare with each other; the chosen 3 % / 3 s is 2012 on the committed code):
 - Probe size and hold: 2 % / 2 s 2189, 3 % / 2 s 2217, **3 % / 3 s 1967**, 3 % / 4 s 2014,
   4 % / 2 s 2449, 4 % / 3 s 2261, 5 % / 2 s 2232 (8 % and 10 % with the 10 runs: worse, and
   reconnect asserts fail).
 - Control, the same stepped climb with no extra parity (the video waits, the wire rate does
   not rise): 3 % / 3 s 2341, 5 % / 2 s 2954, 2 % / 2 s 2231. So about two thirds of the gain is
   the slower, held climb and one third the parity; with a 2 % probe the parity adds nothing.
-- Pacing keyframes on the probed budget instead of the video budget: VAAPI 16/20 603 → 1574
+- Pacing keyframes on the probed budget instead of the video budget: VAAPI 16/20 624 → 969
   frozen frames (all else unchanged).
 - Extra probe parity on keyframes too (they already get ≥ 25 %): no change; not done.
 With FEC off nothing carries a probe; the video still waits for the 3 s hold (the control
@@ -497,7 +507,12 @@ Presenter in the dev container (laptop Wi-Fi 192.168.201.132), TB336FU tablet on
 2.4 GHz network (2462 MHz, 11n, RSSI −76/−77 dBm, PHY Tx rate 6–39 Mbit/s and changing
 between runs; ping 15–220 ms, mean 91), adb over USB for control only, APK 179475888.
 `scripts/android-wifi-run.sh 60 … ` with `ENCODER=vaapi`, test pattern, alternating
-before (90f3ee3) / after (045ae3f + probe log lines), three pairs. Per run (before | after):
+before (90f3ee3) / after (045ae3f + probe log lines), three pairs. To repeat it:
+`scripts/android-ab.sh 90f3ee3 HEAD 3 60 <out-dir>` builds both revisions, alternates them,
+retries a run once if the viewer never connected, logs RSSI / PHY rate per run to `wifi.txt`
+and ends with `scripts/run-stats.py` (which also counts probes: started, clean, cut). Check
+the RSSI first (`adb shell dumpsys wifi | grep -m1 mWifiInfo`): at −77 dBm the link swung more
+than the builds differ. Per run (before | after):
 
 | Pair | Video Mbit/s | Cuts | QUIC lost | Unrecoverable | Waiting for key (frames) | Queue p95 ms | Shown fps |
 |---|---|---|---|---|---|---|---|
