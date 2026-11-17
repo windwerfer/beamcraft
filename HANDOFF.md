@@ -1,28 +1,27 @@
 # HANDOFF
 
 ## Goal
-Item 0c (unsafe reduction), second part: document and lint every unsafe site in mirrorwire-media.
+Item 0b.3: a `cargo xtask ci` gate with a mechanical crate-layer check.
 
 ## Done
-- b2dc005: SAFETY comments on all 28 unsafe blocks/impls in media (encode.rs, decode.rs, hw.rs); `#![deny(clippy::undocumented_unsafe_blocks)]` in media lib.rs; portal.rs reviewed (stays); roadmap updated. No new unsafe. Breaks: none.
-- Earlier: 112a9e3 (app: no unsafe except yuv_glow).
+- 6b5584e: std-only `xtask/` crate (`cargo xtask ci [--no-loopback]`, `cargo xtask layers`), `.cargo/config.toml` alias, CI runs the layer check, AGENTS.md/testing.md/roadmap.md updated. No new unsafe. Breaks: none.
+- Earlier: b2dc005 (media SAFETY comments + deny lint), 112a9e3 (app unsafe removed).
 
 ## Unsafe inventory (file: why)
-- net, proto: none (forbidden). app: yuv_glow.rs only (glow GL calls are unsafe fns).
-- media: encode.rs, decode.rs, hw.rs (FFmpeg/VAAPI FFI, `unsafe impl Send`), source/portal.rs (`BorrowedFd::borrow_raw` on PipeWire's raw fd; no safe API). android gpu.rs (EGL/GL FFI).
+- net, proto: none (forbidden). app: yuv_glow.rs only (glow GL calls). media: encode.rs, decode.rs, hw.rs (FFmpeg/VAAPI FFI), source/portal.rs (`BorrowedFd::borrow_raw`). android gpu.rs (EGL/GL FFI).
 
 ## Decisions
-None new (follows D15).
+None new (xtask is std-only, no new dependency).
 
 ## Open questions
 - Owner: SonarCloud switch (SONAR_CI_ANALYSIS) still pending.
-- Owner: is an ASan CI job for media tests wanted (needs nightly toolchain)?
+- Owner: ASan CI job for media tests (needs nightly)?
 
 ## Verify
-cargo clippy --workspace --all-targets -- -D warnings; cargo test --workspace; scripts/loopback-test.sh 10 --encoder x264; gh run list --branch main --limit 3
+cargo xtask ci; gh run list --branch main --limit 3
 
 ## Written at commit
-b2dc005
+6b5584e
 
 ## Next step
-0c: move the FFmpeg unsafe into one small safe module (hw.rs-style wrappers for codec-context options, filter helpers, DRM mapping), then a Decoder trait with our own frame type. Or 0b.3 xtask ci gate.
+0b.1 rest: `[workspace.lints]` + clippy.toml, forbid(unsafe_code) in film/android helpers; or 0b.4 TOML perf budgets; or 0c: FFmpeg unsafe into one safe module.
