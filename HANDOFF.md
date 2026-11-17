@@ -4,6 +4,7 @@
 Item 0b.5, sixth part: split the big files (gui.rs).
 
 ## Done
+- gui/mod.rs split by screen: gui/present.rs (present_ui + quality_controls), gui/video.rs (video_ui + draw_cursor); mod.rs ~570 lines. Pure move, no unsafe, Breaks: none. xtask ci + Android clippy ok.
 - gui.rs -> gui/mod.rs + gui/widgets.rs (stateless widgets/panels, pure move). No unsafe. Breaks: none. Loopback flaked once (lost 1), passed on rerun (p95 16 ms); Android clippy ok.
 - PresentArgs/SourceKind moved to `presenter/args.rs` (pure move; presenter/mod.rs now ~1020 lines). No unsafe. Breaks: none.
 - CaptureCtl/CaptureStatus moved to `presenter/capture.rs` (pure move, fields pub(super)). No unsafe. Breaks: none. roadmap.md updated.
@@ -22,7 +23,7 @@ Item 0b.5, sixth part: split the big files (gui.rs).
 cargo xtask ci; gh run list --branch main --limit 3
 
 ## Written at commit
-c63b465 (args.rs move; HANDOFF update follows)
+see `git log -1` of the gui/present.rs commit
 
 ## Next step
-MirrorApp impl in gui/mod.rs (~1000 lines) could split by screen; or 0c: FFmpeg unsafe behind one safe module + Decoder trait.
+0b.5 is essentially done (pipeline.rs 773 lines, rate.rs tests are the rest); next: 0c: FFmpeg unsafe behind one safe module + Decoder trait.
