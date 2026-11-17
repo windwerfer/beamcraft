@@ -517,6 +517,24 @@ needs a stable link (5 GHz, or the T480s → iMac setup). An earlier 15 s check 
 dropped to the 3 Mbit/s floor with 24.5 % QUIC loss and an RTT of ~1 s before any probe:
 this 2.4 GHz link at −77 dBm is at its limit.
 
+**Closer to the router (same day, same setup):** tablet RSSI −59/−60 dBm, PHY 65 Mbit/s
+(still 2.4 GHz), ping 3–202 ms. Same A/B, before | after:
+
+| Pair | Video Mbit/s | Cuts | QUIC lost | Unrecoverable | Waiting for key | Queue p95 ms | Shown fps |
+|---|---|---|---|---|---|---|---|
+| 1 | 13.6 \| 15.8 | 6 \| 5 | 178 \| 1 of ~95k | 8 \| 0 | 7 \| 0 | 267 \| 152 | 50.0 \| 49.9 |
+| 2 | 14.4 \| 11.0 | 6 \| 5 | 484 \| 2 of ~80k | 20 \| 0 | 8 \| 0 | 17 \| 24 | 50.2 \| 46.0 |
+| 3 | 28.5 \| 28.5 | 0 \| 0 | 1 \| 0–1 | 0 \| 0 | 0 \| 0 | 7 \| 7–8 | 50.0 \| 49.9–51.8 |
+
+All cuts were queue cuts. Probes (after, pairs 1–2): 14 started, 13 clean, 1 ended by a queue
+cut (max 112 ms). In pair 3 the link carried everything the test pattern needs (28.5 Mbit/s)
+for both builds: no cut, so no probe (two after runs, one before run; one before run lost
+its handshake to the link once and was repeated). On the two congested pairs the probe build
+lost 3 instead of 662 QUIC packets and 0 instead of 28 frames, with no frame waiting for a
+keyframe (15 before), for −4 % video (13.4 vs 14.0 Mbit/s mean; pair 2 after sent 11.0).
+Two pairs are few, but here the difference is larger than the run-to-run spread.
+Shown fps stays at ~50 of 60 in every run, both builds (the open display-side item).
+
 ## 4. Real hardware
 
 The owner tests on the target machines (decisions D11) and reports with **photos of the

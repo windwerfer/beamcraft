@@ -156,7 +156,9 @@ target), **planned**, **idea**. Update this file when an item moves.
       VAAPI 16/50 291 → 107, 16/20 759 → 603; cost: VAAPI 16/300 6 % less video. About a
       third of the gain is the parity, the rest the held climb (testing.md §3.3). Tablet over
       weak 2.4 GHz Wi-Fi (testing.md §3.8): 15 probes, 8 clean, 6 ended by a queue cut, none
-      by loss; A/B totals better but within the link's own swings. The window says
+      by loss; A/B totals better but within the link's own swings. Closer to the router
+      (−60 dBm): 14 probes, 13 clean; QUIC lost 662 → 3 packets, lost frames 28 → 0 on the
+      two pairs that cut, 4 % less video. The window says
       `probing: …` while one runs, the log has one line per probe start and end. Note for VAAPI: slow start changes the rate each
       report, but VAAPI reopens at most every 5 s, so it reaches 40 Mbit/s in steps; untested
       on the T480s.)
