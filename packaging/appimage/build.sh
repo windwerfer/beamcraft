@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Packages target/release/mirrorwire as an AppImage with linuxdeploy.
 # libva, libdrm and libpipewire stay with the host system: their drivers and modules
-# must match the versions installed there.
+# must match the versions installed there. FFmpeg (libav*, libsw*) is the user's system
+# FFmpeg too (D8): the AppImage never ships x264 or FFmpeg.
 # usage: packaging/appimage/build.sh <out-dir>
 set -euo pipefail
 OUT=$1
@@ -50,5 +51,8 @@ cp "$ROOT/packaging/linux/README-firewalld.md" "$WORK/AppDir/usr/share/doc/mirro
   --exclude-library 'libva*' \
   --exclude-library 'libdrm*' \
   --exclude-library 'libpipewire-0.3*' \
+  --exclude-library 'libav*' \
+  --exclude-library 'libsw*' \
+  --exclude-library 'libpostproc*' \
   --output appimage
 ls -la "$OUTPUT"

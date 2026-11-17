@@ -144,40 +144,23 @@ jobs:
     needs: audit
     # pipewire-rs 0.10 needs PipeWire >= 1.0 headers; Ubuntu 22.04 ships 0.3.48.
     runs-on: ubuntu-24.04
-    env:
-      FFMPEG_PREFIX: ${{ github.workspace }}/.ffmpeg
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Install system packages
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential nasm pkg-config \
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config libavcodec-dev libavfilter-dev libavformat-dev libavutil-dev libswscale-dev libswresample-dev libavdevice-dev \
             clang libclang-dev libva-dev libdrm-dev libpipewire-0.3-dev libspa-0.2-dev libdbus-1-dev \
             libxkbcommon-dev libwayland-dev file
-      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        id: ffmpeg-cache
-        with:
-          path: .ffmpeg
-          key: ffmpeg-linux-ubuntu24-${{ github.event.repository.name }}-${{ hashFiles('packaging/build-ffmpeg.sh') }}
-      - name: Build static FFmpeg
-        if: steps.ffmpeg-cache.outputs.cache-hit != 'true'
-        run: packaging/build-ffmpeg.sh "$FFMPEG_PREFIX"
       - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
         with:
           toolchain: stable
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           key: appimage
-      # The .pc files bake in the absolute prefix, so a cache restored under another path
-      # (repo rename) yields a missing libavutil/avutil.h. Fail early with a clear message.
-      - name: Check static FFmpeg
-        run: |
-          test -f "$FFMPEG_PREFIX/include/libavutil/avutil.h" || { echo "::error::static FFmpeg headers missing in $FFMPEG_PREFIX"; exit 1; }
-          grep -q "^prefix=$FFMPEG_PREFIX\$" "$FFMPEG_PREFIX/lib/pkgconfig/libavutil.pc" || { echo "::error::libavutil.pc prefix does not match $FFMPEG_PREFIX (stale cache)"; exit 1; }
       - name: Build
-        env:
-          PKG_CONFIG_PATH: ${{ github.workspace }}/.ffmpeg/lib/pkgconfig
-        run: cargo build --release --locked -p mirrorwire-app --features static-ffmpeg,filmcraft
+        # System FFmpeg, linked dynamically (D8): nothing GPL is built or bundled by us.
+        run: cargo build --release --locked -p mirrorwire-app --features filmcraft
       - name: Smoke test
         run: target/release/mirrorwire --version && ldd target/release/mirrorwire
       - name: Package AppImage
