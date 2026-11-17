@@ -1,15 +1,14 @@
 # HANDOFF
 
 ## Goal
-Item 0b.4: machine-checked perf budgets (loopback half).
+Item 0b.5, first part: merge the duplicated encoder-config comparison in media pipeline.rs.
 
 ## Done
-- eabf95a: `perf-budgets.toml` + `cargo xtask loopback [secs]` (p95 capture→decoded ≤ 60 ms, lost / mismatches / decode errors / unrecoverable frames = 0); used by `xtask ci` and the CI x264 loopback step. Unit-tested parser/checker. No unsafe. Breaks: none.
-- 62d1542: roadmap.md and testing.md.
-- Earlier: f454021 unsafe_code lint per crate, 6b5584e xtask ci gate.
+- 3e0c0d5: `needs_new_encoder()` replaces the two copies of the eight-field comparison in `maybe_reopen` / `maybe_replace_encoder`. No behaviour change, no unsafe. Breaks: none. roadmap.md updated.
+- Earlier: eabf95a perf budgets, f454021 unsafe_code lint per crate, 6b5584e xtask ci gate.
 
 ## Decisions
-- Budgets are loose (shared CI VMs); the ABR simulation rows are already asserted by the `sim_*` tests in rate.rs, so no TOML for them. Not a decisions.md change.
+- Kept the two functions separate: their bitrate rules differ (initial open vs live/reopen rate limits). Not a decisions.md change.
 
 ## Open questions
 - Owner: SonarCloud switch (SONAR_CI_ANALYSIS) pending.
@@ -20,7 +19,7 @@ Item 0b.4: machine-checked perf budgets (loopback half).
 cargo xtask ci; gh run list --branch main --limit 3
 
 ## Written at commit
-62d1542 (plus this file)
+3e0c0d5 (plus this file)
 
 ## Next step
-0b.5 merge `maybe_reopen`/`maybe_replace_encoder` in media pipeline.rs and split encode.rs/presenter.rs; or 0c FFmpeg unsafe into one safe module + `Decoder` trait; or workspace clippy unwrap lints.
+0b.5 rest: split encode.rs (1632 lines) and presenter.rs (1354 lines) into modules; or 0c FFmpeg unsafe behind one safe module + `Decoder` trait; or workspace clippy unwrap lints.
