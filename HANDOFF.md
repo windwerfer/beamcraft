@@ -1,9 +1,10 @@
 # HANDOFF
 
 ## Goal
-Item 0b.5, fifth part: split the big files (presenter.rs).
+Item 0b.5, sixth part: split the big files (gui.rs).
 
 ## Done
+- gui.rs -> gui/mod.rs + gui/widgets.rs (stateless widgets/panels, pure move). No unsafe. Breaks: none. Loopback flaked once (lost 1), passed on rerun (p95 16 ms); Android clippy ok.
 - PresentArgs/SourceKind moved to `presenter/args.rs` (pure move; presenter/mod.rs now ~1020 lines). No unsafe. Breaks: none.
 - CaptureCtl/CaptureStatus moved to `presenter/capture.rs` (pure move, fields pub(super)). No unsafe. Breaks: none. roadmap.md updated.
 - Earlier: 7897ce7 presenter/status.rs, 6c14e7b encode/rc.rs, 4bd0440 encode/vaapi.rs, ef1e7cb config split, 3e0c0d5, eabf95a, f454021, 6b5584e.
@@ -24,4 +25,4 @@ cargo xtask ci; gh run list --branch main --limit 3
 c63b465 (args.rs move; HANDOFF update follows)
 
 ## Next step
-gui.rs (1321) split; or 0c: FFmpeg unsafe behind one safe module + Decoder trait.
+MirrorApp impl in gui/mod.rs (~1000 lines) could split by screen; or 0c: FFmpeg unsafe behind one safe module + Decoder trait.
