@@ -5,7 +5,7 @@ pub fn nal_units(data: &[u8]) -> impl Iterator<Item = &[u8]> {
     let mut starts = Vec::new();
     let mut i = 0;
     while i + 3 <= data.len() {
-        if data[i] == 0 && data[i + 1] == 0 && data[i + 2] == 1 {
+        if data.get(i..i + 3) == Some(&[0, 0, 1]) {
             starts.push(i + 3);
             i += 3;
         } else {
@@ -18,7 +18,7 @@ pub fn nal_units(data: &[u8]) -> impl Iterator<Item = &[u8]> {
         .map(|&s| {
             // Back up over the start code and any zero byte of a 4-byte code.
             let mut e = s - 3;
-            while e > 0 && data[e - 1] == 0 {
+            while e > 0 && data.get(e - 1) == Some(&0) {
                 e -= 1;
             }
             e
@@ -29,7 +29,7 @@ pub fn nal_units(data: &[u8]) -> impl Iterator<Item = &[u8]> {
         .into_iter()
         .zip(ends)
         .filter(|(s, e)| s < e)
-        .map(move |(s, e)| &data[s..e])
+        .filter_map(move |(s, e)| data.get(s..e))
 }
 
 /// NAL unit type (low 5 bits of the first byte).

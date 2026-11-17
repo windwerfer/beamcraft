@@ -381,7 +381,11 @@ fn copy_plane(
     for y in 0..height {
         let s = y * stride;
         let d = y * width;
-        out[d..d + width].copy_from_slice(&data[s..s + width]);
+        let (Some(src_row), Some(dst_row)) = (data.get(s..s + width), out.get_mut(d..d + width))
+        else {
+            bail!("decoded plane {plane} is short");
+        };
+        dst_row.copy_from_slice(src_row);
     }
     Ok((out, width))
 }
@@ -500,7 +504,10 @@ impl RgbaConverter {
         dst.clear();
         dst.reserve(w * h * 4);
         for y in 0..h {
-            dst.extend_from_slice(&data[y * stride..y * stride + w * 4]);
+            let Some(row) = data.get(y * stride..y * stride + w * 4) else {
+                bail!("scaled frame is short");
+            };
+            dst.extend_from_slice(row);
         }
         Ok((key.1, key.2))
     }

@@ -24,10 +24,12 @@ impl Plane<'_> {
 /// (short last rows on some drivers) give grey instead of a panic.
 pub fn to_rgba(w: usize, h: usize, y: Plane, u: Plane, v: Plane, out: &mut Vec<u8>) {
     out.resize(w * h * 4, 255);
-    for row in 0..h {
+    if w == 0 || h == 0 {
+        return;
+    }
+    for (row, line) in out.chunks_exact_mut(w * 4).enumerate().take(h) {
         let crow = row / 2;
-        let line = &mut out[row * w * 4..(row + 1) * w * 4];
-        for col in 0..w {
+        for (col, px) in line.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let luma = y.at(col, row) as i32;
             let cb = u.at(col / 2, crow) as i32 - 128;
             let cr = v.at(col / 2, crow) as i32 - 128;
@@ -35,11 +37,12 @@ pub fn to_rgba(w: usize, h: usize, y: Plane, u: Plane, v: Plane, out: &mut Vec<u
             let r = luma + ((1613 * cr) >> 10);
             let g = luma - ((192 * cb + 479 * cr) >> 10);
             let b = luma + ((1900 * cb) >> 10);
-            let px = &mut line[col * 4..col * 4 + 4];
-            px[0] = r.clamp(0, 255) as u8;
-            px[1] = g.clamp(0, 255) as u8;
-            px[2] = b.clamp(0, 255) as u8;
-            px[3] = 255;
+            *px = [
+                r.clamp(0, 255) as u8,
+                g.clamp(0, 255) as u8,
+                b.clamp(0, 255) as u8,
+                255,
+            ];
         }
     }
 }

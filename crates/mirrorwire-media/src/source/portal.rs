@@ -637,12 +637,16 @@ fn run_pipewire(
                 }
             } else {
                 let Some(mem) = data.data() else { return };
-                if len == 0 || offset.checked_add(len).is_none_or(|end| end > mem.len()) {
+                let Some(bytes) = offset
+                    .checked_add(len)
+                    .and_then(|end| mem.get(offset..end))
+                    .filter(|_| len != 0)
+                else {
                     return;
-                }
+                };
                 let mut out = state.pool.try_recv().unwrap_or_default();
                 out.clear();
-                out.extend_from_slice(&mem[offset..offset + len]);
+                out.extend_from_slice(bytes);
                 RawFrame {
                     seq: state.seq,
                     width: size.width,
@@ -792,9 +796,11 @@ impl CursorTrack {
             }
             let mut out = Vec::with_capacity(row * h as usize);
             for y in 0..h as usize {
-                for px in data[y * stride..y * stride + row].as_chunks::<4>().0 {
-                    let a = if opaque { 255 } else { px[order[3]] };
-                    out.extend_from_slice(&[px[order[0]], px[order[1]], px[order[2]], a]);
+                let line = data.get(y * stride..y * stride + row)?;
+                for px in line.as_chunks::<4>().0 {
+                    let pick = |i: usize| px.get(i).copied().unwrap_or(0);
+                    let a = if opaque { 255 } else { pick(order[3]) };
+                    out.extend_from_slice(&[pick(order[0]), pick(order[1]), pick(order[2]), a]);
                 }
             }
             out

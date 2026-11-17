@@ -448,12 +448,12 @@ impl VideoRenderer {
                     for ((tex, (w, h)), data) in
                         self.planes.iter().zip(sizes).zip([&p.y, &p.u, &p.v])
                     {
-                        if data.len() < (w * h) as usize {
+                        let Some(plane) = data.get(..(w * h) as usize) else {
                             self.error = Some("FilmCraft picture plane is short".into());
                             return;
-                        }
+                        };
                         gl.bind_texture(glow::TEXTURE_2D, Some(*tex));
-                        let pixels = glow::PixelUnpackData::Slice(Some(&data[..(w * h) as usize]));
+                        let pixels = glow::PixelUnpackData::Slice(Some(plane));
                         if realloc {
                             gl.tex_image_2d(
                                 glow::TEXTURE_2D,

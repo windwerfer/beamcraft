@@ -55,7 +55,9 @@ impl TestPattern {
         for y in 0..h {
             for x in 0..=y.min(w - 1) {
                 let i = ((y * w + x) * 4) as usize;
-                rgba[i..i + 4].copy_from_slice(&[255, 255, 255, 255]);
+                if let Some(px) = rgba.get_mut(i..i + 4) {
+                    px.copy_from_slice(&[255, 255, 255, 255]);
+                }
             }
         }
         sink(CursorEvent::Image(CursorImage {
@@ -94,7 +96,12 @@ impl TestPattern {
         let shift = (seq as usize * 6) % w;
         for y in 0..h {
             let off = (shift + y / 2) % w * 4;
-            data[y * stride..(y + 1) * stride].copy_from_slice(&self.gradient[off..off + stride]);
+            if let (Some(dst), Some(src)) = (
+                data.get_mut(y * stride..(y + 1) * stride),
+                self.gradient.get(off..off + stride),
+            ) {
+                dst.copy_from_slice(src);
+            }
         }
 
         let size = (h / 5).max(8);
@@ -111,7 +118,11 @@ impl TestPattern {
         let bx = bounce(seq as usize * 9, span_x);
         let by = MARKER_BLOCK + bounce(seq as usize * 5, span_y);
         for y in by..(by + size).min(h) {
-            data[y * stride + bx * 4..y * stride + (bx + size).min(w) * 4].fill(255);
+            if let Some(run) =
+                data.get_mut(y * stride + bx * 4..y * stride + (bx + size).min(w) * 4)
+            {
+                run.fill(255);
+            }
         }
 
         stamp_marker(data, stride, w, h, seq as u32);

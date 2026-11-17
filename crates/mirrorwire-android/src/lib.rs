@@ -9,7 +9,12 @@
 
 // `unsafe` only in gpu.rs (EGL/GL FFI, AGENTS.md rule 12).
 #![deny(unsafe_code)]
-#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 pub mod codec_list;
 /// FilmCraft's software decoder; all of its API use lives in `mirrorwire-film`.

@@ -16,7 +16,12 @@
 //! no B-frames and signals `max_num_reorder_frames = 0`).
 
 #![forbid(unsafe_code)]
-#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+#![deny(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing
+)]
 
 use anyhow::{anyhow, Result};
 use craft_video::h264::decode::{Decoder, Picture};
@@ -86,8 +91,10 @@ fn planes(p: Picture) -> Planes {
 
 /// `rows` rows of `width` bytes out of a strided plane; short planes give mid-grey.
 fn tight(plane: &[u8], stride: usize, width: usize, rows: usize) -> Vec<u8> {
-    if stride == width && plane.len() >= width * rows {
-        return plane[..width * rows].to_vec();
+    if stride == width {
+        if let Some(src) = plane.get(..width * rows) {
+            return src.to_vec();
+        }
     }
     let mut out = vec![128u8; width * rows];
     for (r, dst) in out.chunks_exact_mut(width.max(1)).enumerate().take(rows) {

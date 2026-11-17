@@ -874,13 +874,21 @@ fn fill_packed(dst: &mut ffmpeg_next::frame::Video, raw: &RawFrame) -> Result<()
     let height = raw.height as usize;
     let row = raw.width as usize * 4;
     if dst_stride == raw.stride {
-        dst.data_mut(0)[..needed].copy_from_slice(&raw.data[..needed]);
+        let (Some(d), Some(s)) = (dst.data_mut(0).get_mut(..needed), raw.data.get(..needed)) else {
+            bail!("encoder frame buffer smaller than the raw frame");
+        };
+        d.copy_from_slice(s);
     } else {
         let plane = dst.data_mut(0);
         for y in 0..height {
             let s = y * raw.stride;
             let d = y * dst_stride;
-            plane[d..d + row].copy_from_slice(&raw.data[s..s + row]);
+            let (Some(dst_row), Some(src_row)) =
+                (plane.get_mut(d..d + row), raw.data.get(s..s + row))
+            else {
+                bail!("encoder frame buffer smaller than the raw frame");
+            };
+            dst_row.copy_from_slice(src_row);
         }
     }
     Ok(())

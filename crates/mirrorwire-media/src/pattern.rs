@@ -16,7 +16,10 @@ pub fn stamp_marker(data: &mut [u8], stride: usize, width: usize, height: usize,
         let v = if on { 255 } else { 0 };
         for y in 0..MARKER_BLOCK {
             let row = y * stride + bit * MARKER_BLOCK * 4;
-            for px in data[row..row + MARKER_BLOCK * 4].as_chunks_mut::<4>().0 {
+            let Some(block) = data.get_mut(row..row + MARKER_BLOCK * 4) else {
+                return;
+            };
+            for px in block.as_chunks_mut::<4>().0 {
                 px[0] = v;
                 px[1] = v;
                 px[2] = v;
@@ -37,7 +40,7 @@ pub fn read_marker(luma: &[u8], stride: usize, width: usize, height: usize) -> O
         let mut sum = 0u32;
         for dy in [mid - 4, mid, mid + 4] {
             for dx in [mid - 4, mid, mid + 4] {
-                sum += luma[dy * stride + bit * MARKER_BLOCK + dx] as u32;
+                sum += *luma.get(dy * stride + bit * MARKER_BLOCK + dx)? as u32;
             }
         }
         value = value << 1 | u32::from(sum / 9 > 128);
