@@ -2176,6 +2176,7 @@ dependencies = [
  "mirrorwire-proto",
  "qrcode",
  "quinn",
+ "quinn-proto",
  "rcgen",
  "rustls",
  "serde",

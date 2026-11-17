@@ -179,8 +179,9 @@ target), **planned**, **idea**. Update this file when an item moves.
       encoder also reconfigures with a keyframe. Other VA-API encoder crates (cros-codecs) were
       rejected by the owner: encoding stays on FFmpeg or FilmCraft. Cost until then (sim, §3.3):
       VAAPI behind a 20–50 ms buffer freezes 6–16 % of the time; deep buffers and x264 are fine.
-   7. Small fixes: `lan_cc.rs` window never grows back after persistent congestion; the UI should
-      say CQP/ICQ ignore adaptive bitrate.
+   7. Small fixes (**done 2026-11-17**): `lan_cc.rs` window grows back after persistent
+      congestion (acked bytes, up to 4 MiB; unit test); the presenter window says under the
+      encoder row that CQP/ICQ ignore the adaptive bitrate.
    Alongside (**done 2026-11-17**): the proto parsers (fragment, cursor, control, NACK, URI) are
    covered by deterministic hostile-input tests (no cargo-fuzz, see decisions.md) and the
    panicking index/unwrap sites in proto/net are gone, enforced by a crate-level `deny`.

@@ -19,6 +19,14 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+/// Shown under the encoder row while RC is CQP or ICQ: those modes hold a fixed quality, and
+/// the pipeline leaves the encoder alone when the adaptive bitrate moves its cap
+/// (`pipeline::maybe_replace_encoder`, `quality_mode`). Only a change of the user's own
+/// setting applies. FEC and pacing still follow the link.
+const CQP_ICQ_NOTE: &str = "CQP/ICQ keep a fixed quality: the adaptive bitrate does not change \
+the encoder's rate in these modes (it still adjusts FEC and pacing), so a slow link can \
+overflow. Use Auto, CBR or VBR to follow the link.";
+
 const PRESENT_AVAILABLE: bool = cfg!(all(target_os = "linux", feature = "portal"));
 
 /// Background result of the "Open port for me…" button.
@@ -1267,6 +1275,13 @@ fn quality_controls(ui: &mut egui::Ui, app: &mut MirrorApp, live: &EncoderConfig
             }
         }
     });
+    if matches!(app.rc, RateControl::Cqp | RateControl::Icq) {
+        ui.label(
+            egui::RichText::new(CQP_ICQ_NOTE)
+                .small()
+                .color(ui.visuals().warn_fg_color),
+        );
+    }
     ui.horizontal(|ui| {
         let before = app.capture;
         ui.label("Cursor");

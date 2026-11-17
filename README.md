@@ -188,7 +188,8 @@ Useful presenter options: `--fps 30|60|max` (frame-rate cap asked of the composi
 (default `separate`, also `MIRRORWIRE_CURSOR`), `--fec auto|off|20` (forward error
 correction, default `auto`; also `MIRRORWIRE_FEC`), `--adaptive-bitrate on|off` (default on;
 also `MIRRORWIRE_ADAPTIVE_BITRATE`), `--bitrate-kbps 40000` (or `--bitrate-mbps 40`; the maximum when adaptive),
-`--rc auto|cbr|vbr|cqp|icq`, `--qp 18`, `--keyint` (frames; 0 = 10 s),
+`--rc auto|cbr|vbr|cqp|icq` (cqp/icq hold a fixed quality: the adaptive bitrate does not change
+the encoder's rate in those modes), `--qp 18`, `--keyint` (frames; 0 = 10 s),
 `--encoder auto|vaapi|x264|filmcraft`, `--intra-refresh`, `--source test`, `--no-pairing`,
 `--port` (or `MIRRORWIRE_PORT`; the GUI also saves the port in `settings.json`),
 `--no-dmabuf` (capture through shared memory instead of zero-copy GPU buffers).
