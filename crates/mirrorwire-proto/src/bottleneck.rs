@@ -23,7 +23,7 @@ const DECODE_WEAK_SHARE: f64 = 0.8;
 const FPS_SHARE: f64 = 0.8;
 
 /// The wire types (`bottleneck` control message), shared with the presenter's status line.
-pub use mirrorwire_proto::control::{BottleneckRating as Rating, BottleneckStage as Stage};
+pub use crate::control::{BottleneckRating as Rating, BottleneckStage as Stage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Verdict {

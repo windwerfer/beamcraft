@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 
 pub mod backoff;
+pub mod bottleneck;
 pub mod clock;
 pub mod control;
 pub mod crc;

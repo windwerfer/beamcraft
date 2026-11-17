@@ -418,7 +418,7 @@ fn decode_loop(
         opts.software_decoder,
     )?;
     let mut decoder_name = decoder.name().to_owned();
-    let mut bottleneck = crate::bottleneck::Bottleneck::default();
+    let mut bottleneck = mirrorwire_proto::bottleneck::Bottleneck::default();
     let mut verdict_sent = None;
     {
         let mut s = status.lock_ok();
@@ -606,7 +606,7 @@ fn decode_loop(
                     .as_ref()
                     .map(|i| (i.fps, i.encoder.clone()))
                     .unwrap_or_default();
-                bottleneck.update(&crate::bottleneck::Sample {
+                bottleneck.update(&mirrorwire_proto::bottleneck::Sample {
                     loss_pct: s.link.loss_pct,
                     queue_ms: s.link.queue.map(|q| q.mean_ms()),
                     decode_ms,
