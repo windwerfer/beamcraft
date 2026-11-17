@@ -102,6 +102,7 @@ pub struct Totals {
     pub cursor_stale: u64,
     pub cursor_images: u64,
     pub link: LinkStats,
+    pub nacks: mirrorwire_proto::fragment::NackStats,
 }
 
 pub struct ViewerOptions {
@@ -265,88 +266,101 @@ async fn session(
     let mut skipped = 0u64;
     let started = Instant::now();
     let mut link_window = LinkWindow::default();
-    let close_reason = loop {
+    let close_reason = 'recv: loop {
         if stop.load(Ordering::Acquire) {
             break None;
         }
+        // Wakes early while a frame is incomplete: resends and the hold time run on timers.
         let datagram = tokio::select! {
-            d = session.conn.read_datagram() => d,
-            _ = tokio::time::sleep(Duration::from_millis(100)) => continue,
+            d = session.conn.read_datagram() => Some(d),
+            _ = tokio::time::sleep(reassembler.wake_after()) => None,
         };
-        let datagram = match datagram {
-            Ok(d) => d,
-            Err(e) => break Some(e.to_string()),
-        };
-        if !got_datagram {
-            got_datagram = true;
-            trace.ok(
-                ConnectStepId::FirstDatagram,
-                format!("{} byte QUIC datagram from {}", datagram.len(), target.addr),
-            );
-        }
-        if loss_sim.drop_next() {
-            continue;
-        }
-        if let Some(bw) = &mut bandwidth_sim {
-            if !bw.admit(datagram.len(), now_us()) {
-                continue;
-            }
-        }
-        if let Some(window) = link_window.tick(reassembler.link_stats(), now_us()) {
-            let delay = reassembler.take_delay();
-            link_window.hud.queue = delay;
-            session.report_link(&window, delay);
-            status.lock().expect("status lock").link = link_window.hud;
-        }
-        if stream_updates.has_changed().unwrap_or(false) {
-            let info = stream_updates.borrow_and_update().clone();
-            let mut s = status.lock().expect("status lock");
-            s.cursor_mode = Some(info.cursor);
-            s.stream = Some(info);
-        }
-        if session.handle_pointer_datagram(&datagram) {
-            // Draw the moved cursor now, not with the next video frame.
-            if let Some(cb) = &repaint {
-                cb();
-            }
-            continue;
-        }
-        let Some((frame, event)) = reassembler.push(datagram, now_us()) else {
-            continue;
-        };
-        if event.lost_frames > 0 {
-            lost += event.lost_frames as u64;
-            if !self_healing {
-                need_keyframe.store(true, Ordering::Release);
-            }
-        }
-        if need_keyframe.load(Ordering::Acquire) {
-            if !frame.keyframe {
-                skipped += 1;
-                if backoff.should_request(now_us()) {
-                    session.request_keyframe("recovering from loss");
-                    requests += 1;
-                }
-                continue;
-            }
-            need_keyframe.store(false, Ordering::Release);
-            backoff.reset();
-        }
-        match decode_tx.try_send(ToDecode { frame }) {
-            Ok(()) => {}
-            Err(TrySendError::Full(_)) => {
-                let flushed = flush_backlog(&decode_flush);
-                tracing::info!(
-                    "decoder behind: dropped {} queued frames + this one, waiting for a keyframe",
-                    flushed
+        let mut ready = Vec::new();
+        if let Some(datagram) = datagram {
+            let datagram = match datagram {
+                Ok(d) => d,
+                Err(e) => break Some(e.to_string()),
+            };
+            if !got_datagram {
+                got_datagram = true;
+                trace.ok(
+                    ConnectStepId::FirstDatagram,
+                    format!("{} byte QUIC datagram from {}", datagram.len(), target.addr),
                 );
-                need_keyframe.store(true, Ordering::Release);
-                if backoff.should_request(now_us()) {
-                    session.request_keyframe("decoder backlog");
-                    requests += 1;
+            }
+            if loss_sim.drop_next() {
+                continue;
+            }
+            if let Some(bw) = &mut bandwidth_sim {
+                if !bw.admit(datagram.len(), now_us()) {
+                    continue;
                 }
             }
-            Err(TrySendError::Disconnected(_)) => break Some("decoder stopped".into()),
+            if let Some(window) = link_window.tick(reassembler.link_stats(), now_us()) {
+                let delay = reassembler.take_delay();
+                link_window.hud.queue = delay;
+                link_window.hud.resent = reassembler.nack_stats().resent_useful;
+                session.report_link(&window, delay);
+                reassembler.set_rtt_us(session.conn.rtt().as_micros().min(u64::MAX as u128) as u64);
+                status.lock().expect("status lock").link = link_window.hud;
+            }
+            if stream_updates.has_changed().unwrap_or(false) {
+                let info = stream_updates.borrow_and_update().clone();
+                let mut s = status.lock().expect("status lock");
+                s.cursor_mode = Some(info.cursor);
+                s.stream = Some(info);
+            }
+            if session.handle_pointer_datagram(&datagram) {
+                // Draw the moved cursor now, not with the next video frame.
+                if let Some(cb) = &repaint {
+                    cb();
+                }
+                continue;
+            }
+            ready.extend(reassembler.push(datagram, now_us()));
+        }
+        let now = now_us();
+        while let Some(x) = reassembler.poll(now) {
+            ready.push(x);
+        }
+        if let Some(nack) = reassembler.take_nacks(now) {
+            session.send_nack(&nack);
+        }
+        for (frame, event) in ready {
+            if event.lost_frames > 0 {
+                lost += event.lost_frames as u64;
+                if !self_healing {
+                    need_keyframe.store(true, Ordering::Release);
+                }
+            }
+            if need_keyframe.load(Ordering::Acquire) {
+                if !frame.keyframe {
+                    skipped += 1;
+                    if backoff.should_request(now_us()) {
+                        session.request_keyframe("recovering from loss");
+                        requests += 1;
+                    }
+                    continue;
+                }
+                need_keyframe.store(false, Ordering::Release);
+                backoff.reset();
+            }
+            match decode_tx.try_send(ToDecode { frame }) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {
+                    let flushed = flush_backlog(&decode_flush);
+                    tracing::info!(
+                        "decoder behind: dropped {} queued frames + this one, waiting for a keyframe",
+                        flushed
+                    );
+                    need_keyframe.store(true, Ordering::Release);
+                    if backoff.should_request(now_us()) {
+                        session.request_keyframe("decoder backlog");
+                        requests += 1;
+                    }
+                }
+                Err(TrySendError::Disconnected(_)) => break 'recv Some("decoder stopped".into()),
+            }
         }
     };
     let elapsed = started.elapsed().as_secs_f64();
@@ -361,6 +375,7 @@ async fn session(
         .map_err(|_| anyhow!("decode thread panicked"))??;
     totals.lost = lost;
     totals.link = reassembler.link_stats();
+    totals.nacks = reassembler.nack_stats();
     totals.skipped_waiting_keyframe = skipped;
     totals.keyframe_requests += requests;
     (
@@ -680,6 +695,10 @@ fn print_summary((totals, stats, secs): &(Totals, StageStats, f64)) {
         link.expected,
         link.recovered,
         link.unrecoverable_frames
+    );
+    println!(
+        "nack: asked for {} fragments, {} resent packets arrived, {} of them filled a gap",
+        totals.nacks.requested, totals.nacks.resent_received, totals.nacks.resent_useful
     );
     println!(
         "{:<20} {:>8} {:>8} {:>8} {:>8}",

@@ -40,6 +40,30 @@ without new information.
 
 Newest first. Add an entry when the owner decides something non-obvious.
 
+- **2026-11-17 (NACK resend, protocol 4):** lost fragments that FEC cannot rebuild are
+  requested again (protocol.md §3d). Design choices: NACK as an unreliable **datagram**
+  (`0xC2`), not a control message: a lost NACK is repeated after RTT + 2 ms anyway, and the
+  control stream is ordered JSON behind pongs and link reports. The viewer asks for the
+  *deficit* per FEC block (missing data shards minus parity that arrived), not for every hole,
+  so FEC keeps doing the cheap work and resends only fill the rest; it waits until the frame
+  is settled (newer frame started / last packet in / quiet 15 ms). Delivery stays strictly in
+  order, so a frame waiting for a resend holds newer ones for 2 × RTT + 4 ms (6-100 ms); the
+  keyframe request (with the 250 ms to 1 s backoff) comes only after that. Resent packets
+  carry header flag bit 1 and do not count as received packets or queueing delay, so loss
+  reports and the bitrate/FEC control still see the on-air loss. Presenter window: 3 s /
+  8 MiB, budget 128 KiB/s (burst 64 KiB), cleared per viewer. Numbers are Glass's (reference
+  only, nothing copied; no MIT notice needed). Rejected: NACK on the control stream; asking for
+  parity shards (no better than data shards, more decode work); resending on every hole
+  immediately (duplicates what parity rebuilds anyway); an unbounded resend budget (resends
+  would compete with video on a congested link). Breaks: `PROTOCOL_VERSION` 3 → 4, a viewer or
+  presenter of protocol 3 is rejected with the readable version message.
+- **2026-11-17 (keyframe backoff and acks):** the viewer's keyframe requests back off
+  250 ms, 500 ms, 1 s (was every 100 ms); the presenter's gate is 2 × RTT clamped to
+  250 ms–1 s (was 500 ms–2 s); the encoder drops a request that follows an IDR directly
+  (`Controls::take_keyframe_request`). Glass's "keep acking frames while waiting" is
+  interpreted for our protocol, which has no per-frame ack: frames that arrive while the
+  viewer waits for a keyframe still count in `link_report`, so the wait is not read as
+  silence or queueing.
 - **2026-11-17 (Fuzzing without cargo-fuzz):** proto/net parsers get deterministic
   fuzz-style tests (`crates/mirrorwire-proto/tests/hostile_input.rs`, a 15-line xorshift
   generator, mutation of valid packets, runs in `cargo test`) and a crate-level

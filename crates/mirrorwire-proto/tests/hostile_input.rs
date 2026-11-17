@@ -6,6 +6,7 @@ use bytes::Bytes;
 use mirrorwire_proto::control::{hello_protocol, Control};
 use mirrorwire_proto::cursor::{CursorImage, PointerUpdate};
 use mirrorwire_proto::fragment::{fragment, FrameTiming, PacketHeader, Reassembler, HEADER_LEN};
+use mirrorwire_proto::nack::{Nack, ResendWindow};
 
 struct Rng(u64);
 
@@ -101,6 +102,8 @@ fn reassembler_survives_a_hostile_flood() {
         let _ = r.push(Bytes::from(pkt), step * 100);
         let _ = r.link_stats();
         let _ = r.take_delay();
+        let _ = r.take_nacks(step * 100 + 50);
+        while r.poll(step * 100 + 60).is_some() {}
     }
 }
 
@@ -191,5 +194,30 @@ fn control_parsers_survive_hostile_bytes() {
         let body = mutate(&mut rng, &m[4..]);
         let _ = Control::decode_body(&body);
         let _ = hello_protocol(&body);
+    }
+}
+
+#[test]
+fn nack_decoder_and_resend_window_survive_hostile_requests() {
+    let mut rng = Rng(5);
+    let mut win = ResendWindow::default();
+    for id in 0..20u32 {
+        let pkts = fragment(id, false, T, &rng.bytes(5000), 1200, Some(0.2));
+        win.insert(id, pkts.len() - 1, pkts, id as u64 * 1000);
+    }
+    let valid = Nack {
+        entries: vec![mirrorwire_proto::nack::NackEntry {
+            frame_id: 3,
+            indices: vec![0, 2],
+        }],
+    }
+    .encode();
+    for step in 0..20_000u64 {
+        let n = rng.below(60);
+        let junk = rng.bytes(n);
+        let _ = Nack::decode(&junk);
+        if let Some(nack) = Nack::decode(&mutate(&mut rng, &valid)) {
+            let _ = win.resend(&nack, step * 100);
+        }
     }
 }

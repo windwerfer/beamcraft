@@ -8,6 +8,7 @@ use crate::be;
 use crate::control::QueueDelay;
 use crate::delay::DelayMeter;
 use crate::fec::{block_len, parity_count, recover_block, LinkStats};
+use crate::nack::{Nack, NackEntry};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::borrow::Cow;
 use std::collections::BTreeMap;
@@ -21,6 +22,8 @@ const MAX_BLOCKS: usize = 255;
 /// Bigger claimed frames are rejected (hostile input).
 pub const MAX_FRAME_LEN: usize = 64 << 20;
 const FLAG_KEYFRAME: u8 = 0b0000_0001;
+/// Set on a packet the presenter sends again after a NACK ([`crate::nack`]).
+const FLAG_RESENT: u8 = 0b0000_0010;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FrameTiming {
@@ -40,13 +43,21 @@ pub struct PacketHeader {
     pub frame_len: u32,
     pub shard_len: u16,
     pub blocks: u8,
+    /// A retransmission: not a first transmission, so it says nothing about loss or delay.
+    pub resent: bool,
     pub timing: FrameTiming,
 }
 
 impl PacketHeader {
     fn write(&self, buf: &mut BytesMut) {
         buf.put_u8(WIRE_VERSION);
-        buf.put_u8(if self.keyframe { FLAG_KEYFRAME } else { 0 });
+        let flags = [(self.keyframe, FLAG_KEYFRAME), (self.resent, FLAG_RESENT)];
+        buf.put_u8(
+            flags
+                .iter()
+                .filter(|(on, _)| *on)
+                .fold(0, |a, (_, f)| a | f),
+        );
         buf.put_u32(self.frame_id);
         buf.put_u16(self.index);
         buf.put_u16(self.data_count);
@@ -67,7 +78,8 @@ impl PacketHeader {
             return None;
         }
         let h = Self {
-            keyframe: be::<1>(d, 1).map(|b| b[0])? & FLAG_KEYFRAME != 0,
+            keyframe: be::<1>(d, 1)?[0] & FLAG_KEYFRAME != 0,
+            resent: be::<1>(d, 1)?[0] & FLAG_RESENT != 0,
             frame_id: u32::from_be_bytes(be(d, 2)?),
             index: u16::from_be_bytes(be(d, 6)?),
             data_count: u16::from_be_bytes(be(d, 8)?),
@@ -167,6 +179,7 @@ pub fn fragment(
         frame_len: payload.len() as u32,
         shard_len: shard_len as u16,
         blocks: blocks as u8,
+        resent: false,
         timing,
     };
     let shard = |i: usize| -> Cow<'_, [u8]> {
@@ -220,6 +233,15 @@ pub fn fragment(
     out
 }
 
+/// A copy of `packet` with the resent flag set (the original stays in the resend window).
+pub fn mark_resent(packet: &Bytes) -> Bytes {
+    let mut v = packet.to_vec();
+    if let Some(flags) = v.get_mut(1) {
+        *flags |= FLAG_RESENT;
+    }
+    Bytes::from(v)
+}
+
 #[derive(Debug, Clone)]
 pub struct AssembledFrame {
     pub frame_id: u32,
@@ -255,6 +277,13 @@ struct Partial {
     recovered: u32,
     bytes: usize,
     first_us: u64,
+    /// When the last new packet arrived, and whether the last packet the presenter sends for
+    /// the frame (the final parity shard) is among those received.
+    last_us: u64,
+    got_last: bool,
+    /// NACKs sent for this frame and when the last one went out.
+    nack_rounds: u8,
+    last_nack_us: u64,
 }
 
 impl Partial {
@@ -272,11 +301,15 @@ impl Partial {
             recovered: 0,
             bytes: 0,
             first_us: now_us,
+            last_us: now_us,
+            got_last: false,
+            nack_rounds: 0,
+            last_nack_us: 0,
         }
     }
 
     /// Stores one packet; returns false for duplicates and mismatches.
-    fn add(&mut self, h: &PacketHeader, body: Bytes) -> bool {
+    fn add(&mut self, h: &PacketHeader, body: Bytes, now_us: u64) -> bool {
         if !self.layout.same_layout(h) {
             return false;
         }
@@ -297,6 +330,8 @@ impl Partial {
             self.bytes += body.len();
         }
         *slot = Some(body);
+        self.last_us = now_us;
+        self.got_last |= i + 1 == k + self.parity.len();
         let blocks = self.layout.blocks as usize;
         let b = if i < k { i % blocks } else { (i - k) % blocks };
         if let Some(n) = self.block_have.get_mut(b) {
@@ -339,17 +374,59 @@ impl Partial {
     fn complete(&self) -> bool {
         self.have_data == self.data.len()
     }
+
+    /// The fewest data shards that, once resent, let every unfinished block complete: per
+    /// block, as many missing data shards as the block still lacks of its `k` (parity that
+    /// did arrive already counts).
+    fn shards_to_nack(&self) -> Vec<u16> {
+        let (k, blocks) = (self.data.len(), self.layout.blocks as usize);
+        let mut out = Vec::new();
+        for b in 0..blocks {
+            if self.block_done.get(b).copied().unwrap_or(true) {
+                continue;
+            }
+            let have = self.block_have.get(b).copied().unwrap_or(0) as usize;
+            let need = block_len(k, blocks, b).saturating_sub(have);
+            out.extend(
+                (b..k)
+                    .step_by(blocks)
+                    .filter(|&i| self.data.get(i).is_some_and(Option::is_none))
+                    .take(need)
+                    .map(|i| i as u16),
+            );
+        }
+        out
+    }
 }
 
 /// Partial frames kept at once (bounds memory against a flood of frame ids).
 const MAX_PARTIAL: usize = 64;
 /// Frames this far behind the newest are final for loss accounting.
 const METER_LAG: u32 = 30;
+/// The newest frame is NACKed without waiting for a newer one once it has been quiet this long
+/// (its tail was lost and no later frame is coming soon, e.g. on a static screen).
+const TAIL_QUIET_US: u64 = 15_000;
+/// NACK rounds per frame before the viewer gives up on resends.
+const MAX_NACK_ROUNDS: u8 = 3;
+/// Frames past the head looked at when building a NACK.
+const NACK_SPAN: u32 = 64;
+
+/// What the viewer's NACKs achieved (cumulative).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct NackStats {
+    /// Fragments asked for (a whole-frame request counts as one).
+    pub requested: u64,
+    /// Resent packets that arrived, and those of them that filled a gap.
+    pub resent_received: u64,
+    pub resent_useful: u64,
+}
 
 /// Reassembles fragments into frames and delivers them strictly in order.
-/// A frame that completes after a newer one has been delivered is dropped, and
-/// any frames skipped over are reported as lost. Lost data shards are rebuilt
-/// from parity as soon as enough of their block has arrived.
+/// Lost data shards are rebuilt from parity as soon as enough of their block has arrived;
+/// what parity cannot cover is requested again ([`Reassembler::take_nacks`]). A frame that is
+/// still incomplete when a newer one is ready holds the newer ones back for
+/// [`Reassembler::hold_us`] (about two round trips); after that it is given up, reported as lost
+/// and the caller asks for a keyframe. Late fragments of a frame already given up are dropped.
 pub struct Reassembler {
     partial: BTreeMap<u32, Partial>,
     last_delivered: Option<u32>,
@@ -359,6 +436,14 @@ pub struct Reassembler {
     newest: u32,
     stats: LinkStats,
     delay: DelayMeter,
+    rtt_us: u64,
+    /// The frame the delivery waits for and since when a newer one has been waiting behind it.
+    gap: Option<(u32, u64)>,
+    /// Frames given up since the last delivered one.
+    pending_lost: u32,
+    /// Whole-frame NACKs: frame_id -> (rounds, last time).
+    absent: BTreeMap<u32, (u8, u64)>,
+    nacks: NackStats,
 }
 
 impl Reassembler {
@@ -371,9 +456,35 @@ impl Reassembler {
             newest: 0,
             stats: LinkStats::default(),
             delay: DelayMeter::default(),
+            rtt_us: 0,
+            gap: None,
+            pending_lost: 0,
+            absent: BTreeMap::new(),
+            nacks: NackStats::default(),
         }
     }
 
+    /// The path's round-trip time, which sets how long a missing frame is waited for.
+    pub fn set_rtt_us(&mut self, rtt_us: u64) {
+        self.rtt_us = rtt_us;
+    }
+
+    /// How long a frame that blocks newer ones is waited for: two round trips plus 4 ms
+    /// (6 ms to 100 ms).
+    pub fn hold_us(&self) -> u64 {
+        self.rtt_us
+            .saturating_mul(2)
+            .saturating_add(4_000)
+            .clamp(6_000, 100_000)
+    }
+
+    /// Delay before a fragment is requested again: one round trip plus 2 ms.
+    fn retry_us(&self) -> u64 {
+        self.rtt_us.saturating_add(2_000)
+    }
+
+    /// Adds a packet and returns the next frame that can be delivered, if any. Call
+    /// [`Reassembler::poll`] until it returns `None` for the frames queued behind it.
     pub fn push(
         &mut self,
         datagram: Bytes,
@@ -381,8 +492,13 @@ impl Reassembler {
     ) -> Option<(AssembledFrame, ReassemblyEvent)> {
         let (h, payload) = PacketHeader::parse(&datagram)?;
         let body = datagram.slice(datagram.len() - payload.len()..);
-        self.meter(&h);
-        self.delay.on_packet(h.frame_id, h.timing.sent_us, now_us);
+        if h.resent {
+            // A resend is not a first transmission: it must not count as loss or delay.
+            self.nacks.resent_received += 1;
+        } else {
+            self.meter(&h);
+            self.delay.on_packet(h.frame_id, h.timing.sent_us, now_us);
+        }
         if let Some(last) = self.last_delivered {
             if h.frame_id <= last {
                 return None;
@@ -392,48 +508,126 @@ impl Reassembler {
         if !self.partial.contains_key(&h.frame_id) && self.partial.len() >= MAX_PARTIAL {
             self.partial.pop_first();
         }
-        let frame_id = h.frame_id;
         let entry = self
             .partial
-            .entry(frame_id)
+            .entry(h.frame_id)
             .or_insert_with(|| Partial::new(&h, now_us));
         let before = entry.recovered;
-        if !entry.add(&h, body) {
+        if !entry.add(&h, body, now_us) {
             return None;
         }
+        self.nacks.resent_useful += u64::from(h.resent);
         self.stats.recovered += (entry.recovered - before) as u64;
-        if !entry.complete() {
-            return None;
-        }
+        self.poll(now_us)
+    }
 
-        let done = self.partial.remove(&frame_id)?;
-        let lost_frames = match self.last_delivered {
-            Some(last) => frame_id - last - 1,
-            None => 0,
-        };
-        self.stats.unrecoverable_frames += lost_frames as u64;
-        self.partial.retain(|&id, _| id > frame_id);
-        self.last_delivered = Some(frame_id);
-
-        let mut data = Vec::with_capacity(done.bytes);
-        for part in done.data.iter().flatten() {
-            data.extend_from_slice(part);
+    /// Delivers the next frame in order, if it is complete or the frame before it has been
+    /// given up. Also the place where time passes: call it when no packet arrives.
+    pub fn poll(&mut self, now_us: u64) -> Option<(AssembledFrame, ReassemblyEvent)> {
+        loop {
+            let newest = *self.partial.keys().next_back()?;
+            let head = self.head()?;
+            if self.partial.get(&head).is_some_and(Partial::complete) {
+                let done = self.partial.remove(&head)?;
+                self.last_delivered = Some(head);
+                self.gap = None;
+                let lost_frames = std::mem::take(&mut self.pending_lost);
+                return Some(finish(head, done, lost_frames, now_us));
+            }
+            if head >= newest {
+                return None; // nothing newer yet: the frame is still arriving
+            }
+            let since = match self.gap {
+                Some((id, since)) if id == head => since,
+                _ => {
+                    self.gap = Some((head, now_us));
+                    now_us
+                }
+            };
+            if now_us.saturating_sub(since) < self.hold_us() {
+                return None;
+            }
+            // Resends did not arrive in time: give the frame up.
+            self.partial.remove(&head);
+            self.last_delivered = Some(head);
+            self.gap = None;
+            self.pending_lost += 1;
+            self.stats.unrecoverable_frames += 1;
         }
-        Some((
-            AssembledFrame {
-                frame_id,
-                keyframe: done.keyframe,
-                timing: done.timing,
-                data,
-                fragments: done.data.len() as u16,
-                first_fragment_us: done.first_us,
-                completed_us: now_us,
-            },
-            ReassemblyEvent {
-                lost_frames,
-                recovered: done.recovered,
-            },
-        ))
+    }
+
+    /// The next frame the delivery waits for.
+    fn head(&self) -> Option<u32> {
+        match self.last_delivered {
+            Some(l) => Some(l.wrapping_add(1)),
+            None => self.partial.keys().next().copied(),
+        }
+    }
+
+    /// How long a caller may sleep before it must call [`Reassembler::poll`] and
+    /// [`Reassembler::take_nacks`] again (timers run only while a frame is incomplete).
+    pub fn wake_after(&self) -> std::time::Duration {
+        if self.partial.is_empty() {
+            std::time::Duration::from_millis(100)
+        } else {
+            std::time::Duration::from_millis(2)
+        }
+    }
+
+    /// The fragments to ask the presenter for now: what FEC cannot rebuild of frames that
+    /// are settled (a newer frame has begun, or their last packet arrived, or they went
+    /// quiet), and whole frames of which nothing arrived. Each fragment is asked for again
+    /// after one round trip, up to three times.
+    pub fn take_nacks(&mut self, now_us: u64) -> Option<Nack> {
+        let newest = *self.partial.keys().next_back()?;
+        let head = self.head()?;
+        let retry = self.retry_us();
+        self.absent.retain(|&id, _| id >= head);
+        let mut nack = Nack::default();
+        for id in head..=newest.min(head.saturating_add(NACK_SPAN)) {
+            let due = |rounds: u8, last: u64| {
+                rounds < MAX_NACK_ROUNDS && (rounds == 0 || now_us.saturating_sub(last) >= retry)
+            };
+            if let Some(p) = self.partial.get_mut(&id) {
+                let settled =
+                    id < newest || p.got_last || now_us.saturating_sub(p.last_us) >= TAIL_QUIET_US;
+                if p.complete() || !settled || !due(p.nack_rounds, p.last_nack_us) {
+                    continue;
+                }
+                let indices = p.shards_to_nack();
+                let n = indices.len() as u64;
+                if n == 0 {
+                    continue;
+                }
+                if !nack.try_push(NackEntry {
+                    frame_id: id,
+                    indices,
+                }) {
+                    break;
+                }
+                p.nack_rounds += 1;
+                p.last_nack_us = now_us;
+                self.nacks.requested += n;
+            } else if id < newest {
+                let (rounds, last) = *self.absent.entry(id).or_insert((0, 0));
+                if !due(rounds, last) {
+                    continue;
+                }
+                if !nack.try_push(NackEntry {
+                    frame_id: id,
+                    indices: Vec::new(),
+                }) {
+                    break;
+                }
+                self.absent.insert(id, (rounds + 1, now_us));
+                self.nacks.requested += 1;
+            }
+        }
+        (!nack.is_empty()).then_some(nack)
+    }
+
+    pub fn nack_stats(&self) -> NackStats {
+        self.nacks
     }
 
     pub fn pending(&self) -> usize {
@@ -487,6 +681,33 @@ impl Reassembler {
     }
 }
 
+fn finish(
+    frame_id: u32,
+    done: Partial,
+    lost_frames: u32,
+    now_us: u64,
+) -> (AssembledFrame, ReassemblyEvent) {
+    let mut data = Vec::with_capacity(done.bytes);
+    for part in done.data.iter().flatten() {
+        data.extend_from_slice(part);
+    }
+    (
+        AssembledFrame {
+            frame_id,
+            keyframe: done.keyframe,
+            timing: done.timing,
+            data,
+            fragments: done.data.len() as u16,
+            first_fragment_us: done.first_us,
+            completed_us: now_us,
+        },
+        ReassemblyEvent {
+            lost_frames,
+            recovered: done.recovered,
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -537,7 +758,10 @@ mod tests {
             r.push(f.clone(), 0);
         }
         r.push(f2[0].clone(), 0);
-        let (frame, ev) = r.push(f3[0].clone(), 0).unwrap();
+        // Frame 3 is complete but waits behind the incomplete frame 2 (resends may still come).
+        assert!(r.push(f3[0].clone(), 0).is_none());
+        assert!(r.poll(r.hold_us() - 1).is_none());
+        let (frame, ev) = r.poll(r.hold_us()).unwrap();
         assert_eq!(frame.frame_id, 3);
         assert_eq!(ev.lost_frames, 1);
         assert!(r.push(f2[1].clone(), 0).is_none());
@@ -582,5 +806,172 @@ mod meter_tests {
         assert_eq!(s.unrecoverable_frames, 0);
         assert!((s.loss_pct() - 100.0 / 12.0).abs() < 0.01);
         assert!((s.overhead_pct() - 20.0).abs() < 0.01);
+    }
+}
+
+#[cfg(test)]
+mod nack_tests {
+    use super::*;
+    use crate::nack::ResendWindow;
+
+    const T: FrameTiming = FrameTiming {
+        capture_us: 0,
+        encoded_us: 0,
+        sent_us: 0,
+    };
+
+    fn payload(n: usize, seed: u8) -> Vec<u8> {
+        (0..n).map(|i| (i % 251) as u8 ^ seed).collect()
+    }
+
+    /// Frames 1..=n of ~10 packets each, no FEC; `lose(frame, index)` drops a packet.
+    fn feed(
+        r: &mut Reassembler,
+        win: &mut ResendWindow,
+        frames: &[u32],
+        lose: impl Fn(u32, usize) -> bool,
+        now: u64,
+    ) -> Vec<u32> {
+        let mut got = Vec::new();
+        for &id in frames {
+            let pkts = fragment(id, false, T, &payload(11_000, id as u8), 1200, None);
+            let k = pkts.len();
+            win.insert(id, k, pkts.clone(), now);
+            for (i, p) in pkts.into_iter().enumerate() {
+                if !lose(id, i) {
+                    if let Some((f, _)) = r.push(p, now) {
+                        got.push(f.frame_id);
+                    }
+                }
+            }
+        }
+        got
+    }
+
+    #[test]
+    fn a_lost_fragment_is_resent_and_no_frame_is_lost() {
+        let mut r = Reassembler::new(u64::MAX);
+        let mut win = ResendWindow::default();
+        let got = feed(
+            &mut r,
+            &mut win,
+            &[1, 2, 3],
+            |f, i| f == 2 && (i == 3 || i == 7),
+            0,
+        );
+        assert_eq!(got, [1], "2 is incomplete, 3 waits behind it");
+        let nack = r.take_nacks(1_000).expect("a NACK");
+        assert_eq!(nack.entries.len(), 1);
+        assert_eq!(nack.entries[0].frame_id, 2);
+        assert_eq!(nack.entries[0].indices, [3, 7]);
+        // Not asked twice within a round trip.
+        assert!(r.take_nacks(1_100).is_none());
+        let resent = win.resend(&nack, 1_000);
+        assert_eq!(resent.len(), 2);
+        let mut delivered = Vec::new();
+        for p in resent {
+            if let Some((f, ev)) = r.push(p, 1_500) {
+                assert_eq!(ev.lost_frames, 0);
+                delivered.push(f);
+            }
+            while let Some((f, ev)) = r.poll(1_500) {
+                assert_eq!(ev.lost_frames, 0);
+                delivered.push(f);
+            }
+        }
+        let ids: Vec<u32> = delivered.iter().map(|f| f.frame_id).collect();
+        assert_eq!(ids, [2, 3]);
+        assert_eq!(delivered[0].data, payload(11_000, 2));
+        assert_eq!(r.link_stats().unrecoverable_frames, 0);
+        let s = r.nack_stats();
+        assert_eq!((s.requested, s.resent_received, s.resent_useful), (2, 2, 2));
+    }
+
+    #[test]
+    fn resent_packets_do_not_count_as_received() {
+        let mut r = Reassembler::new(u64::MAX);
+        let mut win = ResendWindow::default();
+        let frames: Vec<u32> = (1..=60).collect();
+        feed(&mut r, &mut win, &frames, |f, i| f == 5 && i == 2, 0);
+        let nack = r.take_nacks(0).unwrap();
+        for p in win.resend(&nack, 0) {
+            r.push(p, 0);
+        }
+        while r.poll(0).is_some() {}
+        let s = r.link_stats();
+        // 29 frames are final (60 - METER_LAG + 1); frame 5 lost one of its ~10 packets on air.
+        assert_eq!(s.expected - s.received, 1, "{s:?}");
+        assert_eq!(s.unrecoverable_frames, 0);
+    }
+
+    #[test]
+    fn missing_resend_gives_up_after_the_hold_time() {
+        let mut r = Reassembler::new(u64::MAX);
+        r.set_rtt_us(10_000);
+        assert_eq!(r.hold_us(), 24_000);
+        let mut win = ResendWindow::default();
+        let got = feed(&mut r, &mut win, &[1, 2, 3], |f, i| f == 2 && i == 4, 0);
+        assert_eq!(got, [1]);
+        assert!(r.take_nacks(0).is_some());
+        assert!(r.poll(23_999).is_none());
+        // One retry after RTT + 2 ms, three rounds in all, then silence.
+        assert!(r.take_nacks(11_999).is_none());
+        assert!(r.take_nacks(12_000).is_some());
+        assert!(r.take_nacks(30_000).is_some());
+        assert!(r.take_nacks(60_000).is_none(), "three rounds at most");
+        // The resend never came: frame 2 is lost, frame 3 is delivered.
+        let (f, ev) = r.poll(24_000).expect("hold expired");
+        assert_eq!((f.frame_id, ev.lost_frames), (3, 1));
+        assert_eq!(r.link_stats().unrecoverable_frames, 1);
+        // A late resend of the given-up frame is ignored.
+        let pkts = fragment(2, false, T, &payload(11_000, 2), 1200, None);
+        assert!(r.push(mark_resent(&pkts[4]), 25_000).is_none());
+    }
+
+    #[test]
+    fn a_frame_of_which_nothing_arrived_is_requested_whole() {
+        let mut r = Reassembler::new(u64::MAX);
+        let mut win = ResendWindow::default();
+        let got = feed(&mut r, &mut win, &[1, 2, 3], |f, _| f == 2, 0);
+        assert_eq!(got, [1]);
+        let nack = r.take_nacks(0).unwrap();
+        assert_eq!(nack.entries[0].frame_id, 2);
+        assert!(nack.entries[0].indices.is_empty());
+        let mut ids = Vec::new();
+        for p in win.resend(&nack, 0) {
+            ids.extend(r.push(p, 0).map(|(f, _)| f.frame_id));
+            while let Some((f, _)) = r.poll(0) {
+                ids.push(f.frame_id);
+            }
+        }
+        assert_eq!(ids, [2, 3]);
+    }
+
+    #[test]
+    fn the_newest_frame_is_requested_when_it_goes_quiet() {
+        let mut r = Reassembler::new(u64::MAX);
+        let mut win = ResendWindow::default();
+        // No parity, last packet of the only frame lost: nothing newer will arrive.
+        feed(&mut r, &mut win, &[1], |_, i| i == 9, 0);
+        assert!(r.take_nacks(1_000).is_none(), "may still be in flight");
+        let nack = r.take_nacks(TAIL_QUIET_US).unwrap();
+        assert_eq!(nack.entries[0].indices, [9]);
+    }
+
+    #[test]
+    fn parity_that_arrived_reduces_what_is_requested() {
+        let mut r = Reassembler::new(u64::MAX);
+        let pkts = fragment(1, false, T, &payload(11_000, 1), 1200, Some(0.2));
+        let k = PacketHeader::parse(&pkts[0]).unwrap().0.data_count as usize;
+        let parity = pkts.len() - k;
+        assert!(parity >= 2);
+        // Lose three data shards: parity covers `parity` of them, the rest is requested.
+        for (i, p) in pkts.iter().enumerate() {
+            if i != 1 && i != 2 && i != 3 {
+                r.push(p.clone(), 0);
+            }
+        }
+        let nack = r.take_nacks(0).unwrap();
+        assert_eq!(nack.requested(), 3 - parity.min(3));
     }
 }

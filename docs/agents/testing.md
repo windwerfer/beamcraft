@@ -26,6 +26,7 @@ Build dependencies (Fedora and Ubuntu package lists) are in the README and in
 | Kind | Where | What it proves |
 |---|---|---|
 | Unit | `#[cfg(test)]` in `mirrorwire-proto` | header encode/parse, fragmentation and reassembly (loss, reordering, late fragments), control framing, clock offset, stats |
+| Unit (NACK) | `mirrorwire-proto/src/nack.rs`, `fragment.rs` (`nack_tests`), `mirrorwire-net/src/transport/mod.rs` | NACK datagram round trip and limits, resend window (3 s / 8 MiB / 128 KiB/s budget), a lost fragment resent and no frame lost, resends not counted as loss, give-up after the hold time, whole-frame requests, tail loss; end to end: a presenter resends a dropped packet on a viewer NACK, and a viewer of another protocol version gets a readable rejection |
 | Hostile input | `mirrorwire-proto/tests/hostile_input.rs`, `mirrorwire-net/src/pairing.rs` | random and mutated bytes into the packet header, reassembler (incl. garbage bodies through FEC recovery), pointer/cursor-image decoders, control messages and the URI parser: never a panic. proto and net also `deny` unwrap/expect/indexing/panic outside tests |
 | Unit | `#[cfg(test)]` in `mirrorwire-net` | identity load/create, URI round trip (including a non-default port) and rejection of bad fingerprints, QR generation, port settings precedence, firewall guide text, ufw rule parsing |
 | Unit (FilmCraft) | `mirrorwire-media/src/filmcraft.rs`, feature `filmcraft` | FilmCraft output via the real `Encoder` decodes with FFmpeg, markers read back, keyframe on request; an `#[ignore]` x264-vs-FilmCraft benchmark |
@@ -501,6 +502,23 @@ routed `10.38.14.0/24` into `tun0`, so the viewer never reached the presenter; a
 tethering link a default route (metric 100, below Wi-Fi's 600), sending the laptop's internet
 through the tablet (`nmcli connection modify … ipv4.never-default yes`). The presenter must be
 started after tethering is up to advertise the new address.
+
+### 3.9 NACK resend under simulated loss (box, 2026-11-17)
+
+`scripts/loopback-test.sh 20 --encoder x264 -- --simulate-loss L` (the viewer drops L % of
+datagrams, resends included), x264 test pattern, same machine; baseline = build 2aea0a3:
+
+| Loss | Build | Lost frames | Keyframe requests | capture→decoded mean / p95 / max (ms) | NACK |
+|---|---|---|---|---|---|
+| 3 % | baseline | 2 | 2 | 13.2 / 15.7 / 100.9 | – |
+| 3 % | NACK | 0 | 0 | 12.5 / 14.7 / 76.4 | 2 asked, 2 filled |
+| 10 % | baseline | 10 (54 frames skipped waiting for a key) | 12 | 13.5 / 15.8 / 108.1 | – |
+| 10 % | NACK | 0 | 0 | 12.4 / 14.7 / 77.4 | 18 asked, 17 filled |
+
+(The 3 % baseline from the task brief was 2 unrecoverable / 4 requests / p95 22.8 ms; runs vary by a
+frame or two.) On loopback the RTT is ~0, so the hold time is its 6 ms minimum; on a real link
+a lost frame costs up to 2 × RTT + 4 ms of added latency for the frames behind it, instead of a
+keyframe. Not measured on Wi-Fi.
 
 ### 3.8 Real Wi-Fi: parity probe A/B (2026-11-17)
 

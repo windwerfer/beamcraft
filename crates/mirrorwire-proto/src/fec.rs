@@ -190,6 +190,9 @@ pub struct LinkHud {
     pub recovered_per_s: f32,
     /// Frames lost since connecting.
     pub unrecoverable: u64,
+    /// Fragments the presenter resent after a NACK that filled a gap (since connecting; set by
+    /// the caller from [`crate::fragment::Reassembler::nack_stats`]).
+    pub resent: u64,
     /// Queueing delay of the last window (set by the caller from
     /// [`crate::fragment::Reassembler::take_delay`]).
     pub queue: Option<crate::control::QueueDelay>,
@@ -207,8 +210,13 @@ impl LinkHud {
             "fec off".to_owned()
         };
         let queue = self.queue.map_or(String::new(), |q| format!("  {q}"));
+        let resent = if self.resent > 0 {
+            format!("  resent {}", self.resent)
+        } else {
+            String::new()
+        };
         format!(
-            "{fec}  loss {:.1}%  unrecoverable frames {}{queue}",
+            "{fec}  loss {:.1}%  unrecoverable frames {}{resent}{queue}",
             self.loss_pct, self.unrecoverable
         )
     }
@@ -240,6 +248,7 @@ impl LinkWindow {
             loss_pct: window.loss_pct(),
             recovered_per_s: window.recovered as f32 * 1e6 / elapsed as f32,
             unrecoverable: now.unrecoverable_frames,
+            resent: 0,
             queue: None,
         };
         self.last = now;

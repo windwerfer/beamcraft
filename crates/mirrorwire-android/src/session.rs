@@ -256,12 +256,12 @@ async fn run(
     let self_healing = session.stream_info.intra_refresh;
     let mut reassembler = Reassembler::new(500_000);
     let mut got_datagram = false;
-    let mut last_request = Instant::now() - Duration::from_secs(1);
+    let mut backoff = mirrorwire_proto::backoff::KeyframeBackoff::default();
     let mut lost = 0u64;
     let mut window = (Instant::now(), 0u64, 0u64);
     let mut link_window = LinkWindow::default();
     let mut pipeline_window = PipelineWindow::default();
-    let close_reason = loop {
+    let close_reason = 'recv: loop {
         if stop.load(Ordering::Acquire) {
             break None;
         }
@@ -280,82 +280,94 @@ async fn run(
             s.pipeline = hud.clone();
             drop(s);
         }
+        // Wakes early while a frame is incomplete: resends and the hold time run on timers.
         let datagram = tokio::select! {
-            d = session.conn.read_datagram() => d,
-            _ = tokio::time::sleep(Duration::from_millis(100)) => continue,
+            d = session.conn.read_datagram() => Some(d),
+            _ = tokio::time::sleep(reassembler.wake_after()) => None,
         };
-        let datagram = match datagram {
-            Ok(d) => d,
-            Err(e) => break Some(e.to_string()),
-        };
-        if !got_datagram {
-            got_datagram = true;
-            trace.ok(
-                ConnectStepId::FirstDatagram,
-                format!("{} byte datagram", datagram.len()),
-            );
-        }
-        if stream_updates.has_changed().unwrap_or(false) {
-            let info = stream_updates.borrow_and_update().clone();
-            let mut s = status.lock().unwrap_or_else(|e| e.into_inner());
-            s.cursor_mode = Some(info.cursor);
-            s.stream = Some(info);
-        }
-        if let Some(w) = link_window.tick(reassembler.link_stats(), now_us()) {
-            let delay = reassembler.take_delay();
-            link_window.hud.queue = delay;
-            session.report_link(&w, delay);
-            status.lock().unwrap_or_else(|e| e.into_inner()).link = link_window.hud;
-        }
-        if session.handle_pointer_datagram(&datagram) {
-            repaint();
-            continue;
-        }
-        let Some((frame, event)) = reassembler.push(datagram, now_us()) else {
-            continue;
-        };
-        PipelineCounters::add(&counters.received, 1);
-        window.1 += 1;
-        window.2 += frame.data.len() as u64;
-        if window.0.elapsed() >= Duration::from_secs(1) {
-            let secs = window.0.elapsed().as_secs_f64();
-            let mut s = status.lock().unwrap_or_else(|e| e.into_inner());
-            s.fps = window.1 as f64 / secs;
-            s.mbps = window.2 as f64 * 8.0 / secs / 1e6;
-            s.lost = lost;
-            window = (Instant::now(), 0, 0);
-        }
-        if event.lost_frames > 0 {
-            lost += event.lost_frames as u64;
-            if !self_healing {
-                need_keyframe.store(true, Ordering::Release);
+        let mut ready = Vec::new();
+        if let Some(datagram) = datagram {
+            let datagram = match datagram {
+                Ok(d) => d,
+                Err(e) => break Some(e.to_string()),
+            };
+            if !got_datagram {
+                got_datagram = true;
+                trace.ok(
+                    ConnectStepId::FirstDatagram,
+                    format!("{} byte datagram", datagram.len()),
+                );
             }
-        }
-        if need_keyframe.load(Ordering::Acquire) {
-            if !frame.keyframe {
-                PipelineCounters::add(&counters.skipped_waiting_key, 1);
-                if last_request.elapsed() > Duration::from_millis(100) {
-                    session.request_keyframe("recovering from loss");
-                    PipelineCounters::add(&counters.key_requests, 1);
-                    last_request = Instant::now();
-                }
+            if stream_updates.has_changed().unwrap_or(false) {
+                let info = stream_updates.borrow_and_update().clone();
+                let mut s = status.lock().unwrap_or_else(|e| e.into_inner());
+                s.cursor_mode = Some(info.cursor);
+                s.stream = Some(info);
+            }
+            if let Some(w) = link_window.tick(reassembler.link_stats(), now_us()) {
+                let delay = reassembler.take_delay();
+                link_window.hud.queue = delay;
+                link_window.hud.resent = reassembler.nack_stats().resent_useful;
+                session.report_link(&w, delay);
+                reassembler.set_rtt_us(session.conn.rtt().as_micros().min(u64::MAX as u128) as u64);
+                status.lock().unwrap_or_else(|e| e.into_inner()).link = link_window.hud;
+            }
+            if session.handle_pointer_datagram(&datagram) {
+                repaint();
                 continue;
             }
-            need_keyframe.store(false, Ordering::Release);
+            ready.extend(reassembler.push(datagram, now_us()));
         }
-        match decode_tx.try_send(frame) {
-            Ok(()) => {}
-            Err(TrySendError::Full(_)) => {
-                while decode_flush.try_recv().is_ok() {}
-                PipelineCounters::add(&counters.backlog_flushes, 1);
-                need_keyframe.store(true, Ordering::Release);
-                if last_request.elapsed() > Duration::from_millis(100) {
-                    session.request_keyframe("decoder backlog");
-                    PipelineCounters::add(&counters.key_requests, 1);
-                    last_request = Instant::now();
+        let now = now_us();
+        while let Some(x) = reassembler.poll(now) {
+            ready.push(x);
+        }
+        if let Some(nack) = reassembler.take_nacks(now) {
+            session.send_nack(&nack);
+        }
+        for (frame, event) in ready {
+            PipelineCounters::add(&counters.received, 1);
+            window.1 += 1;
+            window.2 += frame.data.len() as u64;
+            if window.0.elapsed() >= Duration::from_secs(1) {
+                let secs = window.0.elapsed().as_secs_f64();
+                let mut s = status.lock().unwrap_or_else(|e| e.into_inner());
+                s.fps = window.1 as f64 / secs;
+                s.mbps = window.2 as f64 * 8.0 / secs / 1e6;
+                s.lost = lost;
+                window = (Instant::now(), 0, 0);
+            }
+            if event.lost_frames > 0 {
+                lost += event.lost_frames as u64;
+                if !self_healing {
+                    need_keyframe.store(true, Ordering::Release);
                 }
             }
-            Err(TrySendError::Disconnected(_)) => break Some("decoder stopped".into()),
+            if need_keyframe.load(Ordering::Acquire) {
+                if !frame.keyframe {
+                    PipelineCounters::add(&counters.skipped_waiting_key, 1);
+                    if backoff.should_request(now_us()) {
+                        session.request_keyframe("recovering from loss");
+                        PipelineCounters::add(&counters.key_requests, 1);
+                    }
+                    continue;
+                }
+                need_keyframe.store(false, Ordering::Release);
+                backoff.reset();
+            }
+            match decode_tx.try_send(frame) {
+                Ok(()) => {}
+                Err(TrySendError::Full(_)) => {
+                    while decode_flush.try_recv().is_ok() {}
+                    PipelineCounters::add(&counters.backlog_flushes, 1);
+                    need_keyframe.store(true, Ordering::Release);
+                    if backoff.should_request(now_us()) {
+                        session.request_keyframe("decoder backlog");
+                        PipelineCounters::add(&counters.key_requests, 1);
+                    }
+                }
+                Err(TrySendError::Disconnected(_)) => break 'recv Some("decoder stopped".into()),
+            }
         }
     };
     session.close();

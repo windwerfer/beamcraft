@@ -91,6 +91,7 @@ impl ViewerSession {
                 *addr,
                 trace,
                 handshake_timeout,
+                PROTOCOL_VERSION,
             )
             .await
             {
@@ -125,6 +126,12 @@ impl ViewerSession {
         let _ = self.control.send(Control::RequestKeyframe {
             reason: reason.to_owned(),
         });
+    }
+
+    /// Asks the presenter to send fragments again. A lost or refused NACK costs nothing: the
+    /// caller asks again after a round trip, and gives up to a keyframe request in the end.
+    pub fn send_nack(&self, nack: &mirrorwire_proto::nack::Nack) {
+        let _ = self.conn.send_datagram(bytes::Bytes::from(nack.encode()));
     }
 
     /// If `datagram` is a pointer update, apply it and return true (the
@@ -173,13 +180,16 @@ impl ViewerSession {
     }
 }
 
-async fn connect_one(
+/// One connection attempt. `protocol` is what the `hello` claims (always [`PROTOCOL_VERSION`]
+/// outside tests, which use another one to check the presenter's rejection).
+pub(super) async fn connect_one(
     identity: &Identity,
     target: &ConnectInfo,
     viewer_name: &str,
     addr: SocketAddr,
     trace: &ConnectTrace,
     handshake_timeout: Duration,
+    protocol: u32,
 ) -> Result<ViewerSession> {
     let tls = tls::client_config(identity, &target.fingerprint)?;
     let mut client = quinn::ClientConfig::new(Arc::new(QuicClientConfig::try_from(tls)?));
@@ -255,7 +265,7 @@ async fn connect_one(
     write_msg(
         &mut send,
         &Control::Hello {
-            protocol: PROTOCOL_VERSION,
+            protocol,
             name: viewer_name.to_owned(),
             pairing_code: target.pairing_code.clone(),
         },

@@ -181,8 +181,9 @@ target), **planned**, **idea**. Update this file when an item moves.
       VAAPI behind a 20–50 ms buffer freezes 6–16 % of the time; deep buffers and x264 are fine.
    7. Small fixes: `lan_cc.rs` window never grows back after persistent congestion; the UI should
       say CQP/ICQ ignore adaptive bitrate.
-   Alongside: fuzz the proto parsers (fragment, fec, cursor, control) and remove the panicking
-   index/unwrap sites in proto/net, since hostile or corrupt packets must never crash a stream.
+   Alongside (**done 2026-11-17**): the proto parsers (fragment, cursor, control, NACK, URI) are
+   covered by deterministic hostile-input tests (no cargo-fuzz, see decisions.md) and the
+   panicking index/unwrap sites in proto/net are gone, enforced by a crate-level `deny`.
    **Ideas from Glass (owner, 2026-11-16; no code yet).** Glass
    (https://github.com/Ntarasiuk/glass, MIT, reviewed at 4ba9757 / v0.15.0) is a browser-first
    remote desktop over Tailscale with the same video core as ours (H.264, QUIC datagrams, no
@@ -191,14 +192,19 @@ target), **planned**, **idea**. Update this file when an item moves.
    encryption and sudo for uinput. Worth adopting, by re-implementing in our code (their code is
    bound to their protocol and JS client; if a small piece is copied, keep their MIT notice and
    note it in decisions.md):
-   - **NACK resend of lost fragments** (`crates/glass-host/src/retransmit.rs`, viewer side in
+   - **NACK resend of lost fragments (done 2026-11-17, protocol 4, protocol.md §3d; loopback
+     3 % loss over 20 s: 2 → 0 unrecoverable frames, 2 → 0 keyframe requests; 10 %: 10 → 0 lost
+     frames, 12 → 0 requests; not yet on real Wi-Fi).** Original note
+     (`crates/glass-host/src/retransmit.rs`, viewer side in
      `web/video-stream.js`): the viewer asks for missing fragments of a frame before giving up,
      the presenter keeps a short send window (Glass: 3 s / 8 MiB, repair budget 128 KiB/s).
      Complements FEC, mainly for large IDRs; ask for a keyframe only if the resend misses its
      deadline (~1 RTT). Needs a protocol bump. Fits item 0 between 3 and 5.
-   - **Keyframe request backoff** 250 ms doubling to 1 s, and keep acking frames while waiting
+   - **Keyframe request backoff (done 2026-11-17)** 250 ms doubling to 1 s, and keep acking frames while waiting
      for a keyframe so the wait is not read as queueing (`web/video-stream.js`). Extends the
-     current one-per-2×RTT limit.
+     current one-per-2×RTT limit. Here: `KeyframeBackoff` in the viewer loops, gate 250 ms–1 s on
+     the presenter, no forced IDR right after an IDR; "acking" = frames that arrive while
+     waiting still count in `link_report` (there is no per-frame ack message).
    - **Frame integrity check before decode** (Glass: Fletcher-16 over the reassembled frame in
      `glass-proto`). QUIC already authenticates each packet, so this only catches our own
      reassembly/FEC bugs; cheap, never feed a mismatching frame to the decoder. Low priority.
@@ -216,14 +222,16 @@ target), **planned**, **idea**. Update this file when an item moves.
 
 0b. **Structure improvements (owner, 2026-11-14): after item 0, before widening the scope**
    (bottleneck line, Extend mode, phone input, Mac presenter). Borrowed from PhotoCraft:
-   1. **Lints enforced by tooling:** `[workspace.lints]` plus `clippy.toml` (unwrap/expect/panic
+   1. **Lints enforced by tooling** (proto/net `deny(unwrap_used, expect_used, indexing_slicing,
+      panic)` outside tests done 2026-11-17; the rest open): `[workspace.lints]` plus `clippy.toml` (unwrap/expect/panic
       allowed in tests only); `#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic,
       clippy::indexing_slicing)]` in proto and net; `forbid(unsafe_code)` everywhere except media
       and the glow renderer; `clippy::undocumented_unsafe_blocks` with a `// SAFETY:` comment on
       all remaining unsafe sites; first try to remove the `unsafe` in
       app/applog.rs and portal.rs (net/diag.rs is done: tz-rs, net forbids unsafe) via safe APIs (D15); lock poisoning via `unwrap_or_else(PoisonError::into_inner)`. ~1 day.
    2. **cargo-fuzz targets** for fragment, fec, cursor and control decode, plus a CI job (if not
-      already done alongside item 0). ~½ day.
+      already done alongside item 0). ~½ day. Replaced 2026-11-17 by `cargo test` hostile-input
+      tests (decisions.md); cargo-fuzz stays open until a nightly CI job exists.
    3. **A `cargo xtask ci` gate** (the formatting-only commit and the CI fmt check are done,
       rustfmt defaults, no `rustfmt.toml`): fmt, clippy, tests, a crate-layer check
       (architecture.md made mechanical), loopback test.

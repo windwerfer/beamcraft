@@ -79,7 +79,7 @@ pub fn ms(later_us: u64, earlier_us: u64) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::diag::no_answer_message;
+    use crate::diag::{no_answer_message, ConnectTrace};
     use crate::identity::Identity;
     use crate::pairing::ConnectInfo;
     use bytes::Bytes;
@@ -332,6 +332,142 @@ mod tests {
         })
         .await
         .expect("stream_info update");
+        viewer.close();
+        presenter.close();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    fn test_presenter(dir: &std::path::Path, fec: FecMode) -> (Presenter, Identity) {
+        std::fs::create_dir_all(dir).unwrap();
+        let id = Identity::generate().unwrap();
+        let p = Presenter::start(
+            &id,
+            PresenterConfig {
+                bind: "127.0.0.1:0".parse().unwrap(),
+                stream_info: StreamInfo {
+                    width: 64,
+                    height: 64,
+                    fps: 60,
+                    codec: "h264".into(),
+                    encoder: "test".into(),
+                    bitrate_kbps: 1,
+                    intra_refresh: false,
+                    cursor: CursorMode::Embedded,
+                    fec: String::new(),
+                },
+                pairing_code: None,
+                config_dir: dir.to_path_buf(),
+                attempts: Default::default(),
+                cursor_events: None,
+                fec: LinkControl::new(fec),
+            },
+            Arc::new(|| {}),
+        )
+        .unwrap();
+        (p, id)
+    }
+
+    fn target_of(p: &Presenter, id: &Identity) -> ConnectInfo {
+        ConnectInfo {
+            addr: p.local_addr,
+            addrs: Vec::new(),
+            fingerprint: id.fingerprint(),
+            pairing_code: None,
+            name: None,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn a_viewer_of_another_protocol_gets_a_readable_rejection() {
+        let dir = std::env::temp_dir().join(format!("mirrorwire-proto-{}", std::process::id()));
+        let (presenter, id) = test_presenter(&dir, FecMode::Off);
+        for other in [PROTOCOL_VERSION - 1, PROTOCOL_VERSION + 1] {
+            let err = viewer::connect_one(
+                &Identity::generate().unwrap(),
+                &target_of(&presenter, &id),
+                "old",
+                presenter.local_addr,
+                &ConnectTrace::new(),
+                Duration::from_secs(5),
+                other,
+            )
+            .await
+            .err()
+            .expect("rejected")
+            .to_string();
+            assert!(err.contains("version mismatch"), "{err}");
+            assert!(err.contains("update the"), "{err}");
+        }
+        presenter.close();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn nack_makes_the_presenter_resend_a_lost_fragment() {
+        let dir = std::env::temp_dir().join(format!("mirrorwire-nack-{}", std::process::id()));
+        let (presenter, id) = test_presenter(&dir, FecMode::Off);
+        let viewer = ViewerSession::connect(
+            &Identity::generate().unwrap(),
+            &target_of(&presenter, &id),
+            "t",
+        )
+        .await
+        .unwrap();
+        let payload = Bytes::from((0..30_000u32).map(|i| (i % 251) as u8).collect::<Vec<u8>>());
+        presenter
+            .frames
+            .send(OutgoingFrame {
+                frame_id: 1,
+                keyframe: true,
+                data: payload.clone(),
+                capture_us: 1,
+                encoded_us: 2,
+            })
+            .await
+            .unwrap();
+        let mut r = mirrorwire_proto::fragment::Reassembler::new(u64::MAX);
+        let (mut seen, mut nacked) = (0, false);
+        let started = Instant::now();
+        let frame = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let d = match tokio::time::timeout(
+                    Duration::from_millis(5),
+                    viewer.conn.read_datagram(),
+                )
+                .await
+                {
+                    Ok(d) => Some(d.unwrap()),
+                    Err(_) => None,
+                };
+                let now = started.elapsed().as_micros() as u64;
+                if let Some(d) = d {
+                    seen += 1;
+                    if seen == 3 {
+                        continue; // lost on the wire; no parity (FEC off)
+                    }
+                    if let Some((f, _)) = r.push(d, now) {
+                        return f;
+                    }
+                }
+                if let Some((f, _)) = r.poll(now) {
+                    return f;
+                }
+                if let Some(n) = r.take_nacks(now) {
+                    nacked = true;
+                    viewer.send_nack(&n);
+                }
+            }
+        })
+        .await
+        .expect("frame completed by a resend");
+        assert!(nacked);
+        assert_eq!(frame.data, payload);
+        let s = r.nack_stats();
+        assert_eq!(
+            (s.resent_received >= 1, s.resent_useful),
+            (true, 1),
+            "{s:?}"
+        );
         viewer.close();
         presenter.close();
         std::fs::remove_dir_all(&dir).ok();

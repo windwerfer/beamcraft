@@ -31,7 +31,7 @@ followed by a JSON body (`serde`, `tag = "type"`, `snake_case`). Bodies over
 
 | `type` | Direction | Fields |
 |---|---|---|
-| `hello` | viewer → presenter | `protocol` (u32, must equal `PROTOCOL_VERSION`, currently **3**; read first, §4), `name`, `pairing_code` (string or null) |
+| `hello` | viewer → presenter | `protocol` (u32, must equal `PROTOCOL_VERSION`, currently **4**; read first, §4), `name`, `pairing_code` (string or null) |
 | `rejected` | presenter → viewer | `reason` (shown to the user) |
 | `stream_info` | presenter → viewer | `width`, `height`, `fps`, `codec`, `encoder`, `bitrate_kbps`, `intra_refresh`, `cursor` (`separate` = §3a, `embedded` = in the video, `hidden`), `fec` (the presenter's FEC setting `off`/`auto`/`20%`, for display). Sent after `hello`, and **again** whenever it changes |
 | `request_keyframe` | viewer → presenter | `reason`. The presenter forces at most one keyframe per 2 × RTT (250 ms–1 s) per viewer and ignores requests in between. The viewer asks at once, then backs off 250 ms, 500 ms, 1 s, 1 s … until a keyframe arrives (`KeyframeBackoff`), so a lost keyframe is still replaced without a request storm; frames that arrive while it waits are still counted in `link_report`. The encoder drops a request that arrives when the previous frame sent was already an IDR (`Controls::take_keyframe_request`: no forced IDR directly after an IDR) |
@@ -54,7 +54,7 @@ else). Every packet starts with a **44-byte big-endian header** (`HEADER_LEN`):
 | Offset | Size | Field |
 |---|---|---|
 | 0 | 1 | wire version (`WIRE_VERSION` = 2); other values are dropped |
-| 1 | 1 | flags: bit 0 = keyframe; other bits reserved, send 0 |
+| 1 | 1 | flags: bit 0 = keyframe; bit 1 = resent (a retransmission after a NACK, §3d); other bits reserved, send 0 |
 | 2 | 4 | `frame_id` (u32, increments per frame) |
 | 6 | 2 | `index`: `0..data_count` data, then `data_count..data_count+parity_count` parity |
 | 8 | 2 | `data_count` (≥ 1) |
@@ -70,8 +70,9 @@ else). Every packet starts with a **44-byte big-endian header** (`HEADER_LEN`):
 Receivers drop packets whose header is inconsistent (zero blocks, `frame_len` not matching the
 counts, payload length not what the index implies) or whose layout differs from the first packet
 seen for that frame, and keep at most 64 partial frames. The receiver reassembles by
-`frame_id`, drops incomplete frames that are overtaken, reports the loss, and asks for a
-keyframe unless the stream uses intra refresh.
+`frame_id` and delivers in order; an incomplete frame is first asked for again (§3d), and when
+that fails it is dropped, reported as lost, and the viewer asks for a keyframe unless the
+stream uses intra refresh.
 
 The header costs 10 bytes more per packet than the old version-1 fragments (34 bytes), about
 0.7 % of a 1400-byte packet, in exchange for a single receive path.
@@ -172,6 +173,38 @@ clock step and restarts the baseline; clock drift (ppm) is absorbed by the 30 s 
 `link_report` window: mean and max of the frames' queueing delay, and the least-squares slope over
 arrival time (µs per s). The viewer overlay shows it as `queue N ms (max N, +N ms/s)`. No wire
 change for video packets; `sent_us` was always there.
+
+## 3d. Retransmission on NACK (`mirrorwire-proto/src/nack.rs`, protocol 4)
+
+FEC (§3b) covers random loss at once; what it cannot rebuild is asked for again.
+
+**Receiver** (`Reassembler::take_nacks`). A frame is *settled* when a newer frame has started,
+its last packet (the final parity shard) arrived, or it has been quiet for 15 ms (lost tail on
+a static screen). For a settled, incomplete frame the viewer asks, per unfinished FEC block, for
+as many missing **data** shards as the block still lacks (parity that arrived counts), so the
+fewest packets that complete it. A frame of which nothing arrived is asked for whole. Each fragment is asked for again
+after RTT + 2 ms, three rounds at most. Frames are still delivered strictly in order: an
+incomplete frame holds the newer ones back for `hold_us` = 2 × RTT + 4 ms (6–100 ms); only
+when that expires is the frame **lost** (`unrecoverable`, and the viewer asks for a keyframe,
+§2). So a keyframe is requested only if the resend missed about one round trip. Resent packets
+are not counted in `link_report` loss or in the queueing-delay measurement (they are not first
+transmissions); the HUD shows `resent N`.
+
+**NACK datagram** (viewer → presenter, unreliable, at most 1000 bytes, big endian):
+`0xC2`, version `1`, `n` (u8, 1..=255 entries), then per entry `frame_id` u32, `count` u8
+(0 = the whole frame, i.e. every data shard), `count` × packet index u16. Anything else
+(other length, trailing bytes, zero entries) is dropped.
+
+**Sender** (`ResendWindow`). The presenter keeps the packets of every frame it sent for 3 s,
+at most 8 MiB, and clears them when a viewer connects. A NACK is answered with copies of the
+asked packets, flag bit 1 set, otherwise byte for byte the original (the original timestamps
+stay). Resends have their own budget of 128 KiB/s (token bucket, burst 64 KiB); what does not
+fit, and frames already out of the window, are counted (`resent X of Y asked (…over budget…)`
+in the presenter log) and left to the viewer's keyframe request. A frame the presenter never
+sent (dropped for backlog) is simply unknown to it.
+
+Why datagrams and not the control stream: a NACK that is itself lost is repeated by the
+receiver after a round trip anyway, and a datagram does not queue behind control traffic.
 
 ## 4. Versioning rules
 

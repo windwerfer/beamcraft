@@ -13,6 +13,7 @@ use mirrorwire_proto::control::{hello_protocol, Control, StreamInfo};
 use mirrorwire_proto::cursor::{CursorEvent, CursorImage, PointerUpdate};
 use mirrorwire_proto::fec::FecMode;
 use mirrorwire_proto::fragment::{fragment, FrameTiming, PacketHeader};
+use mirrorwire_proto::nack::{Nack, ResendWindow};
 use mirrorwire_proto::rate::pace_spread_us;
 use mirrorwire_proto::stats::StageStats;
 use mirrorwire_proto::PROTOCOL_VERSION;
@@ -125,11 +126,13 @@ impl Presenter {
         info.fec = cfg.fec.snapshot().mode.as_string();
         let stream_info = Arc::new(watch::channel(info).0);
 
+        let resend = Arc::new(Mutex::new(ResendWindow::default()));
         tokio::spawn(send_loop(
             frames_rx,
             current_rx.clone(),
             on_keyframe_request.clone(),
             cfg.fec.clone(),
+            resend.clone(),
         ));
         if let Some(cursor_rx) = cfg.cursor_events {
             tokio::spawn(cursor_loop(cursor_rx, current_rx));
@@ -144,6 +147,7 @@ impl Presenter {
             on_keyframe_request,
             attempts: cfg.attempts,
             fec: cfg.fec.clone(),
+            resend,
         });
         let ep = endpoint.clone();
         tokio::spawn(async move {
@@ -197,6 +201,8 @@ struct SessionShared {
     on_keyframe_request: Callback,
     attempts: Arc<Mutex<Vec<IncomingAttempt>>>,
     fec: Arc<LinkControl>,
+    /// Recently sent video packets, for NACK resends.
+    resend: Arc<Mutex<ResendWindow>>,
 }
 
 async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) -> Result<()> {
@@ -317,7 +323,15 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
         old.conn.close(1u32.into(), b"replaced by another viewer");
     }
     shared.connected.send_replace(true);
+    shared
+        .resend
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
     (shared.on_keyframe_request)();
+
+    // The viewer's only datagrams are NACKs: answer them from the resend window.
+    let nack_reader = tokio::spawn(answer_nacks(conn.clone(), shared.resend.clone()));
 
     // One writer owns the send half: pongs from the reader below, and a
     // fresh stream_info whenever the presenter changes it.
@@ -393,6 +407,7 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
     }
     .await;
     writer.abort();
+    nack_reader.abort();
 
     shared.current.send_if_modified(|cur| {
         if cur
@@ -411,6 +426,24 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
     shared.fec.viewer_left(&peer);
     tracing::info!("viewer {name} disconnected");
     result
+}
+
+/// Resends the fragments a viewer asks for (`Nack` datagrams), within the resend budget.
+async fn answer_nacks(conn: Connection, resend: Arc<Mutex<ResendWindow>>) {
+    while let Ok(datagram) = conn.read_datagram().await {
+        let Some(nack) = Nack::decode(&datagram) else {
+            continue; // malformed or not a NACK: dropped
+        };
+        let packets = resend
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .resend(&nack, now_us());
+        for p in packets {
+            if conn.send_datagram(p).is_err() {
+                break;
+            }
+        }
+    }
 }
 
 /// Forwards cursor changes to the current viewer: positions as datagrams
@@ -491,6 +524,7 @@ async fn send_loop(
     current: watch::Receiver<Option<ActiveViewer>>,
     on_keyframe_request: Callback,
     fec: Arc<LinkControl>,
+    resend: Arc<Mutex<ResendWindow>>,
 ) {
     let mut stats = StageStats::new(&["capture_to_encoded", "encoded_to_sent", "send"]);
     let mut window_start = Instant::now();
@@ -554,6 +588,10 @@ async fn send_loop(
             continue;
         }
         let wire_len: usize = packets.iter().map(|p| p.len()).sum();
+        let data_count = packets
+            .first()
+            .and_then(|p| PacketHeader::parse(p))
+            .map_or(0, |(h, _)| h.data_count as usize);
         if should_drop_for_backlog(frame.keyframe, wire_len, conn.datagram_send_buffer_space()) {
             // The network is behind (big scene change on Wi-Fi). Sending this
             // frame would only add latency; the viewer recovers with the
@@ -575,6 +613,12 @@ async fn send_loop(
         // overflows a shallow bottleneck buffer. Other frames go out as one
         // burst (parity last) at QUIC's 500 Mbit/s pacing; send_datagram
         // queues immediately and only waits when the send buffer is full.
+        resend.lock().unwrap_or_else(|e| e.into_inner()).insert(
+            frame.frame_id,
+            data_count,
+            packets.clone(),
+            sent_us,
+        );
         let behind = paced_done_us.is_some_and(|d| frame.encoded_us < d);
         let spread_us = pace_spread_us(wire_len, fec.video_budget_kbps(), frame.keyframe, behind);
         let pace_start = tokio::time::Instant::now();
@@ -640,7 +684,7 @@ async fn send_loop(
             );
             quic_prev = (conn.stable_id(), path.sent_packets, path.lost_packets);
             tracing::info!(
-                "presenter: {:.1} fps, {:.2} Mbit/s, {} keyframes, {} paced, {} dropped for backlog, mtu {}, quic lost {} of {} packets, cwnd {} KiB, {}, ms mean/p95/max:{}",
+                "presenter: {:.1} fps, {:.2} Mbit/s, {} keyframes, {} paced, {} dropped for backlog, mtu {}, quic lost {} of {} packets, cwnd {} KiB, {}, {}, ms mean/p95/max:{}",
                 window_frames as f64 / secs,
                 window_bytes as f64 * 8.0 / secs / 1e6,
                 window_keyframes,
@@ -651,6 +695,7 @@ async fn send_loop(
                 quic_sent,
                 path.cwnd / 1024,
                 fec_summary(&fec.snapshot(), window_parity, window_packets),
+                resend_summary(&resend),
                 stats.report()
             );
             fec.on_send_window(
@@ -667,6 +712,15 @@ async fn send_loop(
             (window_frames, window_bytes, window_keyframes) = (0, 0, 0);
         }
     }
+}
+
+/// `resent 12 of 15 asked (3 over budget)`, cumulative since the presenter started.
+fn resend_summary(resend: &Mutex<ResendWindow>) -> String {
+    let s = resend.lock().unwrap_or_else(|e| e.into_inner()).stats;
+    format!(
+        "resent {} of {} asked ({} over budget, {} unknown)",
+        s.resent, s.requested, s.over_budget, s.unknown
+    )
 }
 
 fn fec_summary(s: &LinkState, parity: usize, packets: usize) -> String {
