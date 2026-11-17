@@ -198,13 +198,14 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # The image's preinstalled runtimes live in an overlay lower layer; updating or removing
-      # them fails with "Invalid cross-device link" and flatpak-builder then segfaults. Hide them
-      # behind an empty bind mount so everything is installed fresh into one writable layer.
-      - name: Use an empty Flatpak system installation
+      # them through flatpak fails with "Invalid cross-device link" and flatpak-builder then
+      # segfaults. Plain file deletion works on overlayfs, so wipe the system installation and
+      # let flatpak-builder install everything fresh into the writable layer.
+      - name: Start from an empty Flatpak system installation
         run: |
-          mkdir -p /tmp/flatpak-system
-          mount --bind /tmp/flatpak-system /var/lib/flatpak
+          rm -rf /var/lib/flatpak/* /var/lib/flatpak/.[!.]* 2>/dev/null || true
           flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak list --system
       - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6.8
         with:
           bundle: MirrorWire-x86_64.flatpak
