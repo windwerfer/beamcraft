@@ -113,6 +113,27 @@ pub struct Encoder {
 // through `&mut self`; it is not `Sync`, so no two threads use them at once.
 unsafe impl Send for Encoder {}
 
+/// Readable text for "no H.264 encoder could be opened": every backend's reason, plus how to
+/// get one. Shown in the GUI, so it names the fix instead of only an FFmpeg error.
+fn no_encoder_message(failures: &[(EncoderBackend, String)]) -> String {
+    let mut msg = String::from("No H.264 encoder could be started.");
+    for (backend, why) in failures {
+        msg.push_str(&format!(" {backend:?}: {why}."));
+    }
+    let x264_missing = failures
+        .iter()
+        .any(|(b, w)| *b == EncoderBackend::X264 && w.contains("not built into this FFmpeg"));
+    if x264_missing && cfg!(target_os = "linux") {
+        msg.push_str(
+            " This FFmpeg has no libx264 (Fedora's ffmpeg-free lacks it). Install the full \
+             FFmpeg: enable RPM Fusion and run `sudo dnf swap ffmpeg-free ffmpeg --allowerasing`, \
+             or on Debian/Ubuntu `sudo apt install ffmpeg`; in Flatpak install the \
+             org.freedesktop.Platform.ffmpeg-full extension. A working VA-API driver also works.",
+        );
+    }
+    msg
+}
+
 impl Encoder {
     pub fn new(config: EncoderConfig) -> Result<Self> {
         if config.width == 0 || config.height == 0 {
@@ -128,17 +149,17 @@ impl Encoder {
             EncoderBackend::VideoToolbox => &[EncoderBackend::VideoToolbox],
             EncoderBackend::Filmcraft => &[EncoderBackend::Filmcraft],
         };
-        let mut last_err = anyhow!("no encoder backend tried");
+        let mut failures: Vec<(EncoderBackend, String)> = Vec::new();
         for &backend in order {
             match Self::open(&config, backend) {
                 Ok(enc) => return Ok(enc),
                 Err(e) => {
                     tracing::warn!("encoder {backend:?} unavailable: {e:#}");
-                    last_err = e;
+                    failures.push((backend, format!("{e:#}")));
                 }
             }
         }
-        Err(last_err)
+        Err(anyhow!(no_encoder_message(&failures)))
     }
 
     pub fn name(&self) -> &'static str {
@@ -1029,5 +1050,32 @@ mod tests {
         assert_eq!(DEFAULT_BITRATE_KBPS, 40_000);
         assert_eq!(EncoderConfig::default().bitrate_kbps, 40_000);
         assert_eq!(EncoderConfig::default().width, 0);
+    }
+}
+
+#[cfg(test)]
+mod no_encoder_tests {
+    use super::*;
+
+    #[test]
+    fn message_lists_every_backend_and_the_fix() {
+        let m = no_encoder_message(&[
+            (EncoderBackend::Vaapi, "no VA-API device".into()),
+            (
+                EncoderBackend::X264,
+                "libx264 not built into this FFmpeg".into(),
+            ),
+        ]);
+        assert!(m.contains("Vaapi: no VA-API device"));
+        assert!(m.contains("X264: libx264 not built"));
+        if cfg!(target_os = "linux") {
+            assert!(m.contains("dnf swap ffmpeg-free"));
+        }
+    }
+
+    #[test]
+    fn other_failures_get_no_install_hint() {
+        let m = no_encoder_message(&[(EncoderBackend::X264, "out of memory".into())]);
+        assert!(!m.contains("dnf"));
     }
 }

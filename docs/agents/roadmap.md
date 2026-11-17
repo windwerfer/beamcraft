@@ -278,7 +278,7 @@ target), **planned**, **idea**. Update this file when an item moves.
    the T480s (photos of the presenter status with each encoder), a real force-IDR / intra
    refresh upstream instead of re-creating the encoder, and switching back to DMA-BUF capture
    when the user returns to VAAPI without restarting.
-4. **Optional system FFmpeg:** ship without x264 and use an installed FFmpeg for VAAPI when the
+4. **Optional system FFmpeg (owner decision 2026-11-17, D8; runtime part done: Auto falls back VA-API -> x264, a total failure shows a message with the install command; packaging switch NOT done: Flatpak still builds x264/FFmpeg, AppImage/CI build.yml still link the static build):** ship without x264 and use an installed FFmpeg for VAAPI when the
    user wants it (Flatpak: `org.freedesktop.Platform.ffmpeg-full` extension). Would make Linux
    builds GPL-free (D8).
 5. **Bottleneck diagnosis line (viewer HUD half done 2026-11-17: `bottleneck.rs`, classifier + 3-window hysteresis, unit-tested, shown on the HUD from loss, queue delay, decode time, source fps and encoder; thresholds in architecture.md. Presenter status line done 2026-11-17 (`bottleneck` control message, protocol 7; both viewers send it; Android since 2026-11-17, classifier moved to `mirrorwire-proto/src/bottleneck.rs`, untested on a device, no hint line on the Android HUD). Open: render stage; hw/sw encoder hint needs real hardware):** a "Bottleneck: <stage> – <reason> + hint" line on
