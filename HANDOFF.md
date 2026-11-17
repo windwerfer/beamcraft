@@ -1,20 +1,22 @@
 # HANDOFF
 
 ## Goal
-Roadmap item 6, testable part: Mirror/Extend capture mode.
+Roadmap item 4 (system FFmpeg, owner decision in answers.md), runtime part.
 
 ## Done
-- `CaptureMode` (media/source/mod.rs); portal picks MONITOR or VIRTUAL via `pick_source_type` (falls back to Mirror with a note when VIRTUAL is not offered); one restore token per mode. Plumbing: `--mode`, `MIRRORWIRE_MODE`, settings.json `mode`, Mode box in the Quality panel (re-opens capture). Unit tests for pick, precedence, restart, settings roundtrip.
-- Gates: `cargo xtask ci`, app --all-features clippy, Android clippy (cargo ndk, as CI). Not run on a real portal or a device.
+- `no_encoder_message` (media/encode/mod.rs): when no backend opens, the error lists every backend's reason and, for a libx264-less FFmpeg (Fedora ffmpeg-free), the install command. Auto already falls back VA-API -> x264. Unit-tested.
+- decisions.md D8 updated: no bundled FFmpeg/x264 on Linux; Flatpak uses the ffmpeg-full extension, AppImage links system FFmpeg.
+- Gates: cargo xtask ci, Android clippy (cargo ndk). Not run on an ffmpeg-free host.
 
 ## Decisions
-- decisions.md 2026-11-17 (extend mode): per-mode token, Mirror = MONITOR only. Rejected: shared token, viewer size in hello (protocol bump).
+- D8 (2026-11-17). Rejected: keep bundling x264 (GPL binaries).
 
 ## Open questions
 - Owner: SonarCloud switch (SONAR_CI_ANALYSIS) pending.
 - Owner: ASan CI job for media tests (needs nightly)?
-- Is 60 ms right for CI runners? Loopback p95 here ~18 ms; tighten after the first CI run.
-- Extend: should the viewer send its display size in hello (protocol 8)? Flatpak portal-version check for VIRTUAL untested.
+- 60 ms loopback budget for CI runners: tighten after first CI run.
+- Extend: viewer size in hello (protocol 8)? Flatpak portal-version check for VIRTUAL untested.
+- Item 4 packaging not done: Flatpak manifest still builds x264+FFmpeg; build.yml Linux job still builds static FFmpeg. Needs: drop x264/ffmpeg modules, add the ffmpeg-full extension, link system FFmpeg dynamically (no static-ffmpeg on Linux). Which FFmpeg majors ffmpeg-next 9 supports (7.x/8?) was not verified against distro packages on this box.
 
 ## Verify
 cargo xtask ci; gh run list --branch main --limit 3
@@ -23,4 +25,4 @@ cargo xtask ci; gh run list --branch main --limit 3
 see `git log -1`
 
 ## Next step
-Roadmap 4 (system FFmpeg). Optional: Android HUD line for the bottleneck hint; viewer size in hello for Extend.
+Item 4 packaging switch (Flatpak manifest, build.yml Linux job, AppImage dynamic link), or Android HUD bottleneck line / viewer size in hello for Extend.
