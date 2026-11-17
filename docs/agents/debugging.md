@@ -118,8 +118,8 @@ shown picture's arrival time; seconds there while the counters move means stale 
 - No share dialog: the portal backend (`xdg-desktop-portal-kde`) isn't running, or the restore
   token is stale; delete `portal_restore_token` in the config dir.
 - `vainfo | grep -i enc` must list H264 `VAEntrypointEncSlice`; on Fedora that needs RPM
-  Fusion's `intel-media-driver` for the native build. The Flatpak and AppImage bundle their own
-  the system FFmpeg (Flatpak: ffmpeg-full extension); the Flatpak gets its VAAPI driver from the freedesktop runtime's GL
+  Fusion's `intel-media-driver` for the native build. The Flatpak and AppImage bundle no FFmpeg:
+  the AppImage uses the system FFmpeg, the Flatpak the ffmpeg-full extension; the Flatpak gets its VAAPI driver from the freedesktop runtime's GL
   extension and the GPU through `--device=dri`, the AppImage uses the host's `libva` and driver.
 - Window system: the footer (and the viewer stats overlay) shows `Wayland (native)` or
   `X11 via XWayland`. Linux is Wayland-first (D13); XWayland means winit fell back, e.g.
