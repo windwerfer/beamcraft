@@ -331,7 +331,11 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
     (shared.on_keyframe_request)();
 
     // The viewer's only datagrams are NACKs: answer them from the resend window.
-    let nack_reader = tokio::spawn(answer_nacks(conn.clone(), shared.resend.clone()));
+    let nack_reader = tokio::spawn(answer_nacks(
+        conn.clone(),
+        shared.resend.clone(),
+        shared.fec.clone(),
+    ));
 
     // One writer owns the send half: pongs from the reader below, and a
     // fresh stream_info whenever the presenter changes it.
@@ -428,16 +432,19 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
     result
 }
 
-/// Resends the fragments a viewer asks for (`Nack` datagrams), within the resend budget.
-async fn answer_nacks(conn: Connection, resend: Arc<Mutex<ResendWindow>>) {
+/// Resends the fragments a viewer asks for (`Nack` datagrams), within the resend budget
+/// (15 % of the current ABR target, 128 KiB/s to 2 MiB/s).
+async fn answer_nacks(conn: Connection, resend: Arc<Mutex<ResendWindow>>, fec: Arc<LinkControl>) {
     while let Ok(datagram) = conn.read_datagram().await {
         let Some(nack) = Nack::decode(&datagram) else {
             continue; // malformed or not a NACK: dropped
         };
-        let packets = resend
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .resend(&nack, now_us());
+        let target_kbps = fec.budget_kbps();
+        let packets = {
+            let mut window = resend.lock().unwrap_or_else(|e| e.into_inner());
+            window.set_target_kbps(target_kbps);
+            window.resend(&nack, now_us())
+        };
         for p in packets {
             if conn.send_datagram(p).is_err() {
                 break;

@@ -114,11 +114,23 @@ pub fn is_nack_datagram(d: &[u8]) -> bool {
 pub const RESEND_WINDOW_US: u64 = 3_000_000;
 /// Upper bound on the memory of the window.
 pub const RESEND_WINDOW_BYTES: usize = 8 << 20;
-/// Sustained resend rate (bytes per second). Resends compete with video on the same link, so
-/// they are capped; what does not fit is left to the viewer's keyframe fallback.
+/// Lowest sustained resend rate (bytes per second), whatever the bitrate. Resends compete with
+/// video on the same link, so they are capped; what does not fit is left to the viewer's
+/// keyframe fallback.
 pub const RESEND_BUDGET_BPS: u64 = 128 * 1024;
-/// Largest burst of resends (the token bucket's size).
+/// Share of the current ABR target (total wire budget) that resends may use.
+pub const RESEND_SHARE: f64 = 0.15;
+/// Upper cap of the resend rate (bytes per second), however high the target.
+pub const RESEND_BUDGET_MAX_BPS: u64 = 2 * 1024 * 1024;
+/// Smallest burst of resends (the token bucket's size); it grows to half a second of the rate.
 pub const RESEND_BURST_BYTES: u64 = 64 * 1024;
+
+/// The resend rate (bytes per second) for an ABR target in kbit/s: [`RESEND_SHARE`] of it,
+/// within [`RESEND_BUDGET_BPS`]..=[`RESEND_BUDGET_MAX_BPS`].
+pub fn resend_rate_bps(target_kbps: u32) -> u64 {
+    let share = (target_kbps as f64 * 1000.0 / 8.0 * RESEND_SHARE) as u64;
+    share.clamp(RESEND_BUDGET_BPS, RESEND_BUDGET_MAX_BPS)
+}
 
 struct Stored {
     frame_id: u32,
@@ -146,6 +158,7 @@ pub struct ResendWindow {
     bytes: usize,
     tokens: f64,
     last_us: Option<u64>,
+    rate_bps: u64,
     pub stats: ResendStats,
 }
 
@@ -156,6 +169,7 @@ impl Default for ResendWindow {
             bytes: 0,
             tokens: RESEND_BURST_BYTES as f64,
             last_us: None,
+            rate_bps: RESEND_BUDGET_BPS,
             stats: ResendStats::default(),
         }
     }
@@ -204,12 +218,25 @@ impl ResendWindow {
         self.bytes
     }
 
+    /// Scales the resend budget to the current ABR target (kbit/s); see [`resend_rate_bps`].
+    pub fn set_target_kbps(&mut self, target_kbps: u32) {
+        self.rate_bps = resend_rate_bps(target_kbps);
+    }
+
+    /// The current sustained resend rate (bytes per second).
+    pub fn rate_bps(&self) -> u64 {
+        self.rate_bps
+    }
+
+    fn burst(&self) -> f64 {
+        (self.rate_bps / 2).max(RESEND_BURST_BYTES) as f64
+    }
+
     /// The packets to send for `nack`, marked as resent, as far as the budget allows.
     pub fn resend(&mut self, nack: &Nack, now_us: u64) -> Vec<Bytes> {
         let dt = now_us.saturating_sub(self.last_us.unwrap_or(now_us));
         self.last_us = Some(now_us);
-        self.tokens = (self.tokens + dt as f64 * RESEND_BUDGET_BPS as f64 / 1e6)
-            .min(RESEND_BURST_BYTES as f64);
+        self.tokens = (self.tokens + dt as f64 * self.rate_bps as f64 / 1e6).min(self.burst());
         let mut out = Vec::new();
         for e in &nack.entries {
             let Some(frame) = self.frames.iter().rev().find(|f| f.frame_id == e.frame_id) else {
@@ -354,6 +381,43 @@ mod tests {
         let small = w.resend(&nack(1, &[]), 1_100_000);
         let sent: usize = small.iter().map(Bytes::len).sum();
         assert!((10_000..=14_000).contains(&sent), "{sent}");
+    }
+
+    #[test]
+    fn rate_scales_with_target_within_limits() {
+        assert_eq!(resend_rate_bps(0), RESEND_BUDGET_BPS);
+        assert_eq!(resend_rate_bps(4_000), RESEND_BUDGET_BPS); // 75 kB/s < floor
+        assert_eq!(resend_rate_bps(20_000), 375_000); // 15 % of 2.5 MB/s
+        assert_eq!(resend_rate_bps(u32::MAX), RESEND_BUDGET_MAX_BPS);
+        let mut w = ResendWindow::default();
+        assert_eq!(w.rate_bps(), RESEND_BUDGET_BPS);
+        w.set_target_kbps(40_000);
+        assert_eq!(w.rate_bps(), 750_000);
+    }
+
+    #[test]
+    fn higher_target_resends_more_per_second() {
+        let pkts = fragment(1, false, T, &vec![1u8; 900_000], 1200, None);
+        let mut low = ResendWindow::default();
+        let mut high = ResendWindow::default();
+        high.set_target_kbps(40_000); // 750 kB/s, burst 375 kB
+        for w in [&mut low, &mut high] {
+            w.insert(1, pkts.len(), pkts.clone(), 0);
+        }
+        let sum = |v: Vec<Bytes>| v.iter().map(Bytes::len).sum::<usize>();
+        // Both start with the 64 KiB burst; after a second the high bucket refills to its
+        // larger burst (375 kB), the low one only to 64 KiB.
+        assert!(sum(low.resend(&nack(1, &[]), 0)) <= 64 * 1024);
+        assert!(sum(high.resend(&nack(1, &[]), 0)) <= 64 * 1024);
+        let l = sum(low.resend(&nack(1, &[]), 1_000_000));
+        let h = sum(high.resend(&nack(1, &[]), 1_000_000));
+        assert!(l <= 64 * 1024, "{l}");
+        assert!((350_000..=375_000).contains(&h), "{h}");
+        // 100 ms later: 75 kB due at the high rate, 12.8 kB at the floor.
+        let l = sum(low.resend(&nack(1, &[]), 1_100_000));
+        let h = sum(high.resend(&nack(1, &[]), 1_100_000));
+        assert!((10_000..=14_000).contains(&l), "{l}");
+        assert!((70_000..=76_000).contains(&h), "{h}");
     }
 
     #[test]
