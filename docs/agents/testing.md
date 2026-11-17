@@ -7,6 +7,7 @@ cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 scripts/loopback-test.sh 10 --encoder x264
+# or all of it at once (fmt, layer check, clippy, tests, loopback): cargo xtask ci
 cargo audit
 cargo deny --all-features --locked check advisories bans licenses sources
 ```

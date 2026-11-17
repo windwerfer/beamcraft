@@ -108,6 +108,9 @@ format changes, say what the user loses. See [decisions.md](docs/agents/decision
 
 ## 3. Gates before every push
 
+`cargo xtask ci` runs fmt, the crate-layer check, clippy, tests and the loopback in one go
+(audit and deny stay separate). The individual commands:
+
 ```sh
 cargo fmt --all                                    # rustfmt defaults (width 100); CI checks it
 cargo clippy --workspace --all-targets -- -D warnings
