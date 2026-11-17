@@ -37,6 +37,7 @@ impl CursorCapture {
 pub type CursorSink = Arc<dyn Fn(CursorEvent) + Send + Sync>;
 
 #[cfg(all(target_os = "linux", feature = "portal"))]
+#[allow(unsafe_code)]
 pub mod portal;
 pub mod testpattern;
 

@@ -15,6 +15,8 @@
 //! single thread returns each picture from the call that fed its access unit (the stream has
 //! no B-frames and signals `max_num_reorder_frames = 0`).
 
+#![forbid(unsafe_code)]
+
 use anyhow::{anyhow, Result};
 use craft_video::h264::decode::{Decoder, Picture};
 use std::panic::{catch_unwind, AssertUnwindSafe};

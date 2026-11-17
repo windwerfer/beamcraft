@@ -7,6 +7,9 @@
 //! platform `MediaCodec` (hardware first, FilmCraft's pure-Rust decoder from
 //! `mirrorwire-film` as the fallback).
 
+// `unsafe` only in gpu.rs (EGL/GL FFI, AGENTS.md rule 12).
+#![deny(unsafe_code)]
+
 pub mod codec_list;
 /// FilmCraft's software decoder; all of its API use lives in `mirrorwire-film`.
 pub use mirrorwire_film as film;
@@ -19,6 +22,7 @@ mod app;
 #[cfg(target_os = "android")]
 mod codec;
 #[cfg(target_os = "android")]
+#[allow(unsafe_code)]
 mod gpu;
 #[cfg(target_os = "android")]
 mod session;

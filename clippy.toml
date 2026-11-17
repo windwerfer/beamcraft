@@ -1,0 +1,5 @@
+# Panicking shortcuts are fine in tests; production code in proto/net denies them (AGENTS.md 1.9).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true

@@ -1,3 +1,4 @@
+#![forbid(unsafe_code)]
 //! `cargo xtask ci [--no-loopback]`: the local gate from AGENTS.md section 3 (fmt, clippy, tests,
 //! crate-layer check, loopback). `cargo xtask layers` runs only the layer check.
 //! `cargo audit` and `cargo deny` are separate installs and stay manual (see testing.md).
