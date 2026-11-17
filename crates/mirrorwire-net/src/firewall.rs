@@ -184,6 +184,7 @@ impl FirewallHint {
 mod system;
 
 #[cfg(any(test, target_os = "linux"))]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // Only used on Linux (and its tests).
 fn intro(port: u16) -> String {
     format!(
         "If a viewer finds this computer but cannot connect, the firewall may be blocking UDP {port}."
@@ -364,6 +365,7 @@ fn open_with(fw: &mut impl Firewalld, port: u16) -> OpenResult {
 /// The hint for what the firewalld probe found; `ufw` is only consulted when
 /// firewalld is not running.
 #[cfg(any(test, target_os = "linux"))]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // Only used on Linux (and its tests).
 fn hint_from_probe(
     port: u16,
     command: String,
@@ -409,6 +411,7 @@ fn hint_from_probe(
 }
 
 #[cfg(any(test, target_os = "linux"))]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))] // Only used on Linux (and its tests).
 fn ufw_hint(port: u16, state: UfwState, guide: String) -> FirewallHint {
     let (state, message, command) = match state {
         UfwState::Inactive => (PortState::Unknown, intro(port), fedora_command(port)),
@@ -669,6 +672,7 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    #[cfg(target_os = "linux")]
     fn probe(running: bool, port_open: Option<bool>) -> Option<Probe> {
         Some(Probe {
             running,
