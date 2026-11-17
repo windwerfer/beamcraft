@@ -174,6 +174,20 @@ pub fn run_capture_encode(
     Ok(())
 }
 
+/// Whether `enc` differs from `want` in anything except the bitrate, so it cannot be
+/// kept (the bitrate has its own live-or-reopen rules in `bitrate_action`).
+fn needs_new_encoder(enc: &Encoder, want: &EncoderConfig, out_size: (u32, u32)) -> bool {
+    let cur = enc.config();
+    enc.output_size() != out_size
+        || cur.rate_control != want.rate_control
+        || cur.qp != want.qp
+        || cur.keyint != want.keyint
+        || cur.intra_refresh != want.intra_refresh
+        || cur.backend != want.backend
+        || cur.fps != want.fps
+        || cur.vaapi_device != want.vaapi_device
+}
+
 fn maybe_reopen(
     encoder: &mut Option<Encoder>,
     raw: &RawFrame,
@@ -186,15 +200,8 @@ fn maybe_reopen(
     let reopen = match encoder {
         None => true,
         Some(enc) => {
-            enc.output_size() != (out_w, out_h)
-                || enc.config().bitrate_kbps != want.bitrate_kbps
-                || enc.config().rate_control != want.rate_control
-                || enc.config().qp != want.qp
-                || enc.config().keyint != want.keyint
-                || enc.config().intra_refresh != want.intra_refresh
-                || enc.config().backend != want.backend
-                || enc.config().fps != want.fps
-                || enc.config().vaapi_device != want.vaapi_device
+            enc.config().bitrate_kbps != want.bitrate_kbps
+                || needs_new_encoder(enc, &want, (out_w, out_h))
         }
     };
     if !reopen {
@@ -523,14 +530,7 @@ fn maybe_replace_encoder(
     track.user_kbps = Some(user_kbps);
     want.bitrate_kbps = effective_bitrate(user_kbps, controls.bitrate_cap());
     let (out_w, out_h) = want.resolved_size(raw.width, raw.height);
-    let other_change = encoder.output_size() != (out_w, out_h)
-        || encoder.config().rate_control != want.rate_control
-        || encoder.config().qp != want.qp
-        || encoder.config().keyint != want.keyint
-        || encoder.config().intra_refresh != want.intra_refresh
-        || encoder.config().backend != want.backend
-        || encoder.config().fps != want.fps
-        || encoder.config().vaapi_device != want.vaapi_device;
+    let other_change = needs_new_encoder(encoder, &want, (out_w, out_h));
     if !other_change {
         let quality_mode = matches!(want.rate_control, RateControl::Cqp | RateControl::Icq);
         let current = encoder.config().bitrate_kbps;
