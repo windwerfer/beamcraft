@@ -232,3 +232,5 @@ Newest first. Add an entry when the owner decides something non-obvious.
   builds and MirrorWire builds cannot see or talk to each other.
 
 (2026-11-17, D15 follow-up) `unsafe_code` is enforced by the compiler per crate: `forbid` in proto, net, film, xtask; `deny` in app, media and android, with `#[allow(unsafe_code)]` only on the modules listed in HANDOFF/roadmap 0c (yuv_glow, decode, encode, hw, source::portal, android gpu). A new `unsafe` elsewhere fails to compile; widening the allow list needs the owner (D15).
+
+(2026-11-17, bottleneck classifier) The classifier moved from the app crate to `mirrorwire-proto/src/bottleneck.rs` (pure std, next to `rate.rs`, `fec.rs`) so the desktop and Android viewers use one implementation and send identical verdicts. Rejected: a copy in the Android crate (two sets of thresholds), and a new crate (too small to justify). Android decoder kind comes from the label prefix `SOFTWARE`, as the HUD already shows it.

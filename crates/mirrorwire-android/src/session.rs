@@ -233,6 +233,7 @@ async fn run(
     let (decode_tx, decode_rx) = bounded::<AssembledFrame>(DECODE_QUEUE);
     let decode_flush = decode_rx.clone();
     let control = session.control_sender();
+    let verdict_control = control.clone();
     let dec_status = status.clone();
     let dec_need_key = need_keyframe.clone();
     let dec_trace = trace.clone();
@@ -261,6 +262,8 @@ async fn run(
     let mut window = (Instant::now(), 0u64, 0u64);
     let mut link_window = LinkWindow::default();
     let mut pipeline_window = PipelineWindow::default();
+    let mut bottleneck = mirrorwire_proto::bottleneck::Bottleneck::default();
+    let mut verdict_sent = None;
     let close_reason = 'recv: loop {
         if stop.load(Ordering::Acquire) {
             break None;
@@ -278,7 +281,30 @@ async fn run(
                 tracing::info!("pipeline: {}; {age}", hud.line().replace('\n', "; "));
             }
             s.pipeline = hud.clone();
+            // The same classifier as the desktop viewer; the presenter shows the verdict.
+            let (requested_fps, encoder) = s
+                .stream
+                .as_ref()
+                .map(|i| (i.fps, i.encoder.clone()))
+                .unwrap_or_default();
+            bottleneck.update(&mirrorwire_proto::bottleneck::Sample {
+                loss_pct: s.link.loss_pct,
+                queue_ms: s.link.queue.map(|q| q.mean_ms()),
+                decode_ms: s.decode_ms,
+                software_decoder: s.decoder.starts_with("SOFTWARE"),
+                source_fps: s.fps,
+                requested_fps,
+                encoder: &encoder,
+            });
             drop(s);
+            let verdict = bottleneck.verdict();
+            if verdict_sent != Some(verdict) {
+                verdict_sent = Some(verdict);
+                let _ = verdict_control.send(Control::Bottleneck {
+                    stage: verdict.stage,
+                    rating: verdict.rating,
+                });
+            }
         }
         // Wakes early while a frame is incomplete: resends and the hold time run on timers.
         let datagram = tokio::select! {

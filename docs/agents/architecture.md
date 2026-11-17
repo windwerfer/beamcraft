@@ -184,13 +184,13 @@ list). Debug output:
 
 ## Bottleneck line (viewer HUD)
 
-`crates/mirrorwire-app/src/bottleneck.rs` turns one stats window (about 1 s) into a verdict
+`crates/mirrorwire-proto/src/bottleneck.rs` turns one stats window (about 1 s) into a verdict
 `stage - rating: hint`. Stages: network, viewer (decode), driver (software encoder). Ratings: good,
 OK, weak. Thresholds: network weak at loss ≥ 5 % or mean queue ≥ 40 ms, OK at ≥ 1 % or ≥ 15 ms;
 viewer weak at decode ≥ 80 % of the frame interval, OK at ≥ 50 %; driver when the source delivers
 < 80 % of the requested fps and the encoder is software (a hardware encoder with low fps is an idle
 screen, no verdict). The first matching rule wins in that order. The shown verdict changes only
-after 3 equal windows in a row (no flicker). The desktop viewer sends the stage and rating to the
+after 3 equal windows in a row (no flicker). Both viewers (desktop and Android) send the stage and rating to the
 presenter (`bottleneck` control message, protocol 7) whenever it changes; the presenter window
 appends `viewer sees: …` to the bitrate line (display only, never rate control). The hint text
-stays on the viewer. Not yet: the Android viewer does not send it, render stage.
+stays on the viewer. Not yet: render stage.
