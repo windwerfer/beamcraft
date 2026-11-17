@@ -154,8 +154,10 @@ target), **planned**, **idea**. Update this file when an item moves.
       the video follows after 3 s clean; keyframes are paced on the video budget. Sim: 2889 →
       2060 frozen frames and 199 → 117 cuts over all paced/reconnect cases, same video;
       VAAPI 16/50 291 → 107, 16/20 759 → 603; cost: VAAPI 16/300 6 % less video. About a
-      third of the gain is the parity, the rest the held climb (testing.md §3.3). Untested
-      on hardware; the window says `probing: …` while one runs. Note for VAAPI: slow start changes the rate each
+      third of the gain is the parity, the rest the held climb (testing.md §3.3). Tablet over
+      weak 2.4 GHz Wi-Fi (testing.md §3.8): 15 probes, 8 clean, 6 ended by a queue cut, none
+      by loss; A/B totals better but within the link's own swings. The window says
+      `probing: …` while one runs, the log has one line per probe start and end. Note for VAAPI: slow start changes the rate each
       report, but VAAPI reopens at most every 5 s, so it reaches 40 Mbit/s in steps; untested
       on the T480s.)
    5. **Don't cut when FEC recovered everything; smooth the loss: tried and rejected in the

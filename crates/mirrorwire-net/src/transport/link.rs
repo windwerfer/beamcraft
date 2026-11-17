@@ -378,6 +378,7 @@ impl LinkControl {
         if queue.is_some() {
             s.queue = queue;
         }
+        let was_probing = s.probe_kbps().is_some();
         s.rate.on_sample(
             Sample {
                 loss_pct: Some(loss),
@@ -388,6 +389,7 @@ impl LinkControl {
             now_ms,
         );
         log_cut(&s);
+        log_probe(&s, was_probing);
         s.boost_pct = if unrecoverable > 0 && !s.rate.congested() {
             (s.boost_pct + 5.0 * unrecoverable.min(3) as f32).min(MAX_FEC_BOOST)
         } else {
@@ -424,6 +426,29 @@ impl LinkControl {
 fn log_cut(s: &LinkState) {
     if let Some(cut) = s.rate.cut_by_last_sample().filter(|_| s.adaptive) {
         tracing::info!("adaptive bitrate: {cut}");
+    }
+}
+
+/// Log when a parity probe starts and how it ends (adaptive only).
+fn log_probe(s: &LinkState, was_probing: bool) {
+    if !s.adaptive {
+        return;
+    }
+    let mbit = |k: u32| k as f32 / 1000.0;
+    match (was_probing, s.probe_kbps()) {
+        (false, Some(probe)) => tracing::info!(
+            "adaptive bitrate: probe +{:.1} Mbit/s parity above {:.1} video budget",
+            mbit(probe),
+            mbit(s.video_budget_kbps())
+        ),
+        (true, None) if s.rate.cut_by_last_sample().is_some() => {
+            tracing::info!("adaptive bitrate: probe failed (cut)")
+        }
+        (true, None) => tracing::info!(
+            "adaptive bitrate: probe clean, video budget {:.1} Mbit/s",
+            mbit(s.video_budget_kbps())
+        ),
+        _ => {}
     }
 }
 

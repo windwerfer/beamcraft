@@ -491,6 +491,32 @@ tethering link a default route (metric 100, below Wi-Fi's 600), sending the lapt
 through the tablet (`nmcli connection modify … ipv4.never-default yes`). The presenter must be
 started after tethering is up to advertise the new address.
 
+### 3.8 Real Wi-Fi: parity probe A/B (2026-11-17)
+
+Presenter in the dev container (laptop Wi-Fi 192.168.201.132), TB336FU tablet on the same
+2.4 GHz network (2462 MHz, 11n, RSSI −76/−77 dBm, PHY Tx rate 6–39 Mbit/s and changing
+between runs; ping 15–220 ms, mean 91), adb over USB for control only, APK 179475888.
+`scripts/android-wifi-run.sh 60 … ` with `ENCODER=vaapi`, test pattern, alternating
+before (90f3ee3) / after (045ae3f + probe log lines), three pairs. Per run (before | after):
+
+| Pair | Video Mbit/s | Cuts | QUIC lost | Unrecoverable | Waiting for key (frames) | Queue p95 ms | Shown fps |
+|---|---|---|---|---|---|---|---|
+| 1 | 6.3 \| 8.5 | 11 \| 11 | 0.4 \| 0.0 % | 15 \| 0 | 134 \| 115 | 860 \| 1425 | 44.6 \| 44.1 |
+| 2 | 9.7 \| 5.5 | 10 \| 16 | 1.8 \| 5.6 % | 110 \| 170 | 199 \| 427 | 260 \| 1162 | 44.3 \| 36.7 |
+| 3 | 3.7 \| 6.5 | 21 \| 8 | 7.2 \| 0.6 % | 254 \| 22 | 566 \| 62 | 1143 \| 291 | 37.8 \| 47.1 |
+| Sum / mean | 6.6 \| 6.8 | 42 \| 35 | 2.5 \| 1.8 % | 379 \| 192 | 899 \| 604 | | 42.2 \| 42.6 |
+
+Probes (after only): 15 started, 8 clean, 6 ended by a cut, 1 still running at the end; all
+6 cuts were queue cuts (max 58–331 ms), none loss. Probe size on this link 0.1–0.2 Mbit/s.
+Reading: the probe works on hardware as designed (it runs, commits, and its failures are
+caught by the queue before loss). Better totals after (half the unrecoverable frames, a third
+fewer frames waiting for a keyframe), but the link itself changed more between runs than
+the two builds differ (the worst run of each build was on a 6 Mbit/s PHY rate), so this is
+not evidence that the probe is better, only that it does not break anything. A cleaner A/B
+needs a stable link (5 GHz, or the T480s → iMac setup). An earlier 15 s check on the same link
+dropped to the 3 Mbit/s floor with 24.5 % QUIC loss and an RTT of ~1 s before any probe:
+this 2.4 GHz link at −77 dBm is at its limit.
+
 ## 4. Real hardware
 
 The owner tests on the target machines (decisions D11) and reports with **photos of the
