@@ -302,6 +302,16 @@ target), **planned**, **idea**. Update this file when an item moves.
    in the system display settings. Must work in the Flatpak (check the portal version needed).
    Tests, docs.
 
+7. **Windows build (owner request 2026-11-17, D16).** Step 1: CI job `Check (Windows)` on
+   `windows-latest` (MSVC) builds, clippy-checks and tests the workspace with the viewer
+   (`--no-default-features --features gui`; no portal, no PipeWire), FFmpeg from a shared LGPL
+   build (BtbN) via `FFMPEG_DIR`. Not yet run on a real Windows machine. Step 2: package the
+   viewer (zip with the FFmpeg DLLs, licence notes). Step 3 (later, separate): presenter
+   capture via Windows Graphics Capture / DXGI, no admin prompts; encoder via FFmpeg
+   (h264_mf/NVENC/QSV/AMF or x264 is not available in LGPL builds, so check). Firewall on
+   Windows: `net/firewall.rs` is a no-op there; a message must tell the user to allow the
+   port.
+
 ## Planned
 
 - **Adaptive bitrate follow-ups:** tune the thresholds on the T480s → iMac Wi-Fi; a live
