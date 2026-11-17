@@ -36,7 +36,7 @@ jobs:
     secrets:
       SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
 
-  # Windows viewer build check (roadmap 7, D16). FFmpeg: shared LGPL build, no GPL parts.
+  # Windows viewer build check (roadmap 7, D16). FFmpeg: shared GPL build for CI tests only (needs libx264); release builds will use LGPL.
   windows:
     name: Check (Windows)
     runs-on: windows-latest
@@ -44,10 +44,10 @@ jobs:
       FFMPEG_DIR: ${{ github.workspace }}\\ffmpeg
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Download FFmpeg (LGPL, shared)
+      - name: Download FFmpeg (GPL shared, test-only: has libx264)
         shell: pwsh
         run: |
-          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip"
+          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip"
           Invoke-WebRequest $url -OutFile ffmpeg.zip
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-x
           Move-Item (Get-ChildItem ffmpeg-x | Select-Object -First 1).FullName ffmpeg
@@ -58,8 +58,8 @@ jobs:
           components: clippy
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: cargo clippy --workspace --exclude mirrorwire-android --all-targets --locked --no-default-features --features mirrorwire-app/gui -- -D warnings
-      # The LGPL FFmpeg has no libx264, so the in-process presenter test (needs an encoder) is skipped.
-      - run: cargo test --workspace --exclude mirrorwire-android --locked --no-default-features --features mirrorwire-app/gui -- --skip test_source_streams_to_an_in_process_viewer
+      # CI-only GPL build because the tests need libx264; nothing from it is distributed.
+      - run: cargo test --workspace --exclude mirrorwire-android --locked --no-default-features --features mirrorwire-app/gui
 
   test:
     name: Test (Linux)
