@@ -678,6 +678,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn hint_follows_the_firewalld_probe() {
         let hint = |p, ufw: Option<UfwState>| {
             hint_from_probe(
@@ -714,6 +715,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn a_viewer_reaching_us_means_the_firewall_is_fine() {
         let blocked = hint_from_probe(
             1,
@@ -728,6 +730,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "linux")]
     fn ufw_states_map_to_hints() {
         let g = guide_text(5000);
         let open = ufw_hint(5000, UfwState::Open, g.clone());
