@@ -2127,7 +2127,6 @@ dependencies = [
  "dirs",
  "eframe",
  "hostname",
- "libc",
  "mirrorwire-media",
  "mirrorwire-net",
  "mirrorwire-proto",

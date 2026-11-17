@@ -31,4 +31,3 @@ mirrorwire-media = { path = "../mirrorwire-media" }
 mirrorwire-net = { path = "../mirrorwire-net" }
 eframe = { version = "0.37", optional = true, default-features = false, features = ["glow", "wgpu", "default_fonts", "wayland", "x11", "clipboard"] }
 dirs = "7"
-libc = "0.2"

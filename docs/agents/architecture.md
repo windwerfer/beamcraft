@@ -30,7 +30,8 @@ Rules:
   log through `tracing` and return `anyhow::Result`.
 - **`unsafe` is avoided (D15).** Today it exists as FFI in `mirrorwire-media` (`encode.rs`,
   `decode.rs`, `hw.rs`, one site in `source/portal.rs`), in `mirrorwire-app` (`yuv_glow.rs` GL
-  calls, one in `applog.rs`). All of it lacks `// SAFETY:` comments (see roadmap 0b).
+  calls only; the crate is `#![deny(unsafe_code)]` with one `allow` on that module; the
+  `isatty` call in `applog.rs` became `std::io::IsTerminal`, 2026-11-17). All of it lacks `// SAFETY:` comments (see roadmap 0b).
   `mirrorwire-net` is `#![forbid(unsafe_code)]` (local log time comes from the pure-Rust
   `tz-rs`, not `localtime_r`). The goal is to remove the sites outside media where a safe API
   exists and to keep proto `unsafe`-free. Any new `unsafe` needs a note to the owner.

@@ -177,14 +177,8 @@ pub fn log_dir() -> PathBuf {
 }
 
 fn stderr_is_tty() -> bool {
-    #[cfg(unix)]
-    unsafe {
-        libc::isatty(libc::STDERR_FILENO) != 0
-    }
-    #[cfg(not(unix))]
-    {
-        false
-    }
+    use std::io::IsTerminal;
+    io::stderr().is_terminal()
 }
 
 struct LocalTimer;

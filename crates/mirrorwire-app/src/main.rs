@@ -1,3 +1,4 @@
+#![deny(unsafe_code)]
 mod applog;
 mod capture_prefs;
 #[cfg(feature = "gui")]
@@ -6,6 +7,8 @@ mod presenter;
 mod session;
 mod viewer;
 #[cfg(feature = "gui")]
+// The only `unsafe` in this crate: glow GL calls (AGENTS.md rule 12, decisions D15).
+#[allow(unsafe_code)]
 mod yuv_glow;
 
 use anyhow::Result;

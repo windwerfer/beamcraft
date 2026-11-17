@@ -230,7 +230,8 @@ target), **planned**, **idea**. Update this file when an item moves.
       clippy::indexing_slicing)]` in proto and net; `forbid(unsafe_code)` everywhere except media
       and the glow renderer; `clippy::undocumented_unsafe_blocks` with a `// SAFETY:` comment on
       all remaining unsafe sites; first try to remove the `unsafe` in
-      app/applog.rs and portal.rs (net/diag.rs is done: tz-rs, net forbids unsafe) via safe APIs (D15); lock poisoning via `unwrap_or_else(PoisonError::into_inner)`. ~1 day.
+      portal.rs (net/diag.rs done: tz-rs, net forbids unsafe; app/applog.rs done 2026-11-17:
+      `IsTerminal`, app is `deny(unsafe_code)` except yuv_glow.rs) via safe APIs (D15); lock poisoning via `unwrap_or_else(PoisonError::into_inner)`. ~1 day.
    2. **cargo-fuzz targets** for fragment, fec, cursor and control decode, plus a CI job (if not
       already done alongside item 0). ~½ day. Replaced 2026-11-17 by `cargo test` hostile-input
       tests (decisions.md); cargo-fuzz stays open until a nightly CI job exists.
