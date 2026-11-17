@@ -20,7 +20,7 @@ Item 0b.5, fifth part: split the big files (presenter.rs).
 cargo xtask ci; gh run list --branch main --limit 3
 
 ## Written at commit
-4b639f2 (no code change; build box re-checked: still no pkg-config, so `cargo check -p mirrorwire-app` fails in libspa-sys)
+63cc2df (no code change; re-checked again: still no pkg-config, cargo check -p mirrorwire-app fails in libspa-sys)
 
 ## Next step
 presenter/mod.rs still ~1250 lines: move PresentArgs (needs pub(super) fields) and CaptureCtl to their own files; gui.rs (1321) split; or 0c: FFmpeg unsafe behind one safe module + Decoder trait.
