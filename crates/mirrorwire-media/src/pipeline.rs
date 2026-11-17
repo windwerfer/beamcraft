@@ -25,6 +25,8 @@ pub trait VideoSink: Send {
 #[derive(Clone, Default)]
 pub struct Controls {
     pub keyframe_requested: Arc<AtomicBool>,
+    /// The last frame handed to the sink was an IDR (see [`Controls::take_keyframe_request`]).
+    pub last_was_idr: Arc<AtomicBool>,
     pub stop: Arc<AtomicBool>,
     /// Ask the encode loop to hand back the encoder so the capture source can
     /// be reopened (new cursor mode or frame rate), see [`CaptureExit`].
@@ -37,6 +39,21 @@ pub struct Controls {
 impl Controls {
     pub fn request_keyframe(&self) {
         self.keyframe_requested.store(true, Ordering::Release);
+    }
+
+    /// Consumes a pending keyframe request. Returns `true` if the next frame should be forced
+    /// to an IDR. A request that arrives while the previous frame was already an IDR is
+    /// dropped: a second IDR right after an IDR repeats `idr_pic_id` 0 (forbidden by H.264
+    /// 7.4.3, some decoders freeze) and wastes a keyframe's worth of bits; a viewer that
+    /// still needs one asks again after its backoff.
+    pub fn take_keyframe_request(&self) -> bool {
+        self.keyframe_requested.swap(false, Ordering::AcqRel)
+            && !self.last_was_idr.load(Ordering::Acquire)
+    }
+
+    /// Records whether the last frame sent was an IDR.
+    pub fn note_sent(&self, keyframe: bool) {
+        self.last_was_idr.store(keyframe, Ordering::Release);
     }
 
     pub fn stop(&self) {
@@ -213,7 +230,8 @@ fn encode_one(
         source.disable_dmabuf(&format!("encoder {} cannot import DMA-BUF", encoder.name()));
         return Ok(false);
     }
-    let force = *first_for_viewer || controls.keyframe_requested.swap(false, Ordering::AcqRel);
+    let requested = controls.take_keyframe_request();
+    let force = *first_for_viewer || requested;
     let encoded = match encoder.encode(&raw, force) {
         Ok(e) => e,
         Err(e) if e.downcast_ref::<DmaBufError>().is_some() => {
@@ -239,6 +257,7 @@ fn encode_one(
     raw.dmabuf = None;
     source.recycle(raw.data);
     for frame in encoded {
+        controls.note_sent(frame.keyframe);
         sink.send(frame)?;
     }
     Ok(true)
@@ -252,10 +271,11 @@ fn encode_repeat(
     sink: &mut dyn VideoSink,
     controls: &Controls,
 ) -> Result<bool> {
-    let force = controls.keyframe_requested.swap(false, Ordering::AcqRel);
+    let force = controls.take_keyframe_request();
     let encoded = encoder.encode_repeat(seq, mirrorwire_proto::clock::now_us(), force)?;
     let any = !encoded.is_empty();
     for frame in encoded {
+        controls.note_sent(frame.keyframe);
         sink.send(frame)?;
     }
     Ok(any)
@@ -730,5 +750,24 @@ mod tests {
             "expected repeats every {REPEAT_AFTER:?}, got {repeated}"
         );
         assert_eq!(sink.0, captured + repeated);
+    }
+
+    #[test]
+    fn no_forced_idr_directly_after_an_idr() {
+        let c = Controls::default();
+        // A request after a delta frame forces an IDR, once.
+        c.note_sent(false);
+        c.request_keyframe();
+        assert!(c.take_keyframe_request());
+        assert!(!c.take_keyframe_request());
+        // The IDR went out; a request that raced with it is dropped, not queued.
+        c.note_sent(true);
+        c.request_keyframe();
+        assert!(!c.take_keyframe_request());
+        assert!(!c.keyframe_requested.load(Ordering::Acquire));
+        // After a delta frame the viewer's retry is honoured again.
+        c.note_sent(false);
+        c.request_keyframe();
+        assert!(c.take_keyframe_request());
     }
 }

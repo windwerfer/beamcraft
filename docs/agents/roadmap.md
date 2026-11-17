@@ -40,8 +40,9 @@ target), **planned**, **idea**. Update this file when an item moves.
   - h264_vaapi writes `idr_pic_id 0` on every IDR, and the stream has IDRs directly after IDRs
     (reopen + keyframe request; 25 in 19 846 pictures), which H.264 7.4.3 forbids. Flushing
     the Android decoder before such an IDR did not cure the software-decoder freeze (13 flushes,
-    still frozen), so it was dropped. Still worth fixing in the presenter (no forced IDR right
-    after an IDR) if another decoder trips on it.
+    still frozen), so it was dropped. Fixed 2026-11-17 in the presenter: a keyframe request that
+    arrives right after an IDR is dropped (`Controls::take_keyframe_request`); the viewer's
+    retry backs off 250 ms → 1 s. Not yet seen on the tablet.
   - Open: `lost`/`unrecoverable frames` climb (433 in ~2.5 min) at 0 % reported loss, with
     `waiting key` stretches of up to 5 s; not looked into yet.
 - **Earlier notes: Android MTK tablet, no picture (owner test 2026-11-14, Build 43542749952).**

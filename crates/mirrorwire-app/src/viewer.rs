@@ -259,7 +259,7 @@ async fn session(
 
     let mut reassembler = Reassembler::new(500_000);
     let mut got_datagram = false;
-    let mut last_request = Instant::now() - Duration::from_secs(1);
+    let mut backoff = mirrorwire_proto::backoff::KeyframeBackoff::default();
     let mut requests = 0u64;
     let mut lost = 0u64;
     let mut skipped = 0u64;
@@ -323,14 +323,14 @@ async fn session(
         if need_keyframe.load(Ordering::Acquire) {
             if !frame.keyframe {
                 skipped += 1;
-                if last_request.elapsed() > Duration::from_millis(100) {
+                if backoff.should_request(now_us()) {
                     session.request_keyframe("recovering from loss");
-                    last_request = Instant::now();
                     requests += 1;
                 }
                 continue;
             }
             need_keyframe.store(false, Ordering::Release);
+            backoff.reset();
         }
         match decode_tx.try_send(ToDecode { frame }) {
             Ok(()) => {}
@@ -341,9 +341,8 @@ async fn session(
                     flushed
                 );
                 need_keyframe.store(true, Ordering::Release);
-                if last_request.elapsed() > Duration::from_millis(100) {
+                if backoff.should_request(now_us()) {
                     session.request_keyframe("decoder backlog");
-                    last_request = Instant::now();
                     requests += 1;
                 }
             }

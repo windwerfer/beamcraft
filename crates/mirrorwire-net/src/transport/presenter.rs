@@ -31,12 +31,13 @@ pub fn should_drop_for_backlog(keyframe: bool, frame_len: usize, free_space: usi
 }
 
 /// Limits how often a viewer's keyframe requests force an IDR. While a
-/// viewer waits for a keyframe it asks every ~100 ms; on Wi-Fi with a
-/// 250 ms stall, honouring each one sent 4–8 IDRs a second into the
-/// congested link (33 % loss, 40–50 frames lost per stall on the MTK
-/// tablet, 2026-11-15). After a forced keyframe, requests are ignored until
-/// it could have arrived: 2× the RTT, at least 500 ms, at most 2 s. The
-/// viewer keeps asking, so a lost keyframe is still replaced.
+/// viewer waits for a keyframe it keeps asking (backing off from 250 ms to
+/// 1 s, `KeyframeBackoff`); on Wi-Fi with a 250 ms stall, honouring every
+/// one sent 4–8 IDRs a second into the congested link (33 % loss, 40–50
+/// frames lost per stall on the MTK tablet, 2026-11-15). After a forced
+/// keyframe, requests are ignored until it could have arrived: 2× the RTT,
+/// at least 250 ms, at most 1 s (the viewer's backoff steps). The viewer
+/// keeps asking, so a lost keyframe is still replaced.
 #[derive(Debug, Default, Clone, Copy)]
 pub struct KeyframeGate {
     last_us: Option<u64>,
@@ -44,8 +45,8 @@ pub struct KeyframeGate {
 }
 
 impl KeyframeGate {
-    pub const MIN_GAP_US: u64 = 500_000;
-    pub const MAX_GAP_US: u64 = 2_000_000;
+    pub const MIN_GAP_US: u64 = 250_000;
+    pub const MAX_GAP_US: u64 = 1_000_000;
 
     /// Whether a request at `now_us` should force a keyframe.
     pub fn allow(&mut self, now_us: u64, rtt: Duration) -> bool {
@@ -697,20 +698,19 @@ mod tests {
         let mut g = KeyframeGate::default();
         let lan = Duration::from_millis(5);
         assert!(g.allow(0, lan), "first request");
-        // The viewer re-asks every 100 ms: ignored for the 500 ms minimum.
-        for t in (100_000..500_000).step_by(100_000) {
-            assert!(!g.allow(t, lan), "{t}");
-        }
-        assert!(g.allow(500_000, lan), "a lost keyframe is replaced");
-        assert_eq!(g.suppressed, 4);
-        // A Wi-Fi stall (RTT 400 ms): wait 2 RTTs.
-        let stall = Duration::from_millis(400);
-        assert!(!g.allow(1_200_000, stall));
-        assert!(g.allow(1_300_000, stall));
-        // Capped at 2 s, and a garbage RTT can't block forever.
+        // A retry before the 250 ms minimum is ignored; one after it replaces a lost IDR.
+        assert!(!g.allow(100_000, lan));
+        assert!(!g.allow(249_999, lan));
+        assert!(g.allow(250_000, lan), "a lost keyframe is replaced");
+        assert_eq!(g.suppressed, 2);
+        // A Wi-Fi stall (RTT 300 ms): wait 2 RTTs.
+        let stall = Duration::from_millis(300);
+        assert!(!g.allow(700_000, stall));
+        assert!(g.allow(850_000, stall));
+        // Capped at 1 s, and a garbage RTT can't block forever.
         let huge = Duration::from_secs(3_600);
-        assert!(!g.allow(3_299_999, huge));
-        assert!(g.allow(3_300_000, huge));
+        assert!(!g.allow(1_849_999, huge));
+        assert!(g.allow(1_850_000, huge));
         // A clock step back counts as "just sent", not a panic.
         assert!(!g.allow(0, lan));
     }
