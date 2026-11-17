@@ -4,6 +4,7 @@
 Item 0b.5, fifth part: split the big files (presenter.rs).
 
 ## Done
+- PresentArgs/SourceKind moved to `presenter/args.rs` (pure move; presenter/mod.rs now ~1020 lines). No unsafe. Breaks: none.
 - CaptureCtl/CaptureStatus moved to `presenter/capture.rs` (pure move, fields pub(super)). No unsafe. Breaks: none. roadmap.md updated.
 - Earlier: 7897ce7 presenter/status.rs, 6c14e7b encode/rc.rs, 4bd0440 encode/vaapi.rs, ef1e7cb config split, 3e0c0d5, eabf95a, f454021, 6b5584e.
 - Gates run locally: cargo xtask ci (loopback p95 18 ms), clippy --features gui, Android clippy via cargo ndk. GUI window not run (no display).
@@ -20,7 +21,7 @@ Item 0b.5, fifth part: split the big files (presenter.rs).
 cargo xtask ci; gh run list --branch main --limit 3
 
 ## Written at commit
-089dbd2 (capture.rs move; HANDOFF update follows)
+c63b465 (args.rs move; HANDOFF update follows)
 
 ## Next step
-Move PresentArgs (needs pub(super) fields) out of presenter/mod.rs (~1170 lines); gui.rs (1321) split; or 0c: FFmpeg unsafe behind one safe module + Decoder trait.
+gui.rs (1321) split; or 0c: FFmpeg unsafe behind one safe module + Decoder trait.
