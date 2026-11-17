@@ -1,28 +1,26 @@
 # HANDOFF
 
 ## Goal
-Item 0b.1 (part): compiler-enforced `unsafe_code` policy per crate plus `clippy.toml`.
+Item 0b.4: machine-checked perf budgets (loopback half).
 
 ## Done
-- f454021: `forbid(unsafe_code)` in proto, net, film, xtask; `deny` in media, app, android with `#[allow(unsafe_code)]` only on decode, encode, hw, source::portal, yuv_glow, android gpu. `clippy.toml` (unwrap/expect/panic/indexing allowed in tests). No new unsafe. Breaks: none.
-- 3fbc176: decisions.md (D15 follow-up) and roadmap.md.
-- Earlier: 6b5584e xtask ci gate, b2dc005 media SAFETY comments, 112a9e3 app unsafe removed.
-
-## Unsafe inventory (file: why)
-- net, proto, film, xtask: none (forbidden). app: yuv_glow.rs (glow GL). media: encode.rs, decode.rs, hw.rs (FFmpeg/VAAPI FFI), source/portal.rs (`BorrowedFd::borrow_raw`). android gpu.rs (EGL/GL FFI, not compiled on this box).
+- eabf95a: `perf-budgets.toml` + `cargo xtask loopback [secs]` (p95 capture→decoded ≤ 60 ms, lost / mismatches / decode errors / unrecoverable frames = 0); used by `xtask ci` and the CI x264 loopback step. Unit-tested parser/checker. No unsafe. Breaks: none.
+- 62d1542: roadmap.md and testing.md.
+- Earlier: f454021 unsafe_code lint per crate, 6b5584e xtask ci gate.
 
 ## Decisions
-D15 follow-up in decisions.md (lint policy; widening the allow list needs the owner).
+- Budgets are loose (shared CI VMs); the ABR simulation rows are already asserted by the `sim_*` tests in rate.rs, so no TOML for them. Not a decisions.md change.
 
 ## Open questions
 - Owner: SonarCloud switch (SONAR_CI_ANALYSIS) pending.
 - Owner: ASan CI job for media tests (needs nightly)?
+- Is 60 ms right for CI runners? Check the first CI run's p95 and tighten.
 
 ## Verify
 cargo xtask ci; gh run list --branch main --limit 3
 
 ## Written at commit
-3fbc176 (plus this file)
+62d1542 (plus this file)
 
 ## Next step
-0b.4 TOML perf budgets; or 0c: move FFmpeg unsafe into one small safe module; or workspace-wide clippy unwrap lints (many sites).
+0b.5 merge `maybe_reopen`/`maybe_replace_encoder` in media pipeline.rs and split encode.rs/presenter.rs; or 0c FFmpeg unsafe into one safe module + `Decoder` trait; or workspace clippy unwrap lints.
