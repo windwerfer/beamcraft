@@ -536,7 +536,7 @@ struct UfwPaths<'a> {
     user_rules: &'a str,
 }
 
-#[cfg(any(test, target_os = "linux"))]
+#[cfg(target_os = "linux")]
 impl UfwPaths<'static> {
     fn system() -> Self {
         Self {
