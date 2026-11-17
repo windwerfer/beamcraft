@@ -3,6 +3,7 @@
 #![deny(clippy::undocumented_unsafe_blocks)]
 // `unsafe` is allowed only in decode, encode, hw and source::portal (FFmpeg/VA-API FFI, one raw fd).
 #![deny(unsafe_code)]
+pub mod convert;
 #[allow(unsafe_code)]
 pub mod decode;
 #[allow(unsafe_code)]

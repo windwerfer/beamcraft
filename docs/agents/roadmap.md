@@ -302,6 +302,8 @@ target), **planned**, **idea**. Update this file when an item moves.
    in the system display settings. Must work in the Flatpak (check the portal version needed).
    Tests, docs.
 
+7a. **Optional FFmpeg (owner, 2026-11-17, D17):** step 1 done 2026-11-18 (`convert.rs`, pure-Rust BGRA→I420, tested against swscale; not wired). Step 2 open: cargo feature `ffmpeg`, FilmCraft-only build compiles and is built by CI.
+
 7. **Windows build (owner request 2026-11-17, D16).** Step 1: CI job `Check (Windows)` on
    `windows-latest` (MSVC) builds, clippy-checks and tests the workspace with the viewer
    (`--no-default-features --features gui`; no portal, no PipeWire), FFmpeg from a shared LGPL
