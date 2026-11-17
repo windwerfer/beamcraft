@@ -38,7 +38,7 @@ impl MirrorApp {
                 }
             }
         }
-        let status = handle.status.lock().expect("status lock").clone();
+        let status = handle.status.lock_ok().clone();
 
         let rect = ui.max_rect();
         ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
@@ -75,7 +75,7 @@ impl MirrorApp {
             }
             if status.cursor_mode == Some(CursorMode::Separate) {
                 if let Some(cursor) = &status.cursor {
-                    let current = cursor.lock().expect("cursor lock").current();
+                    let current = cursor.lock_ok().current();
                     if let Some((p, img)) = current {
                         self.draw_cursor(ui, &p, &img, draw);
                     }
@@ -99,7 +99,7 @@ impl MirrorApp {
         let updates = status
             .cursor
             .as_ref()
-            .map(|c| c.lock().expect("cursor lock").updates)
+            .map(|c| c.lock_ok().updates)
             .unwrap_or(0);
         let elapsed = self.cursor_rate.0.elapsed().as_secs_f64();
         if elapsed >= 1.0 {

@@ -1,4 +1,5 @@
 #![deny(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod applog;
 mod bottleneck;
 mod capture_prefs;
@@ -6,6 +7,7 @@ mod capture_prefs;
 mod gui;
 mod presenter;
 mod session;
+mod sync;
 mod viewer;
 #[cfg(feature = "gui")]
 // The only `unsafe` in this crate: glow GL calls (AGENTS.md rule 12, decisions D15).

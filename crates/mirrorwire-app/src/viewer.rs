@@ -1,3 +1,4 @@
+use crate::sync::LockExt;
 use crate::ViewArgs;
 use anyhow::{anyhow, Result};
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
@@ -167,7 +168,7 @@ pub fn spawn(
             }
             Err(e) => {
                 tracing::error!("viewer: {e:#}");
-                let mut s = status.lock().expect("status lock");
+                let mut s = status.lock_ok();
                 s.connected = false;
                 s.error = Some(format!("{e:#}"));
             }
@@ -202,7 +203,7 @@ async fn session(
     on_frame: Option<Arc<dyn Fn() + Send + Sync>>,
 ) -> Result<(Totals, StageStats, f64)> {
     let trace = {
-        let s = status.lock().expect("status lock");
+        let s = status.lock_ok();
         s.trace.clone()
     };
     let session =
@@ -218,7 +219,7 @@ async fn session(
         session.stream_info.encoder
     );
     {
-        let mut s = status.lock().expect("status lock");
+        let mut s = status.lock_ok();
         s.connected = true;
         s.error = None;
         s.stream = Some(session.stream_info.clone());
@@ -306,11 +307,11 @@ async fn session(
                 link_window.hud.corrupt = reassembler.corrupt_frames();
                 session.report_link(&window, delay);
                 reassembler.set_rtt_us(session.conn.rtt().as_micros().min(u64::MAX as u128) as u64);
-                status.lock().expect("status lock").link = link_window.hud;
+                status.lock_ok().link = link_window.hud;
             }
             if stream_updates.has_changed().unwrap_or(false) {
                 let info = stream_updates.borrow_and_update().clone();
-                let mut s = status.lock().expect("status lock");
+                let mut s = status.lock_ok();
                 s.cursor_mode = Some(info.cursor);
                 s.stream = Some(info);
             }
@@ -369,7 +370,7 @@ async fn session(
     };
     let elapsed = started.elapsed().as_secs_f64();
     let cursor_summary = {
-        let c = session.cursor.lock().expect("cursor lock");
+        let c = session.cursor.lock_ok();
         (c.updates, c.stale, c.images_received)
     };
     session.close();
@@ -392,7 +393,7 @@ async fn session(
     if let Some(reason) = close_reason {
         tracing::info!("connection closed: {reason}");
     }
-    status.lock().expect("status lock").connected = false;
+    status.lock_ok().connected = false;
     Ok((totals, all, elapsed))
 }
 
@@ -419,7 +420,7 @@ fn decode_loop(
     let mut decoder_name = decoder.name().to_owned();
     let mut bottleneck = crate::bottleneck::Bottleneck::default();
     {
-        let mut s = status.lock().expect("status lock");
+        let mut s = status.lock_ok();
         s.decoder = decoder_name.clone();
         s.trace.ok(ConnectStepId::Decoder, decoder_name.clone());
     }
@@ -439,7 +440,7 @@ fn decode_loop(
     let mut first_frame = true;
 
     while let Ok(ToDecode { frame }) = rx.recv() {
-        let offset = clock.lock().expect("clock lock").clone();
+        let offset = clock.lock_ok().clone();
         let decode_started = now_us();
         let img = match decoder.decode_yuv(&frame.data) {
             Ok(Some(d)) => {
@@ -458,7 +459,7 @@ fn decode_loop(
                     tracing::warn!("hardware decode failed ({e}); falling back to software H.264");
                     decoder = decode::software_after_hw_failure(opts.software_decoder)?;
                     decoder_name = decoder.name().to_owned();
-                    status.lock().expect("status lock").decoder = decoder_name.clone();
+                    status.lock_ok().decoder = decoder_name.clone();
                     consecutive_hw_errors = 0;
                 } else {
                     tracing::warn!("decode error: {e}");
@@ -491,8 +492,7 @@ fn decode_loop(
         let (convert_ms, out_frame) = if opts.rgba {
             let mut rgba = Vec::new();
             let (width, height) = converter
-                .as_mut()
-                .expect("rgba converter")
+                .get_or_insert_with(RgbaConverter::default)
                 .convert_yuv(&img, &mut rgba)?;
             (
                 Some(ms(now_us(), decoded_us)),
@@ -520,7 +520,7 @@ fn decode_loop(
             decoder_name = decoder.name().to_owned();
             let width = out_frame.as_ref().map(|f| f.width).unwrap_or(0);
             let height = out_frame.as_ref().map(|f| f.height).unwrap_or(0);
-            let mut s = status.lock().expect("status lock");
+            let mut s = status.lock_ok();
             s.trace.ok(
                 ConnectStepId::FirstFrame,
                 format!("{width}x{height} via {decoder_name}"),
@@ -599,7 +599,7 @@ fn decode_loop(
             );
             tracing::info!("viewer: {line}");
             {
-                let mut s = status.lock().expect("status lock");
+                let mut s = status.lock_ok();
                 let (requested_fps, encoder) = s
                     .stream
                     .as_ref()
@@ -667,7 +667,7 @@ pub fn run_headless(args: ViewArgs, config_dir: &Path) -> Result<()> {
             print_summary(&summary);
             return Ok(());
         }
-        if let Some(err) = handle.status.lock().expect("status lock").error.clone() {
+        if let Some(err) = handle.status.lock_ok().error.clone() {
             return Err(anyhow!(err));
         }
         if deadline.is_some_and(|d| Instant::now() >= d) {

@@ -1,6 +1,7 @@
 use crate::applog::LogStore;
 use crate::capture_prefs::{CapturePrefs, CursorPref, FpsPref, FEC_CHOICES};
 use crate::presenter::{self, PresentPhase, PresenterHandle};
+use crate::sync::LockExt;
 use crate::viewer::{self, viewer_ui, Picture, ViewerHandle, ViewerOptions, ViewerUi};
 use crate::yuv_glow::{YuvPaint, YuvRenderer};
 use crate::{GuiLaunch, RendererChoice, ViewArgs};
@@ -460,7 +461,7 @@ impl MirrorApp {
         let Some(handle) = &self.watching else {
             return false;
         };
-        let status = handle.status.lock().expect("status lock");
+        let status = handle.status.lock_ok();
         viewer_ui(status.connected, status.first_frame, self.has_picture()) == ViewerUi::Video
     }
 
@@ -469,7 +470,7 @@ impl MirrorApp {
             Some(h) => h,
             None => return,
         };
-        let status = handle.status.lock().expect("status lock").clone();
+        let status = handle.status.lock_ok().clone();
         if ui.button("Back").clicked() {
             self.disconnect(ui.ctx());
             return;

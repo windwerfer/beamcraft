@@ -1,6 +1,7 @@
 //! YUV→RGB conversion in an OpenGL shader so the viewer does not spend tens
 //! of milliseconds in CPU swscale on older machines.
 
+use crate::sync::LockExt;
 use eframe::egui;
 use eframe::glow::{self, HasContext};
 use mirrorwire_media::decode::{YuvImage, YuvLayout};
@@ -30,7 +31,7 @@ impl YuvPaint {
             rect,
             callback: Arc::new(eframe::egui_glow::CallbackFn::new(move |_info, painter| {
                 let gl = painter.gl();
-                let mut slot = self.renderer.lock().expect("yuv renderer");
+                let mut slot = self.renderer.lock_ok();
                 if slot.is_none() {
                     match unsafe { YuvRenderer::new(gl) } {
                         Ok(r) => *slot = Some(r),

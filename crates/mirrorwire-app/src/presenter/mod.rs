@@ -8,6 +8,7 @@ pub use capture::{CaptureCtl, CaptureStatus};
 pub use status::{EncodeHud, PresentPhase, PresentStatus};
 
 use crate::capture_prefs::CapturePrefs;
+use crate::sync::LockExt;
 use anyhow::{bail, Result};
 use mirrorwire_media::encode::{parse_size, Encoder, EncoderBackend, EncoderConfig};
 use mirrorwire_media::frame::EncodedFrame;
@@ -54,7 +55,7 @@ impl PresenterHandle {
     }
 
     pub fn apply_settings(&self, cfg: EncoderConfig) {
-        *self.settings.lock().expect("encoder settings") = cfg;
+        *self.settings.lock_ok() = cfg;
         self.controls.request_keyframe();
     }
 
@@ -72,7 +73,7 @@ impl PresenterHandle {
             tracing::warn!("could not save capture settings: {e:#}");
         }
         let restart = {
-            let mut c = self.capture.lock().expect("capture ctl");
+            let mut c = self.capture.lock_ok();
             if c.prefs.fec != prefs.fec {
                 tracing::info!("FEC set to {}", prefs.fec.as_string());
             }
@@ -99,20 +100,20 @@ impl PresenterHandle {
     }
 
     pub fn refresh_firewall(&self) {
-        let port = self.status.lock().expect("present status").port;
+        let port = self.status.lock_ok().port;
         let hint = FirewallHint::for_port(port);
-        self.status.lock().expect("present status").firewall = Some(hint);
+        self.status.lock_ok().firewall = Some(hint);
     }
 
     pub fn poll(&self) -> PresentStatus {
-        let mut s = self.status.lock().expect("present status").clone();
-        if let Some(rx) = self.connected.lock().expect("connected watch").as_ref() {
+        let mut s = self.status.lock_ok().clone();
+        if let Some(rx) = self.connected.lock_ok().as_ref() {
             s.viewer_connected = *rx.borrow();
         }
-        s.attempts = self.attempts.lock().expect("attempts").clone();
-        s.hud = self.hud.lock().expect("hud").to_hud();
-        s.settings = self.settings.lock().expect("encoder settings").clone();
-        let c = self.capture.lock().expect("capture ctl");
+        s.attempts = self.attempts.lock_ok().clone();
+        s.hud = self.hud.lock_ok().to_hud();
+        s.settings = self.settings.lock_ok().clone();
+        let c = self.capture.lock_ok();
         s.capture = c.status();
         if !c.source_desc.is_empty() {
             s.source = Some(c.source_desc.clone());
@@ -172,7 +173,7 @@ fn open_source(
     sink: &CursorSink,
 ) -> Result<Box<dyn FrameSource>> {
     let (cursor, fps) = {
-        let c = ctl.lock().expect("capture ctl");
+        let c = ctl.lock_ok();
         (c.wanted_cursor(), c.prefs.fps.request())
     };
     let source: Box<dyn FrameSource> = match args.source {
@@ -191,7 +192,7 @@ fn open_source(
         }
         SourceKind::Portal => open_portal(args, config_dir, cursor, fps, sink)?,
     };
-    let mut c = ctl.lock().expect("capture ctl");
+    let mut c = ctl.lock_ok();
     c.asked_cursor = cursor;
     c.asked_fps = fps;
     c.active_cursor = source.cursor_capture();
@@ -217,11 +218,11 @@ fn apply_negotiated_fps(
     ctl: &Mutex<CaptureCtl>,
     settings: &Mutex<EncoderConfig>,
 ) -> u32 {
-    let mut c = ctl.lock().expect("capture ctl");
+    let mut c = ctl.lock_ok();
     c.negotiated_fps = source.negotiated_fps();
     c.source_desc = source.describe();
     let fps = effective_fps(c.asked_fps, c.negotiated_fps);
-    let mut s = settings.lock().expect("encoder settings");
+    let mut s = settings.lock_ok();
     if s.fps != fps {
         if let Some(k) = s.keyint {
             s.keyint = Some((k as u64 * fps as u64 / s.fps.max(1) as u64).max(1) as u32);
@@ -336,10 +337,10 @@ fn present_session(
         bail!("capture source ended before the first frame");
     };
     let fps = apply_negotiated_fps(source.as_ref(), &ctl, &settings);
-    let cfg = settings.lock().expect("encoder settings").clone();
+    let cfg = settings.lock_ok().clone();
     let encoder = open_encoder_for(&first, &cfg)?;
     let (active_cursor, fec) = {
-        let c = ctl.lock().expect("capture ctl");
+        let c = ctl.lock_ok();
         (c.active_cursor, c.fec.clone())
     };
 
@@ -458,7 +459,7 @@ fn present_session(
             move |enc, cw, ch, tick| {
                 // Adaptive bitrate: the setting is the ceiling, the link
                 // feedback decides the budget, FEC parity comes out of it.
-                let ceiling = rate_settings.lock().expect("encoder settings").bitrate_kbps;
+                let ceiling = rate_settings.lock_ok().bitrate_kbps;
                 rate_fec.set_ceiling(ceiling);
                 rate_controls.set_bitrate_cap(rate_fec.encoder_kbps());
                 if let Ok(mut h) = hud_tick.lock() {
@@ -486,7 +487,7 @@ fn present_session(
                     Err(e) => break Err(e),
                 }
                 let fps = apply_negotiated_fps(source.as_ref(), &ctl, &settings);
-                let cursor = ctl.lock().expect("capture ctl").active_cursor;
+                let cursor = ctl.lock_ok().active_cursor;
                 presenter.update_stream_info(|info| {
                     info.fps = fps;
                     info.cursor = cursor.mode();
@@ -658,7 +659,7 @@ pub fn run(args: PresentArgs, config_dir: &Path) -> Result<()> {
             }
             println!("encoder {}  source {}", ready.encoder, ready.source);
             {
-                let c = ctl_print.lock().expect("capture ctl");
+                let c = ctl_print.lock_ok();
                 println!(
                     "cursor {}{}  frame rate asked {} fps, compositor allows {}",
                     c.active_cursor.as_str(),
@@ -731,14 +732,14 @@ pub fn spawn(
     let capture = Arc::new(Mutex::new(CaptureCtl::new(args.capture)));
     let handle_capture = capture.clone();
     let handle_config_dir = config_dir.clone();
-    let initial_settings = settings.lock().expect("encoder settings").clone();
+    let initial_settings = settings.lock_ok().clone();
     let status = Arc::new(Mutex::new(PresentStatus::new(
         name.clone(),
         initial_settings,
         port,
     )));
     {
-        let mut s = status.lock().expect("present status");
+        let mut s = status.lock_ok();
         s.firewall = Some(FirewallHint::for_port(port));
     }
     let connected = Arc::new(Mutex::new(None::<watch::Receiver<bool>>));
@@ -763,7 +764,7 @@ pub fn spawn(
             let hud_status = hud.clone();
             move || {
                 {
-                    let mut s = status.lock().expect("present status");
+                    let mut s = status.lock_ok();
                     s.phase = PresentPhase::WaitingForCapture;
                 }
                 notify();
@@ -784,7 +785,7 @@ pub fn spawn(
                     capture,
                     move |ready, rx| {
                         {
-                            let mut s = status_ready.lock().expect("present status");
+                            let mut s = status_ready.lock_ok();
                             s.phase = PresentPhase::Streaming;
                             s.pairing_code = ready.pairing_code;
                             s.uri = Some(ready.uri);
@@ -797,7 +798,7 @@ pub fn spawn(
                             s.rc_summary = Some(ready.rc_summary);
                             s.conversion = Some(ready.conversion);
                         }
-                        *connected_slot.lock().expect("connected slot") = Some(rx);
+                        *connected_slot.lock_ok() = Some(rx);
                         if let Some(cb) = &ping_ready {
                             cb();
                         }
@@ -805,7 +806,7 @@ pub fn spawn(
                     },
                 );
 
-                let mut s = status.lock().expect("present status");
+                let mut s = status.lock_ok();
                 match result {
                     Ok(()) => {
                         if s.phase != PresentPhase::Failed {
@@ -823,7 +824,13 @@ pub fn spawn(
                 notify();
             }
         })
-        .expect("spawn present thread");
+        .map_err(|e| {
+            tracing::error!("presenter: cannot spawn thread: {e}");
+            let mut s = handle_status.lock_ok();
+            s.phase = PresentPhase::Failed;
+            s.error = Some(format!("cannot start the presenter thread: {e}"));
+        })
+        .ok();
 
     PresenterHandle {
         status: handle_status,
@@ -834,7 +841,7 @@ pub fn spawn(
         hud: handle_hud,
         capture: handle_capture,
         config_dir: handle_config_dir,
-        thread: Some(thread),
+        thread,
     }
 }
 
