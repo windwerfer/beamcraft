@@ -36,7 +36,7 @@ pub fn run(app: AndroidApp) {
     let result = eframe::run_native(
         "MirrorWire",
         options,
-        Box::new(move |cc| Ok(Box::new(ViewerApp::new(cc, data_dir)))),
+        Box::new(move |cc| Ok(Box::new(ViewerApp::new(cc, data_dir)?))),
     );
     if let Err(e) = result {
         tracing::error!("eframe: {e}");
@@ -71,7 +71,10 @@ struct ViewerApp {
 }
 
 impl ViewerApp {
-    fn new(cc: &eframe::CreationContext<'_>, data_dir: PathBuf) -> Self {
+    fn new(
+        cc: &eframe::CreationContext<'_>,
+        data_dir: PathBuf,
+    ) -> Result<Self, Box<dyn std::error::Error + Send + Sync>> {
         cc.egui_ctx
             .set_pixels_per_point(cc.egui_ctx.pixels_per_point().max(2.0));
         let (gpu, gpu_off) = match cc.gl.as_deref().map(crate::gpu::VideoRenderer::new) {
@@ -86,8 +89,7 @@ impl ViewerApp {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .enable_all()
-            .build()
-            .expect("tokio runtime");
+            .build()?;
         let mut error = None;
         let identity = match Identity::load_or_create(&data_dir) {
             Ok(id) => Some(Arc::new(id)),
@@ -106,7 +108,7 @@ impl ViewerApp {
                 ),
             }
         };
-        Self {
+        Ok(Self {
             runtime,
             identity,
             data_dir,
@@ -126,7 +128,7 @@ impl ViewerApp {
             gpu_off,
             gpu_picture: false,
             force_software: false,
-        }
+        })
     }
 
     fn connect(&mut self, ctx: &egui::Context, mut target: ConnectInfo) {

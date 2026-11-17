@@ -1,4 +1,6 @@
 // Every `unsafe` block or impl needs a `// SAFETY:` comment (AGENTS.md §1.12, decisions D15).
+// Panicking shortcuts are allowed in tests only (AGENTS.md 1.9, clippy.toml).
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 #![deny(clippy::undocumented_unsafe_blocks)]
 // `unsafe` is allowed only in decode, encode, hw and source::portal (FFmpeg/VA-API FFI, one raw fd).
 #![deny(unsafe_code)]

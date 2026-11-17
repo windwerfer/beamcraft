@@ -490,7 +490,9 @@ impl RgbaConverter {
             self.ctx = Some((ctx, key.0, key.1, key.2));
             self.out = frame::Video::new(Pixel::RGBA, key.1, key.2);
         }
-        let (ctx, ..) = self.ctx.as_mut().expect("scaler initialized");
+        let Some((ctx, ..)) = self.ctx.as_mut() else {
+            bail!("scaler not initialized");
+        };
         ctx.run(src, &mut self.out)?;
         let (w, h) = (key.1 as usize, key.2 as usize);
         let stride = self.out.stride(0);

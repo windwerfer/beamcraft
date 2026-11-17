@@ -828,7 +828,9 @@ impl Encoder {
         if raw.data.len() < needed {
             bail!("raw frame too small: {} < {needed}", raw.data.len());
         }
-        let scaler = self.scaler.as_mut().expect("scaler initialized");
+        let Some(scaler) = self.scaler.as_mut() else {
+            bail!("scaler not initialized");
+        };
         let src = [
             raw.data.as_ptr(),
             std::ptr::null(),

@@ -3,7 +3,7 @@ use crate::frame::{EncodedFrame, RawFrame};
 use crate::source::FrameSource;
 use anyhow::Result;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
 /// When the compositor sends nothing new (it only sends frames on damage),
@@ -121,7 +121,7 @@ pub fn run_capture_encode(
                         source.recycle(old.data);
                     }
                     let _ = encode_one(
-                        encoder.as_mut().expect("encoder"),
+                        encoder_ref(&mut encoder)?,
                         raw,
                         source,
                         sink,
@@ -150,7 +150,7 @@ pub fn run_capture_encode(
                                 &mut first_for_viewer,
                             )?;
                             let _ = encode_one(
-                                encoder.as_mut().expect("encoder"),
+                                encoder_ref(&mut encoder)?,
                                 raw,
                                 source,
                                 sink,
@@ -195,7 +195,10 @@ fn maybe_reopen(
     on_ready: &mut impl FnMut(&Encoder) -> Result<()>,
     first_for_viewer: &mut bool,
 ) -> Result<()> {
-    let want = settings.lock().expect("encoder settings").clone();
+    let want = settings
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     let (out_w, out_h) = want.resolved_size(raw.width, raw.height);
     let reopen = match encoder {
         None => true,
@@ -524,7 +527,10 @@ fn maybe_replace_encoder(
     on_reopen: &mut impl FnMut(&Encoder) -> Result<()>,
     first_for_viewer: &mut bool,
 ) -> Result<bool> {
-    let mut want = settings.lock().expect("encoder settings").clone();
+    let mut want = settings
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone();
     let user_kbps = want.bitrate_kbps;
     let user_changed = track.user_kbps.is_some_and(|u| u != user_kbps);
     track.user_kbps = Some(user_kbps);
@@ -574,7 +580,10 @@ fn maybe_replace_encoder(
                 want.backend.as_str(),
                 encoder.name()
             );
-            settings.lock().expect("encoder settings").backend = encoder.config().backend;
+            settings
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .backend = encoder.config().backend;
             return Ok(false);
         }
         Err(e) => return Err(e),
@@ -584,6 +593,13 @@ fn maybe_replace_encoder(
     on_reopen(encoder)?;
     *first_for_viewer = true;
     Ok(true)
+}
+
+/// The open encoder; `maybe_reopen` guarantees one exists after a frame arrives.
+fn encoder_ref(encoder: &mut Option<Encoder>) -> Result<&mut Encoder> {
+    encoder
+        .as_mut()
+        .ok_or_else(|| anyhow::anyhow!("encoder missing after reopen"))
 }
 
 #[cfg(test)]
