@@ -51,6 +51,8 @@ pub struct Status {
     pub link: LinkHud,
     /// Frames in / decoded / shown per second, and where the picture is stuck.
     pub pipeline: PipelineHud,
+    /// `Bottleneck: <stage> - <rating>: <hint>`, same classifier as the desktop viewer.
+    pub bottleneck: String,
 }
 
 /// Pipeline totals, written by the network loop, the decode thread and the UI.
@@ -296,6 +298,7 @@ async fn run(
                 requested_fps,
                 encoder: &encoder,
             });
+            s.bottleneck = bottleneck.line();
             drop(s);
             let verdict = bottleneck.verdict();
             if verdict_sent != Some(verdict) {

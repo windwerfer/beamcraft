@@ -398,7 +398,7 @@ impl ViewerApp {
         if self.show_overlay {
             let stream = status.stream.as_ref();
             let text = format!(
-                "{}x{}  {:.1} fps  {:.2} Mbit/s  presenter encodes with {}\n{}\ndecode {:.1} ms  to RGBA {:.1} ms  lost {}\npicture age {:.0} ms  reader behind {:.0} ms  out of order {}\n{}\ncursor {}\n{}\ntap: hide",
+                "{}x{}  {:.1} fps  {:.2} Mbit/s  presenter encodes with {}\n{}\ndecode {:.1} ms  to RGBA {:.1} ms  lost {}\npicture age {:.0} ms  reader behind {:.0} ms  out of order {}\n{}\n{}\ncursor {}\n{}\ntap: hide",
                 stream.map(|s| s.width).unwrap_or(0),
                 stream.map(|s| s.height).unwrap_or(0),
                 status.fps,
@@ -415,6 +415,7 @@ impl ViewerApp {
                 status.reader_behind_ms,
                 status.out_of_order,
                 status.pipeline.line(),
+                status.bottleneck,
                 status.cursor_mode.map_or("?", |m| m.as_str()),
                 status.link.line(),
             );
