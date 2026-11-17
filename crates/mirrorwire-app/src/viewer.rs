@@ -103,6 +103,7 @@ pub struct Totals {
     pub cursor_images: u64,
     pub link: LinkStats,
     pub nacks: mirrorwire_proto::fragment::NackStats,
+    pub corrupt_frames: u64,
 }
 
 pub struct ViewerOptions {
@@ -300,6 +301,7 @@ async fn session(
                 let delay = reassembler.take_delay();
                 link_window.hud.queue = delay;
                 link_window.hud.resent = reassembler.nack_stats().resent_useful;
+                link_window.hud.corrupt = reassembler.corrupt_frames();
                 session.report_link(&window, delay);
                 reassembler.set_rtt_us(session.conn.rtt().as_micros().min(u64::MAX as u128) as u64);
                 status.lock().expect("status lock").link = link_window.hud;
@@ -376,6 +378,7 @@ async fn session(
     totals.lost = lost;
     totals.link = reassembler.link_stats();
     totals.nacks = reassembler.nack_stats();
+    totals.corrupt_frames = reassembler.corrupt_frames();
     totals.skipped_waiting_keyframe = skipped;
     totals.keyframe_requests += requests;
     (
@@ -697,8 +700,11 @@ fn print_summary((totals, stats, secs): &(Totals, StageStats, f64)) {
         link.unrecoverable_frames
     );
     println!(
-        "nack: asked for {} fragments, {} resent packets arrived, {} of them filled a gap",
-        totals.nacks.requested, totals.nacks.resent_received, totals.nacks.resent_useful
+        "nack: asked for {} fragments, {} resent packets arrived, {} of them filled a gap; checksum failures {}",
+        totals.nacks.requested,
+        totals.nacks.resent_received,
+        totals.nacks.resent_useful,
+        totals.corrupt_frames
     );
     println!(
         "{:<20} {:>8} {:>8} {:>8} {:>8}",

@@ -12,7 +12,7 @@ use bytes::Bytes;
 use std::collections::VecDeque;
 
 /// First byte of a NACK datagram (viewer → presenter). Video packets start with
-/// [`crate::fragment::WIRE_VERSION`] (2) and pointer datagrams with 0xC1.
+/// [`crate::fragment::WIRE_VERSION`] (3) and pointer datagrams with 0xC1.
 pub const NACK_DATAGRAM_KIND: u8 = 0xC2;
 pub const NACK_VERSION: u8 = 1;
 /// A NACK datagram never exceeds this (it must fit one QUIC datagram).

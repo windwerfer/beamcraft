@@ -193,6 +193,8 @@ pub struct LinkHud {
     /// Fragments the presenter resent after a NACK that filled a gap (since connecting; set by
     /// the caller from [`crate::fragment::Reassembler::nack_stats`]).
     pub resent: u64,
+    /// Frames dropped because their CRC did not match (should stay 0; a reassembly or FEC bug).
+    pub corrupt: u64,
     /// Queueing delay of the last window (set by the caller from
     /// [`crate::fragment::Reassembler::take_delay`]).
     pub queue: Option<crate::control::QueueDelay>,
@@ -215,8 +217,13 @@ impl LinkHud {
         } else {
             String::new()
         };
+        let corrupt = if self.corrupt > 0 {
+            format!("  CORRUPT FRAMES {} (checksum mismatch)", self.corrupt)
+        } else {
+            String::new()
+        };
         format!(
-            "{fec}  loss {:.1}%  unrecoverable frames {}{resent}{queue}",
+            "{fec}  loss {:.1}%  unrecoverable frames {}{resent}{corrupt}{queue}",
             self.loss_pct, self.unrecoverable
         )
     }
@@ -249,6 +256,7 @@ impl LinkWindow {
             recovered_per_s: window.recovered as f32 * 1e6 / elapsed as f32,
             unrecoverable: now.unrecoverable_frames,
             resent: 0,
+            corrupt: 0,
             queue: None,
         };
         self.last = now;

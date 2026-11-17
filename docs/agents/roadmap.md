@@ -205,7 +205,7 @@ target), **planned**, **idea**. Update this file when an item moves.
      current one-per-2×RTT limit. Here: `KeyframeBackoff` in the viewer loops, gate 250 ms–1 s on
      the presenter, no forced IDR right after an IDR; "acking" = frames that arrive while
      waiting still count in `link_report` (there is no per-frame ack message).
-   - **Frame integrity check before decode** (Glass: Fletcher-16 over the reassembled frame in
+   - **Frame integrity check before decode (done 2026-11-17, protocol 5, protocol.md §3).** Original note (Glass: Fletcher-16 over the reassembled frame in
      `glass-proto`). QUIC already authenticates each packet, so this only catches our own
      reassembly/FEC bugs; cheap, never feed a mismatching frame to the decoder. Low priority.
    - **Bitrate: frame-ack throughput as a second signal and no raise on a still screen**

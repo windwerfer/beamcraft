@@ -308,6 +308,7 @@ async fn run(
                 let delay = reassembler.take_delay();
                 link_window.hud.queue = delay;
                 link_window.hud.resent = reassembler.nack_stats().resent_useful;
+                link_window.hud.corrupt = reassembler.corrupt_frames();
                 session.report_link(&w, delay);
                 reassembler.set_rtt_us(session.conn.rtt().as_micros().min(u64::MAX as u128) as u64);
                 status.lock().unwrap_or_else(|e| e.into_inner()).link = link_window.hud;

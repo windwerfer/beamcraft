@@ -40,6 +40,16 @@ without new information.
 
 Newest first. Add an entry when the owner decides something non-obvious.
 
+- **2026-11-17 (frame checksum, protocol 5):** every video packet header carries the CRC-32
+  of the whole encoded frame (offset 44, header 44 → 48 bytes, `WIRE_VERSION` 2 → 3); the
+  viewer checks it when a frame completes and never decodes a mismatching one (counted as a
+  lost frame, shown in the HUD). CRC-32 rather than Glass's Fletcher-16: 32 bits are cheap
+  (1.6 GB/s here, ~0.2 ms for a 300 KB keyframe, nothing measurable in the loopback) and a
+  16-bit sum misses one error in 65 000, which is the whole point of the check. Hand-written
+  slicing-by-8 table (no `crc32fast`: a 60-line module vs a dependency; swap if profiling ever
+  says so). Per frame, not per packet: the packet is already authenticated by QUIC, what can
+  be wrong is the frame we rebuilt from them. Breaks: `PROTOCOL_VERSION` 4 → 5, `WIRE_VERSION`
+  2 → 3, 4 more bytes per packet.
 - **2026-11-17 (NACK resend, protocol 4):** lost fragments that FEC cannot rebuild are
   requested again (protocol.md §3d). Design choices: NACK as an unreliable **datagram**
   (`0xC2`), not a control message: a lost NACK is repeated after RTT + 2 ms anyway, and the

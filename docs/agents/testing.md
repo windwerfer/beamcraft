@@ -26,6 +26,7 @@ Build dependencies (Fedora and Ubuntu package lists) are in the README and in
 | Kind | Where | What it proves |
 |---|---|---|
 | Unit | `#[cfg(test)]` in `mirrorwire-proto` | header encode/parse, fragmentation and reassembly (loss, reordering, late fragments), control framing, clock offset, stats |
+| Unit (checksum) | `mirrorwire-proto/src/crc.rs`, `fragment.rs` (`nack_tests`) | CRC-32 known vectors and slicing = bytewise, a rebuilt frame with a flipped byte is never delivered and counted, packets disagreeing on the CRC are dropped |
 | Unit (NACK) | `mirrorwire-proto/src/nack.rs`, `fragment.rs` (`nack_tests`), `mirrorwire-net/src/transport/mod.rs` | NACK datagram round trip and limits, resend window (3 s / 8 MiB / 128 KiB/s budget), a lost fragment resent and no frame lost, resends not counted as loss, give-up after the hold time, whole-frame requests, tail loss; end to end: a presenter resends a dropped packet on a viewer NACK, and a viewer of another protocol version gets a readable rejection |
 | Hostile input | `mirrorwire-proto/tests/hostile_input.rs`, `mirrorwire-net/src/pairing.rs` | random and mutated bytes into the packet header, reassembler (incl. garbage bodies through FEC recovery), pointer/cursor-image decoders, control messages and the URI parser: never a panic. proto and net also `deny` unwrap/expect/indexing/panic outside tests |
 | Unit | `#[cfg(test)]` in `mirrorwire-net` | identity load/create, URI round trip (including a non-default port) and rejection of bad fingerprints, QR generation, port settings precedence, firewall guide text, ufw rule parsing |
@@ -519,6 +520,11 @@ datagrams, resends included), x264 test pattern, same machine; baseline = build 
 frame or two.) On loopback the RTT is ~0, so the hold time is its 6 ms minimum; on a real link
 a lost frame costs up to 2 × RTT + 4 ms of added latency for the frames behind it, instead of a
 keyframe. Not measured on Wi-Fi.
+
+Frame checksum (protocol 5), same setup, NACK build vs NACK + CRC-32, capture→decoded
+mean / p95: 0 % loss 12.5 / 15.0 → 11.9 / 14.1 ms, 3 % 11.5 / 13.6 → 12.0 / 14.3 ms, 10 %
+12.0 / 13.0 → 12.3 / 14.6 ms; checksum failures 0 in all runs (run-to-run spread is about
+±1 ms; no measurable cost). CRC speed: 1.6 GB/s (`crc::tests::throughput`, release).
 
 ### 3.8 Real Wi-Fi: parity probe A/B (2026-11-17)
 

@@ -6,6 +6,7 @@
 
 use crate::be;
 use crate::control::QueueDelay;
+use crate::crc::crc32;
 use crate::delay::DelayMeter;
 use crate::fec::{block_len, parity_count, recover_block, LinkStats};
 use crate::nack::{Nack, NackEntry};
@@ -14,8 +15,8 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 
 /// First byte of every video packet (pointer datagrams start with 0xC1).
-pub const WIRE_VERSION: u8 = 2;
-pub const HEADER_LEN: usize = 44;
+pub const WIRE_VERSION: u8 = 3;
+pub const HEADER_LEN: usize = 48;
 /// Data shards per block before a frame is split into more blocks.
 pub const MAX_BLOCK_DATA: usize = 64;
 const MAX_BLOCKS: usize = 255;
@@ -45,6 +46,8 @@ pub struct PacketHeader {
     pub blocks: u8,
     /// A retransmission: not a first transmission, so it says nothing about loss or delay.
     pub resent: bool,
+    /// CRC-32 of the whole encoded frame ([`crate::crc`]), the same in every packet of it.
+    pub frame_crc: u32,
     pub timing: FrameTiming,
 }
 
@@ -69,6 +72,7 @@ impl PacketHeader {
         buf.put_u64(self.timing.capture_us);
         buf.put_u64(self.timing.encoded_us);
         buf.put_u64(self.timing.sent_us);
+        buf.put_u32(self.frame_crc);
     }
 
     /// Parses and validates a packet. Inconsistent headers (from a
@@ -87,6 +91,7 @@ impl PacketHeader {
             frame_len: u32::from_be_bytes(be(d, 12)?),
             shard_len: u16::from_be_bytes(be(d, 16)?),
             blocks: be::<1>(d, 18)?[0],
+            frame_crc: u32::from_be_bytes(be(d, 44)?),
             timing: FrameTiming {
                 capture_us: u64::from_be_bytes(be(d, 20)?),
                 encoded_us: u64::from_be_bytes(be(d, 28)?),
@@ -135,12 +140,14 @@ impl PacketHeader {
             self.frame_len,
             self.shard_len,
             self.blocks,
+            self.frame_crc,
         ) == (
             o.data_count,
             o.parity_count,
             o.frame_len,
             o.shard_len,
             o.blocks,
+            o.frame_crc,
         )
     }
 }
@@ -180,6 +187,7 @@ pub fn fragment(
         shard_len: shard_len as u16,
         blocks: blocks as u8,
         resent: false,
+        frame_crc: crc32(payload),
         timing,
     };
     let shard = |i: usize| -> Cow<'_, [u8]> {
@@ -444,6 +452,7 @@ pub struct Reassembler {
     /// Whole-frame NACKs: frame_id -> (rounds, last time).
     absent: BTreeMap<u32, (u8, u64)>,
     nacks: NackStats,
+    corrupt_frames: u64,
 }
 
 impl Reassembler {
@@ -461,6 +470,7 @@ impl Reassembler {
             pending_lost: 0,
             absent: BTreeMap::new(),
             nacks: NackStats::default(),
+            corrupt_frames: 0,
         }
     }
 
@@ -531,8 +541,19 @@ impl Reassembler {
                 let done = self.partial.remove(&head)?;
                 self.last_delivered = Some(head);
                 self.gap = None;
-                let lost_frames = std::mem::take(&mut self.pending_lost);
-                return Some(finish(head, done, lost_frames, now_us));
+                let want_crc = done.layout.frame_crc;
+                let lost_frames = self.pending_lost;
+                let (frame, event) = finish(head, done, lost_frames, now_us);
+                if crc32(&frame.data) != want_crc {
+                    // Reassembly or FEC rebuilt something wrong: never feed it to the decoder.
+                    // Handled like a lost frame (the caller asks for a keyframe).
+                    self.corrupt_frames += 1;
+                    self.pending_lost += 1;
+                    self.stats.unrecoverable_frames += 1;
+                    continue;
+                }
+                self.pending_lost = 0;
+                return Some((frame, event));
             }
             if head >= newest {
                 return None; // nothing newer yet: the frame is still arriving
@@ -624,6 +645,12 @@ impl Reassembler {
             }
         }
         (!nack.is_empty()).then_some(nack)
+    }
+
+    /// Frames that completed but failed their CRC and were dropped (cumulative). Should stay 0:
+    /// QUIC authenticates every packet, so a failure means a reassembly or FEC bug.
+    pub fn corrupt_frames(&self) -> u64 {
+        self.corrupt_frames
     }
 
     pub fn nack_stats(&self) -> NackStats {
@@ -846,6 +873,43 @@ mod nack_tests {
             }
         }
         got
+    }
+
+    #[test]
+    fn a_frame_failing_its_crc_is_never_delivered() {
+        let mut r = Reassembler::new(u64::MAX);
+        let good = fragment(1, true, T, &payload(5_000, 1), 1200, None);
+        let mut bad = fragment(2, false, T, &payload(5_000, 2), 1200, None);
+        // One body byte flipped in a way no header check can see.
+        let mut v = bad[1].to_vec();
+        v[HEADER_LEN + 3] ^= 0x40;
+        bad[1] = Bytes::from(v);
+        let next = fragment(3, false, T, &payload(100, 3), 1200, None);
+        let mut ids = Vec::new();
+        for p in good.into_iter().chain(bad).chain(next) {
+            ids.extend(r.push(p, 0).map(|(f, e)| (f.frame_id, e.lost_frames)));
+        }
+        // Frame 2 is dropped as lost, frame 3 follows it and reports the loss.
+        assert_eq!(ids, [(1, 0), (3, 1)]);
+        assert_eq!(r.corrupt_frames(), 1);
+        assert_eq!(r.link_stats().unrecoverable_frames, 1);
+    }
+
+    #[test]
+    fn crc_is_in_every_packet_and_must_agree() {
+        let pkts = fragment(1, false, T, &payload(5_000, 1), 1200, Some(0.2));
+        let crc = PacketHeader::parse(&pkts[0]).unwrap().0.frame_crc;
+        assert_eq!(crc, crate::crc::crc32(&payload(5_000, 1)));
+        assert!(pkts
+            .iter()
+            .all(|p| PacketHeader::parse(p).unwrap().0.frame_crc == crc));
+        // A packet claiming another CRC for the same frame is ignored (layout mismatch).
+        let mut r = Reassembler::new(u64::MAX);
+        r.push(pkts[0].clone(), 0);
+        let mut v = pkts[1].to_vec();
+        v[47] ^= 1;
+        assert!(r.push(Bytes::from(v), 0).is_none());
+        assert_eq!(r.pending(), 1);
     }
 
     #[test]

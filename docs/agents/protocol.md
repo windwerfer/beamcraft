@@ -31,7 +31,7 @@ followed by a JSON body (`serde`, `tag = "type"`, `snake_case`). Bodies over
 
 | `type` | Direction | Fields |
 |---|---|---|
-| `hello` | viewer → presenter | `protocol` (u32, must equal `PROTOCOL_VERSION`, currently **4**; read first, §4), `name`, `pairing_code` (string or null) |
+| `hello` | viewer → presenter | `protocol` (u32, must equal `PROTOCOL_VERSION`, currently **5**; read first, §4), `name`, `pairing_code` (string or null) |
 | `rejected` | presenter → viewer | `reason` (shown to the user) |
 | `stream_info` | presenter → viewer | `width`, `height`, `fps`, `codec`, `encoder`, `bitrate_kbps`, `intra_refresh`, `cursor` (`separate` = §3a, `embedded` = in the video, `hidden`), `fec` (the presenter's FEC setting `off`/`auto`/`20%`, for display). Sent after `hello`, and **again** whenever it changes |
 | `request_keyframe` | viewer → presenter | `reason`. The presenter forces at most one keyframe per 2 × RTT (250 ms–1 s) per viewer and ignores requests in between. The viewer asks at once, then backs off 250 ms, 500 ms, 1 s, 1 s … until a keyframe arrives (`KeyframeBackoff`), so a lost keyframe is still replaced without a request storm; frames that arrive while it waits are still counted in `link_report`. The encoder drops a request that arrives when the previous frame sent was already an IDR (`Controls::take_keyframe_request`: no forced IDR directly after an IDR) |
@@ -49,11 +49,11 @@ One packet format, with or without FEC (`mirrorwire-proto/src/fragment.rs`). Eac
 (even) that fit `conn.max_datagram_size()`; the last data shard goes out unpadded. While the
 presenter's FEC setting isn't `off`, `parity_count` parity shards follow (§3b); with `off` it is
 0. Data packets go out first, then parity (paced by the congestion controller like everything
-else). Every packet starts with a **44-byte big-endian header** (`HEADER_LEN`):
+else). Every packet starts with a **48-byte big-endian header** (`HEADER_LEN`):
 
 | Offset | Size | Field |
 |---|---|---|
-| 0 | 1 | wire version (`WIRE_VERSION` = 2); other values are dropped |
+| 0 | 1 | wire version (`WIRE_VERSION` = 3); other values are dropped |
 | 1 | 1 | flags: bit 0 = keyframe; bit 1 = resent (a retransmission after a NACK, §3d); other bits reserved, send 0 |
 | 2 | 4 | `frame_id` (u32, increments per frame) |
 | 6 | 2 | `index`: `0..data_count` data, then `data_count..data_count+parity_count` parity |
@@ -66,6 +66,7 @@ else). Every packet starts with a **44-byte big-endian header** (`HEADER_LEN`):
 | 20 | 8 | `capture_us` (presenter clock) |
 | 28 | 8 | `encoded_us` |
 | 36 | 8 | `sent_us` |
+| 44 | 4 | `frame_crc`: CRC-32 (IEEE, `crc::crc32`) of the whole encoded frame, the same in every packet of it |
 
 Receivers drop packets whose header is inconsistent (zero blocks, `frame_len` not matching the
 counts, payload length not what the index implies) or whose layout differs from the first packet
@@ -74,15 +75,24 @@ seen for that frame, and keep at most 64 partial frames. The receiver reassemble
 that fails it is dropped, reported as lost, and the viewer asks for a keyframe unless the
 stream uses intra refresh.
 
-The header costs 10 bytes more per packet than the old version-1 fragments (34 bytes), about
-0.7 % of a 1400-byte packet, in exchange for a single receive path.
+The header costs 14 bytes more per packet than the old version-1 fragments (34 bytes), about
+1 % of a 1400-byte packet, in exchange for a single receive path and a frame checksum.
+
+**Frame integrity.** When a frame completes (all data shards present, some possibly rebuilt
+from parity or filled by a resend), the viewer computes the CRC-32 of the reassembled bytes and
+compares it with `frame_crc`. A mismatch means our reassembly or FEC produced a wrong frame
+(QUIC authenticates every packet, so the wire cannot corrupt one): the frame is never given
+to the decoder, counts as lost (keyframe request, §2), and is counted separately; the viewer
+HUD shows `CORRUPT FRAMES n (checksum mismatch)` and the loopback summary prints
+`checksum failures`. It should stay 0. Packets of one frame that disagree on `frame_crc` are
+treated as a layout mismatch and dropped.
 
 ## 3a. Cursor as coordinates (`stream_info.cursor` = `separate`)
 
 All in `mirrorwire-proto/src/cursor.rs`.
 
 **Pointer datagram** (unreliable, one per change, not tied to video frames). The first byte
-`0xC1` can't collide with a video packet (whose first byte is `WIRE_VERSION` = 2).
+`0xC1` can't collide with a video packet (whose first byte is `WIRE_VERSION` = 3).
 Exactly 32 bytes, big endian (other lengths are dropped; a later tool such as a pen with
 pressure/tilt changes the layout and bumps `PROTOCOL_VERSION`):
 
