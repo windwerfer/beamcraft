@@ -10,7 +10,7 @@ pub use status::{EncodeHud, PresentPhase, PresentStatus};
 use crate::capture_prefs::CapturePrefs;
 use crate::sync::LockExt;
 use anyhow::{bail, Result};
-use mirrorwire_media::encode::{parse_size, Encoder, EncoderBackend, EncoderConfig};
+use mirrorwire_media::encode::{parse_size, Encoder, EncoderConfig};
 use mirrorwire_media::frame::EncodedFrame;
 use mirrorwire_media::pipeline::{
     continue_capture_encode, open_encoder_for, wait_first_frame, CaptureExit, Controls, Tick,
@@ -270,7 +270,11 @@ fn open_portal(
         // turn out to be x264; the pipeline then asks the source to switch
         // to shared memory.
         dmabuf: !args.no_dmabuf
-            && matches!(args.encoder, EncoderBackend::Auto | EncoderBackend::Vaapi)
+            && matches!(
+                args.encoder,
+                mirrorwire_media::encode::EncoderBackend::Auto
+                    | mirrorwire_media::encode::EncoderBackend::Vaapi
+            )
             && std::env::var_os("MIRRORWIRE_NO_DMABUF").is_none(),
     })?))
 }
@@ -921,7 +925,7 @@ mod tests {
         let mut args = PresentArgs::gui_defaults();
         args.source = SourceKind::Test;
         (args.width, args.height) = (640, 360);
-        args.encoder = EncoderBackend::X264;
+        args.encoder = mirrorwire_media::encode::EncoderBackend::X264;
         args.bitrate_kbps = 4000;
         (args.port, args.bind, args.advertise_ip) = (0, localhost, localhost);
         args.no_mdns = true;
