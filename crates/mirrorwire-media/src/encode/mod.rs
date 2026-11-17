@@ -12,7 +12,9 @@ pub use config::*;
 use rc::{apply_rate_control, apply_vaapi_opts, describe_rc, effective_rc};
 #[cfg(unix)]
 use vaapi::map_dmabuf;
-use vaapi::{VaapiVpp, VppInput};
+use vaapi::VaapiVpp;
+#[cfg(unix)]
+use vaapi::VppInput;
 
 enum Upload {
     Software,
@@ -27,6 +29,8 @@ enum Upload {
 /// DMA-BUF import: a VAAPI frames context at the capture size (the DRM-PRIME
 /// buffers are mapped into it as VAAPI surfaces) and a VPP graph that scales
 /// and converts those surfaces to NV12 on the GPU.
+// Only read by the unix DMA-BUF path.
+#[cfg_attr(not(unix), allow(dead_code))]
 struct DmaImport {
     frames: HwRef,
     key: (PixelFormat, u32, u32),

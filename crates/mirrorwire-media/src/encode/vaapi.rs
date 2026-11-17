@@ -131,6 +131,8 @@ impl VaapiVpp {
     }
 }
 
+// `Vaapi` is only built by the unix DMA-BUF path.
+#[cfg_attr(not(unix), allow(dead_code))]
 #[derive(Clone, Copy)]
 pub(super) enum VppInput {
     System(Pixel),
