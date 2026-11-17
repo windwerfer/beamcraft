@@ -197,14 +197,14 @@ jobs:
       options: --privileged
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # The image's preinstalled runtimes can no longer be updated in place on the container's
-      # overlay filesystem ("Invalid cross-device link", then flatpak-builder segfaults).
-      # Remove them so flatpak-builder installs fresh copies instead of updating.
-      - name: Reinstall runtimes fresh
+      # The image's preinstalled runtimes live in an overlay lower layer; updating or removing
+      # them fails with "Invalid cross-device link" and flatpak-builder then segfaults. Hide them
+      # behind an empty bind mount so everything is installed fresh into one writable layer.
+      - name: Use an empty Flatpak system installation
         run: |
+          mkdir -p /tmp/flatpak-system
+          mount --bind /tmp/flatpak-system /var/lib/flatpak
           flatpak remote-add --system --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
-          flatpak uninstall --system -y --noninteractive --all
-          flatpak install --system -y --noninteractive flathub org.freedesktop.Platform//25.08 org.freedesktop.Sdk//25.08
       - uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6.8
         with:
           bundle: MirrorWire-x86_64.flatpak
