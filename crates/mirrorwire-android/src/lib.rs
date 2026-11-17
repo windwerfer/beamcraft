@@ -28,7 +28,9 @@ mod gpu;
 mod session;
 
 /// Entry point called by android-activity's NativeActivity glue.
+// `#[no_mangle]` counts as unsafe code for the lint; the NativeActivity glue needs the symbol.
 #[cfg(target_os = "android")]
+#[allow(unsafe_code)]
 #[no_mangle]
 fn android_main(app: winit::platform::android::activity::AndroidApp) {
     app::run(app);
