@@ -224,3 +224,5 @@ Newest first. Add an entry when the owner decides something non-obvious.
   `windwerfer/mirrorwire` / `windwerfer_mirrorwire` until the owner renames them. Port 47800 is
   unchanged. No migration of the `mirrorwire` config dir: viewers pair again once. mirrorwire
   builds and MirrorWire builds cannot see or talk to each other.
+
+(2026-11-17, D15 follow-up) `unsafe_code` is enforced by the compiler per crate: `forbid` in proto, net, film, xtask; `deny` in app, media and android, with `#[allow(unsafe_code)]` only on the modules listed in HANDOFF/roadmap 0c (yuv_glow, decode, encode, hw, source::portal, android gpu). A new `unsafe` elsewhere fails to compile; widening the allow list needs the owner (D15).
