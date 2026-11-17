@@ -1,0 +1,88 @@
+//! Live capture settings shared by the encode thread, transport and GUI.
+
+use crate::capture_prefs::{CapturePrefs, CursorPref};
+use mirrorwire_media::source::CursorCapture;
+use mirrorwire_net::transport::{LinkControl, LinkState};
+use mirrorwire_proto::control::CursorMode;
+use std::sync::Arc;
+
+/// Live capture settings and what the running source actually does. Shared
+/// between the encode thread, the transport's viewer callback and the GUI.
+#[derive(Debug, Clone)]
+pub struct CaptureCtl {
+    /// What the user asked for.
+    pub prefs: CapturePrefs,
+    /// What the current source was opened with (before portal fallback).
+    pub(super) asked_cursor: CursorCapture,
+    pub(super) asked_fps: u32,
+    /// What the current source delivers.
+    pub(super) active_cursor: CursorCapture,
+    pub(super) cursor_note: Option<String>,
+    pub(super) negotiated_fps: Option<u32>,
+    pub(super) source_desc: String,
+    /// FEC setting and link feedback, shared with the transport.
+    pub(super) fec: Arc<LinkControl>,
+}
+
+impl CaptureCtl {
+    pub(super) fn new(prefs: CapturePrefs) -> Self {
+        let fec = LinkControl::new(prefs.fec);
+        fec.set_adaptive(prefs.adaptive);
+        Self {
+            fec,
+            prefs,
+            asked_cursor: CursorCapture::Embedded,
+            asked_fps: 0,
+            active_cursor: CursorCapture::Embedded,
+            cursor_note: None,
+            negotiated_fps: None,
+            source_desc: String::new(),
+        }
+    }
+
+    /// The cursor mode to ask the capture source for right now.
+    pub(super) fn wanted_cursor(&self) -> CursorCapture {
+        match self.prefs.cursor {
+            CursorPref::Separate => CursorCapture::Metadata,
+            CursorPref::Embedded => CursorCapture::Embedded,
+            CursorPref::Hidden => CursorCapture::Hidden,
+        }
+    }
+
+    #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+    pub(super) fn needs_restart(&self) -> bool {
+        self.wanted_cursor() != self.asked_cursor || self.prefs.fps.request() != self.asked_fps
+    }
+
+    #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+    pub(super) fn status(&self) -> CaptureStatus {
+        CaptureStatus {
+            prefs: self.prefs,
+            cursor_mode: self.active_cursor.mode(),
+            cursor_note: self.cursor_note.clone(),
+            fps_requested: self.asked_fps,
+            fps_negotiated: self.negotiated_fps,
+            fec: self.fec.snapshot(),
+        }
+    }
+}
+
+/// Capture settings as shown in the presenter window.
+#[derive(Debug, Clone)]
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
+pub struct CaptureStatus {
+    pub prefs: CapturePrefs,
+    /// What the viewer actually gets.
+    pub cursor_mode: CursorMode,
+    pub cursor_note: Option<String>,
+    pub fps_requested: u32,
+    pub fps_negotiated: Option<u32>,
+    /// FEC setting, applied overhead and what the viewer reports.
+    pub fec: LinkState,
+}
+
+impl Default for CaptureStatus {
+    fn default() -> Self {
+        CaptureCtl::new(CapturePrefs::default()).status()
+    }
+}

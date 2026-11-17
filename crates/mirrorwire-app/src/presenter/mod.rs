@@ -1,5 +1,7 @@
+mod capture;
 #[cfg(feature = "gui")]
 mod status;
+pub use capture::{CaptureCtl, CaptureStatus};
 #[cfg(feature = "gui")]
 pub use status::{EncodeHud, PresentPhase, PresentStatus};
 
@@ -24,10 +26,8 @@ use mirrorwire_net::identity::{short_fingerprint, Identity};
 use mirrorwire_net::pairing::{
     lan_ipv4s, primary_ipv4, qr_terminal, random_pairing_code, ConnectInfo,
 };
-use mirrorwire_net::transport::{
-    LinkControl, LinkState, OutgoingFrame, Presenter, PresenterConfig,
-};
-use mirrorwire_proto::control::{CursorMode, StreamInfo};
+use mirrorwire_net::transport::{OutgoingFrame, Presenter, PresenterConfig};
+use mirrorwire_proto::control::StreamInfo;
 use mirrorwire_proto::cursor::CursorEvent;
 use mirrorwire_proto::fec::FecMode;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -326,87 +326,6 @@ impl VideoSink for QuicSink {
 
     fn wants_frames(&self) -> bool {
         *self.connected.borrow()
-    }
-}
-
-/// Live capture settings and what the running source actually does. Shared
-/// between the encode thread, the transport's viewer callback and the GUI.
-#[derive(Debug, Clone)]
-pub struct CaptureCtl {
-    /// What the user asked for.
-    pub prefs: CapturePrefs,
-    /// What the current source was opened with (before portal fallback).
-    asked_cursor: CursorCapture,
-    asked_fps: u32,
-    /// What the current source delivers.
-    active_cursor: CursorCapture,
-    cursor_note: Option<String>,
-    negotiated_fps: Option<u32>,
-    source_desc: String,
-    /// FEC setting and link feedback, shared with the transport.
-    fec: Arc<LinkControl>,
-}
-
-impl CaptureCtl {
-    fn new(prefs: CapturePrefs) -> Self {
-        let fec = LinkControl::new(prefs.fec);
-        fec.set_adaptive(prefs.adaptive);
-        Self {
-            fec,
-            prefs,
-            asked_cursor: CursorCapture::Embedded,
-            asked_fps: 0,
-            active_cursor: CursorCapture::Embedded,
-            cursor_note: None,
-            negotiated_fps: None,
-            source_desc: String::new(),
-        }
-    }
-
-    /// The cursor mode to ask the capture source for right now.
-    fn wanted_cursor(&self) -> CursorCapture {
-        match self.prefs.cursor {
-            CursorPref::Separate => CursorCapture::Metadata,
-            CursorPref::Embedded => CursorCapture::Embedded,
-            CursorPref::Hidden => CursorCapture::Hidden,
-        }
-    }
-
-    #[cfg_attr(not(feature = "gui"), allow(dead_code))]
-    fn needs_restart(&self) -> bool {
-        self.wanted_cursor() != self.asked_cursor || self.prefs.fps.request() != self.asked_fps
-    }
-
-    #[cfg_attr(not(feature = "gui"), allow(dead_code))]
-    fn status(&self) -> CaptureStatus {
-        CaptureStatus {
-            prefs: self.prefs,
-            cursor_mode: self.active_cursor.mode(),
-            cursor_note: self.cursor_note.clone(),
-            fps_requested: self.asked_fps,
-            fps_negotiated: self.negotiated_fps,
-            fec: self.fec.snapshot(),
-        }
-    }
-}
-
-/// Capture settings as shown in the presenter window.
-#[derive(Debug, Clone)]
-#[cfg_attr(not(feature = "gui"), allow(dead_code))]
-pub struct CaptureStatus {
-    pub prefs: CapturePrefs,
-    /// What the viewer actually gets.
-    pub cursor_mode: CursorMode,
-    pub cursor_note: Option<String>,
-    pub fps_requested: u32,
-    pub fps_negotiated: Option<u32>,
-    /// FEC setting, applied overhead and what the viewer reports.
-    pub fec: LinkState,
-}
-
-impl Default for CaptureStatus {
-    fn default() -> Self {
-        CaptureCtl::new(CapturePrefs::default()).status()
     }
 }
 
@@ -1214,7 +1133,10 @@ mod tests {
         let status = presenter.poll();
         assert!(status.viewer_connected);
         assert_eq!(status.phase, PresentPhase::Streaming);
-        assert_eq!(status.capture.cursor_mode, CursorMode::Separate);
+        assert_eq!(
+            status.capture.cursor_mode,
+            mirrorwire_proto::control::CursorMode::Separate
+        );
         assert!(
             status.attempts.iter().any(|a| a.ok),
             "{:?}",
