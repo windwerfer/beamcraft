@@ -82,6 +82,13 @@ Newest first. Add an entry when the owner decides something non-obvious.
   immediately (duplicates what parity rebuilds anyway); an unbounded resend budget (resends
   would compete with video on a congested link). Breaks: `PROTOCOL_VERSION` 3 → 4, a viewer or
   presenter of protocol 3 is rejected with the readable version message.
+- **2026-11-17 (resend budget scales with the bitrate):** the NACK resend rate is 15 % of
+  the current ABR target (`LinkControl::budget_kbps`, the total wire budget), floor 128 KiB/s
+  (the old fixed value), cap 2 MiB/s; the burst is half a second of the rate, at least 64 KiB.
+  Why: a fixed 128 KiB/s is 3 % of a 40 Mbit/s stream, too little for a big IDR hit by loss,
+  while 15 % of a 3 Mbit/s stream is below the floor anyway. Resends still compete with video
+  on the same link, hence a share and a cap, not an unbounded budget. No wire change, no
+  protocol bump. Breaks: none.
 - **2026-11-17 (keyframe backoff and acks):** the viewer's keyframe requests back off
   250 ms, 500 ms, 1 s (was every 100 ms); the presenter's gate is 2 × RTT clamped to
   250 ms–1 s (was 500 ms–2 s); the encoder drops a request that follows an IDR directly

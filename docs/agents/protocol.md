@@ -218,7 +218,9 @@ transmissions); the HUD shows `resent N`.
 **Sender** (`ResendWindow`). The presenter keeps the packets of every frame it sent for 3 s,
 at most 8 MiB, and clears them when a viewer connects. A NACK is answered with copies of the
 asked packets, flag bit 1 set, otherwise byte for byte the original (the original timestamps
-stay). Resends have their own budget of 128 KiB/s (token bucket, burst 64 KiB); what does not
+stay). Resends have their own budget: 15 % of the current ABR target (total wire budget), at least
+128 KiB/s and at most 2 MiB/s (token bucket, burst half a second of the rate, at least 64 KiB;
+the presenter updates the rate before answering each NACK; no wire change); what does not
 fit, and frames already out of the window, are counted (`resent X of Y asked (…over budget…)`
 in the presenter log) and left to the viewer's keyframe request. A frame the presenter never
 sent (dropped for backlog) is simply unknown to it.
