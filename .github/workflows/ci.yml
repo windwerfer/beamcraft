@@ -47,7 +47,7 @@ jobs:
       - name: Download FFmpeg (LGPL, shared)
         shell: pwsh
         run: |
-          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.0-latest-win64-lgpl-shared-8.0.zip"
+          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip"
           Invoke-WebRequest $url -OutFile ffmpeg.zip
           Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-x
           Move-Item (Get-ChildItem ffmpeg-x | Select-Object -First 1).FullName ffmpeg
