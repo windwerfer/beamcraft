@@ -31,11 +31,12 @@ followed by a JSON body (`serde`, `tag = "type"`, `snake_case`). Bodies over
 
 | `type` | Direction | Fields |
 |---|---|---|
-| `hello` | viewer → presenter | `protocol` (u32, must equal `PROTOCOL_VERSION`, currently **6**; read first, §4), `name`, `pairing_code` (string or null) |
+| `hello` | viewer → presenter | `protocol` (u32, must equal `PROTOCOL_VERSION`, currently **7**; read first, §4), `name`, `pairing_code` (string or null) |
 | `rejected` | presenter → viewer | `reason` (shown to the user) |
 | `stream_info` | presenter → viewer | `width`, `height`, `fps`, `codec`, `encoder`, `bitrate_kbps`, `intra_refresh`, `cursor` (`separate` = §3a, `embedded` = in the video, `hidden`), `fec` (the presenter's FEC setting `off`/`auto`/`20%`, for display). Sent after `hello`, and **again** whenever it changes |
 | `request_keyframe` | viewer → presenter | `reason`. The presenter forces at most one keyframe per 2 × RTT (250 ms–1 s) per viewer and ignores requests in between. The viewer asks at once, then backs off 250 ms, 500 ms, 1 s, 1 s … until a keyframe arrives (`KeyframeBackoff`), so a lost keyframe is still replaced without a request storm; frames that arrive while it waits are still counted in `link_report`. The encoder drops a request that arrives when the previous frame sent was already an IDR (`Controls::take_keyframe_request`: no forced IDR directly after an IDR) |
 | `link_report` | viewer → presenter | `loss_permille`, `packets`, `recovered`, `unrecoverable`, `rx_kbps` (u32) and `window_ms` (u32) over the last ~0.5 s (`rx_kbps` = wire rate of video packets that arrived, first transmissions only, parity and headers included; `window_ms` = the window's length; §3b), and `queue`: `{mean_us, max_us, trend_us_per_s}` (u32, u32, i32), the one-way queueing delay of the window's frames (mean, max) and its least-squares slope (§3c), or null when no frame arrived. Not sent for a window without packets |
+| `bottleneck` | viewer → presenter | `stage` (`none`/`network`/`viewer`/`driver`), `rating` (`good`/`ok`/`weak`): the viewer's coarse bottleneck verdict (architecture.md, Bottleneck line), sent when it changes (protocol 7). The presenter window shows it as `viewer sees: …` after the bitrate line; it never feeds rate control |
 | `ping` / `pong` | viewer ↔ presenter | `t_viewer_us`, `t_presenter_us` (clock offset + RTT) |
 | `bye` | either | — |
 

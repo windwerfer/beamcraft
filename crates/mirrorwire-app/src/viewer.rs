@@ -419,6 +419,7 @@ fn decode_loop(
     )?;
     let mut decoder_name = decoder.name().to_owned();
     let mut bottleneck = crate::bottleneck::Bottleneck::default();
+    let mut verdict_sent = None;
     {
         let mut s = status.lock_ok();
         s.decoder = decoder_name.clone();
@@ -615,6 +616,14 @@ fn decode_loop(
                     encoder: &encoder,
                 });
                 s.bottleneck = bottleneck.line();
+                let verdict = bottleneck.verdict();
+                if verdict_sent != Some(verdict) {
+                    verdict_sent = Some(verdict);
+                    let _ = control.send(mirrorwire_proto::control::Control::Bottleneck {
+                        stage: verdict.stage,
+                        rating: verdict.rating,
+                    });
+                }
                 s.last_second = line;
                 s.source_fps = source_fps;
                 s.bitrate_mbps = bitrate;

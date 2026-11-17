@@ -50,7 +50,32 @@ pub enum Control {
         /// frame arrived in the window.
         queue: Option<QueueDelay>,
     },
+    /// Viewer -> presenter, when the viewer's bottleneck verdict changes (and once on connect
+    /// once it has one): the same coarse verdict the viewer shows on its HUD, so the presenter
+    /// window can show it too. Both fields are required.
+    Bottleneck {
+        stage: BottleneckStage,
+        rating: BottleneckRating,
+    },
     Bye,
+}
+
+/// Which stage limits the stream, as judged by the viewer.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BottleneckStage {
+    None,
+    Network,
+    Viewer,
+    Driver,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum BottleneckRating {
+    Good,
+    Ok,
+    Weak,
 }
 
 /// One-way queueing delay over a report window (µs above the lowest delay
@@ -253,6 +278,23 @@ mod tests {
             "{text}"
         );
         assert_eq!(Control::decode_body(&body[4..]).unwrap(), report);
+
+        let verdict = Control::Bottleneck {
+            stage: BottleneckStage::Network,
+            rating: BottleneckRating::Weak,
+        };
+        let body = verdict.encode();
+        assert_eq!(
+            std::str::from_utf8(&body[4..]).unwrap(),
+            r#"{"type":"bottleneck","stage":"network","rating":"weak"}"#
+        );
+        assert_eq!(Control::decode_body(&body[4..]).unwrap(), verdict);
+        // Unknown stages and missing fields are errors, not panics.
+        assert!(
+            Control::decode_body(br#"{"type":"bottleneck","stage":"gpu","rating":"weak"}"#)
+                .is_err()
+        );
+        assert!(Control::decode_body(br#"{"type":"bottleneck","stage":"none"}"#).is_err());
         // Every field is required: a report of another protocol version does not parse.
         let old = br#"{"type":"link_report","loss_permille":5,"packets":9,"recovered":0,"unrecoverable":0,"queue":null}"#;
         assert!(Control::decode_body(old).is_err());

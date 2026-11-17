@@ -404,6 +404,7 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
                     );
                     shared.fec.on_report(loss_permille, recovered, unrecoverable, queue, rx_kbps, window_ms);
                 }
+                Control::Bottleneck { stage, rating } => shared.fec.on_viewer_verdict(stage, rating),
                 Control::Bye => return Ok::<_, anyhow::Error>(()),
                 other => tracing::debug!("ignoring {other:?}"),
             }

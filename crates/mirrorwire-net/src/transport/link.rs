@@ -1,7 +1,7 @@
 //! Presenter link control: the FEC setting, the viewer's link reports and the
 //! adaptive bitrate budget derived from them.
 
-use mirrorwire_proto::control::QueueDelay;
+use mirrorwire_proto::control::{BottleneckRating, BottleneckStage, QueueDelay};
 use mirrorwire_proto::fec::FecMode;
 use mirrorwire_proto::rate::{self, AdaptiveBitrate, Delivery, LinkMemory, Sample, SentHistory};
 use std::net::IpAddr;
@@ -104,6 +104,8 @@ pub struct LinkState {
     pub sent_kbps: Option<f32>,
     /// The viewer's latest one-way queueing delay.
     pub queue: Option<QueueDelay>,
+    /// The viewer's own bottleneck verdict (display only).
+    pub viewer_verdict: Option<(BottleneckStage, BottleneckRating)>,
     /// This viewer was here before on this path and its link failed at
     /// this budget (kbit/s); the controller resumed from it.
     pub resumed_bad_kbps: Option<u32>,
@@ -126,6 +128,7 @@ impl Default for LinkState {
             rtt_ms: 0.0,
             sent_kbps: None,
             queue: None,
+            viewer_verdict: None,
             resumed_bad_kbps: None,
             last_heard: None,
         }
@@ -211,6 +214,9 @@ impl LinkState {
                 );
             }
             _ => {}
+        }
+        if let Some((stage, rating)) = self.viewer_verdict {
+            line += &format!("  ·  viewer sees: {}", verdict_text(stage, rating));
         }
         line
     }
@@ -337,6 +343,11 @@ impl LinkControl {
         was
     }
 
+    /// The viewer's bottleneck verdict arrived (shown in the status line only).
+    pub(super) fn on_viewer_verdict(&self, stage: BottleneckStage, rating: BottleneckRating) {
+        self.lock().viewer_verdict = Some((stage, rating));
+    }
+
     /// See [`LinkState::viewer_silent_for`].
     pub(super) fn viewer_silent_for(&self) -> Option<Duration> {
         self.lock().viewer_silent_for()
@@ -450,6 +461,22 @@ impl LinkControl {
 
 /// Log the cut the latest sample made (only when adaptive bitrate is on,
 /// since otherwise the budget does not follow the controller).
+/// `network is weak`, `nothing limits the stream`.
+fn verdict_text(stage: BottleneckStage, rating: BottleneckRating) -> String {
+    let stage = match stage {
+        BottleneckStage::None => return "nothing limits the stream".to_owned(),
+        BottleneckStage::Network => "the network",
+        BottleneckStage::Viewer => "the viewer's decoder",
+        BottleneckStage::Driver => "the presenter's encoder",
+    };
+    let rating = match rating {
+        BottleneckRating::Good => "fine",
+        BottleneckRating::Ok => "near its limit",
+        BottleneckRating::Weak => "the bottleneck",
+    };
+    format!("{stage}: {rating}")
+}
+
 fn log_cut(s: &LinkState) {
     if let Some(cut) = s.rate.cut_by_last_sample().filter(|_| s.adaptive) {
         tracing::info!("adaptive bitrate: {cut}");
@@ -514,6 +541,21 @@ mod tests {
             trend_us_per_s: 0,
         };
         link.on_report(300, 0, 0, Some(q), 0, 500);
+    }
+
+    #[test]
+    fn the_viewers_verdict_is_shown_and_reset_for_a_new_viewer() {
+        let link = LinkControl::new(FecMode::default());
+        link.viewer_connected(peer("aa", 1));
+        assert!(!link.snapshot().bitrate_line().contains("viewer sees"));
+        link.on_viewer_verdict(BottleneckStage::Network, BottleneckRating::Weak);
+        let line = link.snapshot().bitrate_line();
+        assert!(
+            line.contains("viewer sees: the network: the bottleneck"),
+            "{line}"
+        );
+        link.viewer_connected(peer("bb", 2));
+        assert!(!link.snapshot().bitrate_line().contains("viewer sees"));
     }
 
     #[test]

@@ -22,20 +22,8 @@ const DECODE_WEAK_SHARE: f64 = 0.8;
 /// The source delivers less than this share of the requested fps while the encoder is software.
 const FPS_SHARE: f64 = 0.8;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Stage {
-    None,
-    Network,
-    Viewer,
-    Driver,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Rating {
-    Good,
-    Ok,
-    Weak,
-}
+/// The wire types (`bottleneck` control message), shared with the presenter's status line.
+pub use mirrorwire_proto::control::{BottleneckRating as Rating, BottleneckStage as Stage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Verdict {
@@ -204,7 +192,6 @@ impl Bottleneck {
         }
     }
 
-    #[cfg(test)]
     pub fn verdict(&self) -> Verdict {
         self.shown
     }

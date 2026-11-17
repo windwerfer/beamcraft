@@ -190,5 +190,7 @@ OK, weak. Thresholds: network weak at loss ≥ 5 % or mean queue ≥ 40 ms, OK a
 viewer weak at decode ≥ 80 % of the frame interval, OK at ≥ 50 %; driver when the source delivers
 < 80 % of the requested fps and the encoder is software (a hardware encoder with low fps is an idle
 screen, no verdict). The first matching rule wins in that order. The shown verdict changes only
-after 3 equal windows in a row (no flicker). Not yet: presenter-side line (needs a protocol message
-from the viewer), render stage.
+after 3 equal windows in a row (no flicker). The desktop viewer sends the stage and rating to the
+presenter (`bottleneck` control message, protocol 7) whenever it changes; the presenter window
+appends `viewer sees: …` to the bitrate line (display only, never rate control). The hint text
+stays on the viewer. Not yet: the Android viewer does not send it, render stage.
