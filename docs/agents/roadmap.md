@@ -239,7 +239,7 @@ target), **planned**, **idea**. Update this file when an item moves.
    3. **A `cargo xtask ci` gate: done 2026-11-17** (`cargo xtask ci [--no-loopback]`, `cargo xtask layers`; std-only `xtask/` crate; the layer check reads each crate's `mirrorwire-*` deps against architecture.md and limits proto's external deps; CI runs `cargo xtask layers`; audit/deny stay manual) (the formatting-only commit and the CI fmt check are done,
       rustfmt defaults, no `rustfmt.toml`): fmt, clippy, tests, a crate-layer check
       (architecture.md made mechanical), loopback test.
-   4. **Machine-checked perf budgets:** loopback p95 capture→decoded and the adaptive-bitrate
+   4. **Machine-checked perf budgets: loopback half done 2026-11-17** (`perf-budgets.toml`, `cargo xtask loopback [secs]`, used by `xtask ci` and CI; loose p95 limit plus zero integrity counters; the ABR simulation rows were already asserted by the `sim_*` unit tests in rate.rs, which fail on regression; the 16 Mbit/s FIFO rows stay prose): loopback p95 capture→decoded and the adaptive-bitrate
       simulation rows as TOML budgets checked in CI, instead of prose tables in testing.md.
    5. **Split the big files** (encode.rs, presenter.rs; net's transport is done: `transport/`
       `presenter.rs`, `viewer.rs`, `link.rs` for the FEC/bitrate state) and merge the duplicated encoder-config comparison in
