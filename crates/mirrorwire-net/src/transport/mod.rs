@@ -35,11 +35,9 @@ fn transport_config() -> Arc<TransportConfig> {
     // tens of kilobits. A LAN RTT is a couple of milliseconds.
     t.initial_rtt(Duration::from_millis(2));
     t.keep_alive_interval(Some(Duration::from_secs(1)));
-    t.max_idle_timeout(Some(
-        Duration::from_secs(10)
-            .try_into()
-            .expect("valid idle timeout"),
-    ));
+    t.max_idle_timeout(Some(quinn::IdleTimeout::from(quinn::VarInt::from_u32(
+        10_000,
+    ))));
     t.congestion_controller_factory(crate::lan_cc::factory());
     Arc::new(t)
 }
@@ -75,7 +73,7 @@ fn version_mismatch(protocol: u32) -> String {
 }
 
 pub fn ms(later_us: u64, earlier_us: u64) -> f64 {
-    (later_us as i64 - earlier_us as i64) as f64 / 1000.0
+    (later_us as i64).saturating_sub(earlier_us as i64) as f64 / 1000.0
 }
 
 #[cfg(test)]

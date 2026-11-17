@@ -144,7 +144,8 @@ pub fn hello_protocol(body: &[u8]) -> Option<u32> {
 
 impl Control {
     pub fn encode(&self) -> Vec<u8> {
-        let body = serde_json::to_vec(self).expect("control message serializes");
+        // Cannot fail for these plain types; the fallback keeps encode infallible.
+        let body = serde_json::to_vec(self).unwrap_or_else(|_| br#"{"type":"bye"}"#.to_vec());
         let mut out = Vec::with_capacity(body.len() + 4);
         out.extend_from_slice(&(body.len() as u32).to_be_bytes());
         out.extend_from_slice(&body);

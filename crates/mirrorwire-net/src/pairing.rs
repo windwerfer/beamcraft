@@ -31,8 +31,10 @@ impl ConnectInfo {
     }
 
     pub fn to_uri(&self) -> String {
-        let mut url =
-            url::Url::parse(&format!("mirrorwire://{}", self.addr)).expect("valid socket addr");
+        let Ok(mut url) = url::Url::parse(&format!("mirrorwire://{}", self.addr)) else {
+            // Cannot happen for a SocketAddr; the bare form is still a valid link.
+            return format!("mirrorwire://{}?fp={}", self.addr, self.fingerprint);
+        };
         {
             let mut q = url.query_pairs_mut();
             q.append_pair("fp", &self.fingerprint);
@@ -222,5 +224,44 @@ mod tests {
             name: None,
         };
         assert_eq!(info.candidates(), vec![a, b]);
+    }
+}
+
+#[cfg(test)]
+mod hostile_tests {
+    use super::*;
+
+    #[test]
+    fn uri_parser_rejects_junk_without_panicking() {
+        let mut x = 0x2545_f491_4f6c_dd1du64;
+        let fp = "a".repeat(64);
+        let valid = format!("mirrorwire://192.168.1.2:47800?fp={fp}&code=123456&name=x");
+        assert!(ConnectInfo::parse(&valid).is_ok());
+        for _ in 0..5_000 {
+            let mut s: Vec<u8> = valid.bytes().collect();
+            for _ in 0..4 {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                let i = (x % s.len() as u64) as usize;
+                match x % 3 {
+                    0 => s[i] = (x >> 8) as u8,
+                    1 => s.truncate(i),
+                    _ => s.insert(i, (x >> 16) as u8),
+                }
+                if s.is_empty() {
+                    break;
+                }
+            }
+            let _ = ConnectInfo::parse(&String::from_utf8_lossy(&s));
+        }
+        for bad in [
+            "",
+            "mirrorwire://",
+            "mirrorwire://[::1]",
+            "mirrorwire://[::1]:99999?fp=1",
+        ] {
+            assert!(ConnectInfo::parse(bad).is_err(), "{bad}");
+        }
     }
 }

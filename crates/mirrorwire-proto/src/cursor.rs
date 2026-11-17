@@ -19,6 +19,7 @@
 //! and tilt): the `tool` byte says what it is. A tool that needs more fields
 //! changes the layout and bumps `PROTOCOL_VERSION`.
 
+use crate::be;
 use anyhow::{bail, ensure, Result};
 
 /// First byte of a pointer datagram. Video packets start with their wire
@@ -113,23 +114,22 @@ impl PointerUpdate {
     }
 
     pub fn decode(d: &[u8]) -> Option<Self> {
-        if d.len() != POINTER_LEN || d[0] != POINTER_DATAGRAM_KIND || d[1] != POINTER_VERSION {
+        if d.len() != POINTER_LEN
+            || *d.first()? != POINTER_DATAGRAM_KIND
+            || *d.get(1)? != POINTER_VERSION
+        {
             return None;
         }
-        let u16_at = |o: usize| u16::from_be_bytes([d[o], d[o + 1]]);
-        let u32_at = |o: usize| u32::from_be_bytes([d[o], d[o + 1], d[o + 2], d[o + 3]]);
-        let mut ts = [0u8; 8];
-        ts.copy_from_slice(&d[24..32]);
         Some(Self {
-            visible: d[2] & FLAG_VISIBLE != 0,
-            tool: PointerTool::from_u8(d[3]),
-            seq: u32_at(4),
-            x: u32_at(8) as i32,
-            y: u32_at(12) as i32,
-            frame_w: u16_at(16),
-            frame_h: u16_at(18),
-            image_id: u32_at(20),
-            capture_us: u64::from_be_bytes(ts),
+            visible: *d.get(2)? & FLAG_VISIBLE != 0,
+            tool: PointerTool::from_u8(*d.get(3)?),
+            seq: u32::from_be_bytes(be(d, 4)?),
+            x: i32::from_be_bytes(be(d, 8)?),
+            y: i32::from_be_bytes(be(d, 12)?),
+            frame_w: u16::from_be_bytes(be(d, 16)?),
+            frame_h: u16::from_be_bytes(be(d, 18)?),
+            image_id: u32::from_be_bytes(be(d, 20)?),
+            capture_us: u64::from_be_bytes(be(d, 24)?),
         })
     }
 }
@@ -186,31 +186,31 @@ impl CursorImage {
             "cursor image too short ({} bytes)",
             d.len()
         );
-        ensure!(d[0..4] == IMAGE_MAGIC, "not a cursor image");
+        ensure!(d.get(0..4) == Some(&IMAGE_MAGIC[..]), "not a cursor image");
+        let version = d.get(4).copied().unwrap_or(0);
         ensure!(
-            d[4] == IMAGE_VERSION,
-            "cursor image version {} unsupported",
-            d[4]
+            version == IMAGE_VERSION,
+            "cursor image version {version} unsupported"
         );
-        let u16_at = |o: usize| u16::from_be_bytes([d[o], d[o + 1]]) as u32;
-        let u32_at = |o: usize| u32::from_be_bytes([d[o], d[o + 1], d[o + 2], d[o + 3]]);
-        let (width, height) = (u16_at(12), u16_at(14));
+        let truncated = || anyhow::anyhow!("cursor image header truncated");
+        let width = u16::from_be_bytes(be(d, 12).ok_or_else(truncated)?) as u32;
+        let height = u16::from_be_bytes(be(d, 14).ok_or_else(truncated)?) as u32;
         if width > MAX_CURSOR_SIDE || height > MAX_CURSOR_SIDE {
             bail!("cursor image {width}x{height} too large");
         }
         let len = (width * height * 4) as usize;
-        let body = &d[IMAGE_HEADER_LEN..];
+        let body = d.get(IMAGE_HEADER_LEN..).ok_or_else(truncated)?;
         ensure!(
             body.len() == len,
             "cursor image {width}x{height} has {} bytes, expected {len}",
             body.len()
         );
         Ok(Self {
-            id: u32_at(8),
+            id: u32::from_be_bytes(be(d, 8).ok_or_else(truncated)?),
             width,
             height,
-            hotspot_x: u32_at(16) as i32,
-            hotspot_y: u32_at(20) as i32,
+            hotspot_x: i32::from_be_bytes(be(d, 16).ok_or_else(truncated)?),
+            hotspot_y: i32::from_be_bytes(be(d, 20).ok_or_else(truncated)?),
             rgba: body.to_vec(),
         })
     }

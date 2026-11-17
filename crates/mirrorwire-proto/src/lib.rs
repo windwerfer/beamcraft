@@ -1,3 +1,14 @@
+// Parsers of network input live here: no panicking shortcuts outside tests (AGENTS.md §1.9).
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::panic
+    )
+)]
+
 pub mod clock;
 pub mod control;
 pub mod cursor;
@@ -14,3 +25,9 @@ pub const PROTOCOL_VERSION: u32 = 3;
 pub const ALPN: &[u8] = b"mirrorwire/1";
 pub const MDNS_SERVICE: &str = "_mirrorwire._udp.local.";
 pub const DEFAULT_PORT: u16 = 47_800;
+
+/// `N` bytes at `offset` of `d`, or `None` if the slice is too short. All wire parsers
+/// read through this (no indexing, no panics on hostile input).
+pub(crate) fn be<const N: usize>(d: &[u8], offset: usize) -> Option<[u8; N]> {
+    d.get(offset..offset.checked_add(N)?)?.try_into().ok()
+}

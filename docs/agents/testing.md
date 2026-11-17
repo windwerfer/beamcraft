@@ -26,6 +26,7 @@ Build dependencies (Fedora and Ubuntu package lists) are in the README and in
 | Kind | Where | What it proves |
 |---|---|---|
 | Unit | `#[cfg(test)]` in `mirrorwire-proto` | header encode/parse, fragmentation and reassembly (loss, reordering, late fragments), control framing, clock offset, stats |
+| Hostile input | `mirrorwire-proto/tests/hostile_input.rs`, `mirrorwire-net/src/pairing.rs` | random and mutated bytes into the packet header, reassembler (incl. garbage bodies through FEC recovery), pointer/cursor-image decoders, control messages and the URI parser: never a panic. proto and net also `deny` unwrap/expect/indexing/panic outside tests |
 | Unit | `#[cfg(test)]` in `mirrorwire-net` | identity load/create, URI round trip (including a non-default port) and rejection of bad fingerprints, QR generation, port settings precedence, firewall guide text, ufw rule parsing |
 | Unit (FilmCraft) | `mirrorwire-media/src/filmcraft.rs`, feature `filmcraft` | FilmCraft output via the real `Encoder` decodes with FFmpeg, markers read back, keyframe on request; an `#[ignore]` x264-vs-FilmCraft benchmark |
 | Unit (app) | `#[cfg(test)]` in `mirrorwire-app` | CLI parsing, capture/FEC preference precedence, process log, and `presenter::tests::test_source_streams_to_an_in_process_viewer`: test-pattern presenter (x264) → QUIC → viewer with 1 % loss in one process, live FEC/bitrate/cursor changes, markers read back (needs FFmpeg with libx264; part of the coverage report) |

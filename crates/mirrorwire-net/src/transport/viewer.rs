@@ -379,7 +379,7 @@ async fn control_loop(
                     t_viewer_us,
                     t_presenter_us,
                 }) => {
-                    clock.lock().expect("clock lock").add_sample(
+                    clock.lock().unwrap_or_else(|e| e.into_inner()).add_sample(
                         t_viewer_us,
                         t_presenter_us,
                         now_us(),

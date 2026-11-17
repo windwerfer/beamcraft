@@ -40,6 +40,17 @@ without new information.
 
 Newest first. Add an entry when the owner decides something non-obvious.
 
+- **2026-11-17 (Fuzzing without cargo-fuzz):** proto/net parsers get deterministic
+  fuzz-style tests (`crates/mirrorwire-proto/tests/hostile_input.rs`, a 15-line xorshift
+  generator, mutation of valid packets, runs in `cargo test`) and a crate-level
+  `deny(unwrap_used, expect_used, indexing_slicing, panic)` outside tests. Rejected:
+  cargo-fuzz (needs nightly, which this box lacks, so it could not be run or verified;
+  `libfuzzer-sys` carries an NCSA licence outside the allowed list), proptest (a heavy
+  dev-dependency tree for what a small PRNG does here). Revisit cargo-fuzz in a separate
+  `fuzz/` crate outside the workspace if a nightly CI job appears. `fragment()` now returns
+  no packets for a frame over `MAX_FRAME_LEN` instead of panicking (the presenter logs it and
+  asks for a keyframe). Not a wire change.
+
 - **2026-11-16 (No backwards compatibility, D6):** the owner asked whether keeping old peers
   working was worth its maintenance cost and decided: remove all of it, and from now on
   prefer the clearer code and better design over compatibility; agents notify him of breaks

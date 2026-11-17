@@ -571,7 +571,9 @@ impl AdaptiveBitrate {
                 p.n += 1;
                 return;
             }
-            let p = self.probe.take().expect("probe");
+            let Some(p) = self.probe.take() else {
+                return;
+            };
             if p.n > 0 {
                 let after = p.sum / p.n as f32;
                 if after >= 0.7 * p.loss_before {

@@ -24,8 +24,8 @@ const BEST_KEEP: usize = 8;
 impl ClockSync {
     pub fn add_sample(&mut self, t_send_us: u64, t_presenter_us: u64, t_recv_us: u64) {
         let rtt = t_recv_us.saturating_sub(t_send_us);
-        let midpoint = (t_send_us + t_recv_us) / 2;
-        let offset = t_presenter_us as i64 - midpoint as i64;
+        let midpoint = t_send_us / 2 + t_recv_us / 2;
+        let offset = (t_presenter_us as i64).saturating_sub(midpoint as i64);
         self.samples += 1;
         self.best.push((rtt, offset));
         self.best.sort_by_key(|(r, _)| *r);
@@ -34,7 +34,9 @@ impl ClockSync {
         }
         // Prefer the offset from the single best RTT. If several samples share
         // a similarly low RTT (within 25% or 200 us), use their median offset.
-        let best_rtt = self.best[0].0;
+        let Some(&(best_rtt, _)) = self.best.first() else {
+            return;
+        };
         let threshold = best_rtt.saturating_add((best_rtt / 4).max(200));
         let mut offsets: Vec<i64> = self
             .best
@@ -44,7 +46,10 @@ impl ClockSync {
             .collect();
         offsets.sort();
         self.best_rtt_us = Some(best_rtt);
-        self.offset_us = offsets[offsets.len() / 2];
+        self.offset_us = offsets
+            .get(offsets.len() / 2)
+            .copied()
+            .unwrap_or(self.offset_us);
     }
 
     pub fn offset_us(&self) -> i64 {
@@ -76,5 +81,19 @@ mod tests {
         c.add_sample(10_000, 20_000, 14_000);
         assert_eq!(c.offset_us(), 5_000);
         assert_eq!(c.to_viewer_clock(6_500), 1_500);
+    }
+}
+
+#[cfg(test)]
+mod hostile_tests {
+    use super::*;
+
+    #[test]
+    fn extreme_timestamps_do_not_overflow() {
+        let mut c = ClockSync::default();
+        c.add_sample(u64::MAX, u64::MAX, u64::MAX);
+        c.add_sample(0, u64::MAX, u64::MAX);
+        c.add_sample(u64::MAX, 0, 0);
+        let _ = c.offset_us();
     }
 }

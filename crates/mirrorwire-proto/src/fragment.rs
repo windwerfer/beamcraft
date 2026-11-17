@@ -4,6 +4,7 @@
 //! same header, so the receiver can reassemble frames, rebuild lost shards,
 //! detect gaps and measure per-stage latency without extra round trips.
 
+use crate::be;
 use crate::control::QueueDelay;
 use crate::delay::DelayMeter;
 use crate::fec::{block_len, parity_count, recover_block, LinkStats};
@@ -62,28 +63,25 @@ impl PacketHeader {
     /// Parses and validates a packet. Inconsistent headers (from a
     /// broken or hostile sender) return `None`.
     pub fn parse(d: &[u8]) -> Option<(Self, &[u8])> {
-        if d.len() < HEADER_LEN || d[0] != WIRE_VERSION {
+        if *d.first()? != WIRE_VERSION {
             return None;
         }
-        let u16_at = |o: usize| u16::from_be_bytes([d[o], d[o + 1]]);
-        let u32_at = |o: usize| u32::from_be_bytes(d[o..o + 4].try_into().unwrap());
-        let u64_at = |o: usize| u64::from_be_bytes(d[o..o + 8].try_into().unwrap());
         let h = Self {
-            keyframe: d[1] & FLAG_KEYFRAME != 0,
-            frame_id: u32_at(2),
-            index: u16_at(6),
-            data_count: u16_at(8),
-            parity_count: u16_at(10),
-            frame_len: u32_at(12),
-            shard_len: u16_at(16),
-            blocks: d[18],
+            keyframe: be::<1>(d, 1).map(|b| b[0])? & FLAG_KEYFRAME != 0,
+            frame_id: u32::from_be_bytes(be(d, 2)?),
+            index: u16::from_be_bytes(be(d, 6)?),
+            data_count: u16::from_be_bytes(be(d, 8)?),
+            parity_count: u16::from_be_bytes(be(d, 10)?),
+            frame_len: u32::from_be_bytes(be(d, 12)?),
+            shard_len: u16::from_be_bytes(be(d, 16)?),
+            blocks: be::<1>(d, 18)?[0],
             timing: FrameTiming {
-                capture_us: u64_at(20),
-                encoded_us: u64_at(28),
-                sent_us: u64_at(36),
+                capture_us: u64::from_be_bytes(be(d, 20)?),
+                encoded_us: u64::from_be_bytes(be(d, 28)?),
+                sent_us: u64::from_be_bytes(be(d, 36)?),
             },
         };
-        let payload = &d[HEADER_LEN..];
+        let payload = d.get(HEADER_LEN..)?;
         if !h.layout_ok() || payload.len() != h.payload_len(h.index as usize) {
             return None;
         }
@@ -139,7 +137,7 @@ impl PacketHeader {
 /// `max_datagram`. Data packets come first, in order (consecutive ones belong
 /// to different blocks), then the parity packets, also interleaved.
 /// `overhead` is parity / data ([`crate::fec::FecMode::overhead`]); `None`
-/// sends no parity.
+/// sends no parity. Returns no packets for a frame over [`MAX_FRAME_LEN`].
 pub fn fragment(
     frame_id: u32,
     keyframe: bool,
@@ -155,10 +153,9 @@ pub fn fragment(
         max_shard
     };
     let k = payload.len().div_ceil(shard_len).max(1);
-    assert!(
-        k < u16::MAX as usize && payload.len() <= MAX_FRAME_LEN,
-        "frame too large to fragment"
-    );
+    if k >= u16::MAX as usize || payload.len() > MAX_FRAME_LEN {
+        return Vec::new(); // too large for the wire format; the caller drops the frame
+    }
     let blocks = k.div_ceil(MAX_BLOCK_DATA).min(MAX_BLOCKS);
     let parity = overhead.map_or(0, |o| parity_count(k, blocks, o, keyframe));
     let mut header = PacketHeader {
@@ -175,7 +172,7 @@ pub fn fragment(
     let shard = |i: usize| -> Cow<'_, [u8]> {
         let start = (i * shard_len).min(payload.len());
         let end = (start + shard_len).min(payload.len());
-        let s = &payload[start..end];
+        let s = payload.get(start..end).unwrap_or_default();
         if s.len() == shard_len {
             Cow::Borrowed(s)
         } else {
@@ -195,9 +192,10 @@ pub fn fragment(
     for i in 0..k {
         header.index = i as u16;
         let len = header.payload_len(i);
+        let start = i * shard_len;
         out.push(packet(
             &header,
-            &payload[i * shard_len..i * shard_len + len],
+            payload.get(start..start + len).unwrap_or_default(),
         ));
     }
     // recovery[b][pos] is parity shard `b + pos * blocks`.
@@ -213,7 +211,7 @@ pub fn fragment(
             .push(reed_solomon_simd::encode(originals.len(), m, &originals).unwrap_or_default());
     }
     for j in 0..parity {
-        let Some(body) = recovery[j % blocks].get(j / blocks) else {
+        let Some(body) = recovery.get(j % blocks).and_then(|r| r.get(j / blocks)) else {
             continue;
         };
         header.index = (k + j) as u16;
@@ -284,9 +282,12 @@ impl Partial {
         }
         let (i, k) = (h.index as usize, self.data.len());
         let slot = if i < k {
-            &mut self.data[i]
+            self.data.get_mut(i)
         } else {
-            &mut self.parity[i - k]
+            self.parity.get_mut(i - k)
+        };
+        let Some(slot) = slot else {
+            return false;
         };
         if slot.is_some() {
             return false;
@@ -298,7 +299,9 @@ impl Partial {
         *slot = Some(body);
         let blocks = self.layout.blocks as usize;
         let b = if i < k { i % blocks } else { (i - k) % blocks };
-        self.block_have[b] += 1;
+        if let Some(n) = self.block_have.get_mut(b) {
+            *n = n.saturating_add(1);
+        }
         self.try_recover(b);
         true
     }
@@ -307,20 +310,26 @@ impl Partial {
         let blocks = self.layout.blocks as usize;
         let k = self.data.len();
         let kb = block_len(k, blocks, b);
-        if self.block_done[b] || (self.block_have[b] as usize) < kb {
+        let have = self.block_have.get(b).copied().unwrap_or(0) as usize;
+        let Some(done) = self.block_done.get_mut(b) else {
+            return;
+        };
+        if *done || have < kb {
             return;
         }
-        self.block_done[b] = true;
-        let missing = (b..k).step_by(blocks).any(|i| self.data[i].is_none());
+        *done = true;
+        let missing = (b..k)
+            .step_by(blocks)
+            .any(|i| self.data.get(i).is_some_and(Option::is_none));
         if !missing {
             return;
         }
         for (i, bytes) in
             recover_block(&self.layout, b, &self.data, &self.parity).unwrap_or_default()
         {
-            if self.data[i].is_none() {
+            if let Some(slot @ None) = self.data.get_mut(i) {
                 self.bytes += bytes.len();
-                self.data[i] = Some(bytes);
+                *slot = Some(bytes);
                 self.have_data += 1;
                 self.recovered += 1;
             }
@@ -461,7 +470,9 @@ impl Reassembler {
             {
                 break;
             }
-            let (_, (total, data, got)) = self.meter.pop_first().expect("non-empty");
+            let Some((_, (total, data, got))) = self.meter.pop_first() else {
+                break;
+            };
             self.stats.expected += total as u64;
             self.stats.received += got.min(total) as u64;
             self.stats.data_expected += data as u64;

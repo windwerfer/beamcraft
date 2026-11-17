@@ -26,13 +26,18 @@ impl Series {
         }
         let mut s = self.samples.clone();
         s.sort_by(|a, b| a.total_cmp(b));
-        let pick = |q: f64| s[((s.len() - 1) as f64 * q).round() as usize];
+        let last = s.len() - 1;
+        let pick = |q: f64| {
+            s.get((last as f64 * q).round() as usize)
+                .copied()
+                .unwrap_or(0.0)
+        };
         Summary {
             count: s.len(),
             mean: s.iter().sum::<f64>() / s.len() as f64,
             p50: pick(0.5),
             p95: pick(0.95),
-            max: *s.last().unwrap(),
+            max: s.last().copied().unwrap_or(0.0),
         }
     }
 

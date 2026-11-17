@@ -263,7 +263,7 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
     let authorized = match &shared.pairing_code {
         None => true,
         Some(code) => {
-            let mut paired = shared.paired.lock().expect("paired lock");
+            let mut paired = shared.paired.lock().unwrap_or_else(|e| e.into_inner());
             if paired.contains(&fp) {
                 true
             } else if pairing_code.as_deref() == Some(code.as_str()) {
@@ -543,6 +543,15 @@ async fn send_loop(
             max,
             overhead,
         );
+        if packets.is_empty() {
+            tracing::warn!(
+                "frame {} is too large to send ({} bytes)",
+                frame.frame_id,
+                frame.data.len()
+            );
+            on_keyframe_request();
+            continue;
+        }
         let wire_len: usize = packets.iter().map(|p| p.len()).sum();
         if should_drop_for_backlog(frame.keyframe, wire_len, conn.datagram_send_buffer_space()) {
             // The network is behind (big scene change on Wi-Fi). Sending this
