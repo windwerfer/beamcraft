@@ -1,29 +1,24 @@
 # HANDOFF
 
 ## Goal
-Pen/touch as an absolute pointer on the presenter (owner decision 16:11): protocol 10 `pointer`, RemoteDesktop portal injection, "Pen" toggle on desktop and Android viewers.
+Owner order 20:13, item 1: pen/touch in Extend via ONE RemoteDesktop session for capture + input.
 
-## Done
-- Pen/touch pointer (protocol 10, Breaks: 9 -> 10): `Control::Pointer{phase,x,y}` (u16 normalised to the picture) on the control stream; `PointerGate` (120 moves/s, 40 downs/s, ups never refused); `RemoteInput` channel item; `source/remote.rs` upgrades a key-only portal session to KEYBOARD|POINTER + MONITOR source on the first pointer down (one more dialog), injects absolute motion + BTN_LEFT; Mirror only (Extend shows a message). Desktop: Pen button beside the remote buttons (R); Android: Pen under Disconnect. Pressure/tilt wishlist added to roadmap. Tests: proto wire/mapping, gate, loopback ordering. No new unsafe/crate/permission. Decisions.md 2026-11-18 (pen/touch).
-- Extend size as encode target: `EncoderConfig::max_size` (fit-within, no upscale), set by the presenter window from the resolved Extend size; unit test; decisions.md 2026-11-18. KWin sizing on non-Flatpak NOT done (no verifiable clean route without a KDE desktop; hint + dropdown stay). Not tried on hardware. Loopback p95 is flaky on this box (43-69 ms once, passes on rerun, same without my change).
-- Presenter remote, protocol 9: `Control::RemoteKey{key}` (closed enum next/previous/space/escape) on the control stream, rate-limited 10/s in the presenter (`TapGate`), `ViewerSession::send_remote_key`; unit tests (wire form, hostile values, rate limit, loopback).
-- Linux presenter: `media/src/source/remote.rs` taps keysyms through the RemoteDesktop portal (keyboard only, lazy session, restore token `remote-desktop.token`); status line in the presenter window (`CaptureCtl.remote_note`). No new unsafe, no new crate, no new Flatpak permission.
-- Desktop viewer: R toggles Previous/Next/Click/Escape buttons. Android: same buttons in the tap overlay.
-- Docs: decisions.md log, protocol.md (`remote_key`, version 9), roadmap, README.
-- Breaks: PROTOCOL_VERSION 8 -> 9.
+## Done (this session)
+- `portal.rs::start_combined`: RemoteDesktop CreateSession + SelectDevices KEYBOARD|POINTER + ScreenCast SelectSources on the same session, one Start, OpenPipeWireRemote; injection on the portal thread (`remote.rs::inject` shared). Fallback to plain ScreenCast + the old separate Mirror-only injector, with the reason shown in the presenter window. Per-mode input tokens `portal_restore_token[_extend]_input`. `RemoteRoute` (presenter/mod.rs) keeps one stable input sender across source reopens. `FrameSource::remote_input/input_note`.
+- Tests: token names, Extend pointer maps on stream size not encode cap, separate-session mapping. Gates: cargo xtask ci + Android clippy green. No new unsafe/crate/permission. Breaks: none on the wire.
+- NOT done: item 2 (camera QR step 2, portal Camera + PipeWire source, Scan button) is next.
 
-- Hardware findings: (1) VAAPI retries with `low_power=1`; (2) Reassembler livelock after an outage fixed (decisions.md 2026-11-18 'hardware findings'), unit regression test. Live bitrate on the LP path is untested (the reopen path is used as before).
-- MANAGER RERUN: scripts/android-wifi-run.sh 45 with both `--encoder vaapi` and `--encoder x264` on the T480s + TB336FU; expect VAAPI to open (log 'retrying with low_power=1') and the viewer to resume after the 12.5->5 Mbit/s cut. The livelock cause is inferred from the logs, not reproduced on hardware.
+## Manager must check on T480s (KDE Plasma Wayland) + TB336FU
+1. Mirror capture still starts; count portal dialogs (expect one, covering screen + keyboard/pointer; none on second start with token). 2. Pen in Mirror. 3. Pen in Extend (VIRTUAL monitor). 4. Remote keys (Next/Previous) in both modes. 5. If the combined dialog is denied/unsupported: window shows "could not carry input ..." and Mirror still captures; pen then Mirror only.
 
-- Extend size dropdown (14:13 decision): done as UI + hint everywhere (`ExtendSize`, unit test). NOT done: applying the size via KWin on non-Flatpak builds, and using the chosen size as encode target (both noted in decisions.md; KWin route needs D-Bus, left for a later session).
-
-- Roadmap 0c marked done (realistic goal reached, manager option 2) in roadmap.md and decisions.md. Docs-only session, no code changes.
+## Earlier work (summary)
+Pen/touch protocol 10, presenter remote protocol 9, Extend size cap, hardware findings fixes; see decisions.md.
 
 ## Decisions
 - See decisions.md log 2026-11-18 (presenter remote). Rejected: cursor datagram path, sharing the ScreenCast session, raw keycodes.
 
 ## Open questions
-- Pen: never run against a real portal/pen/touch screen. Extend mode not mapped (needs capture and input in ONE RemoteDesktop session, a rework of the working capture path; owner decision whether to do it). Whether KDE accepts a MONITOR source selection on the RemoteDesktop session with the old keyboard-only restore token (expected: one new dialog) is unverified. Manager hardware check: Mirror mode, tap Pen, drag with finger/pen on the tablet.
+- Pen: never run against a real portal/pen/touch screen; the combined session is untested on KDE. Whether KDE accepts a MONITOR source selection on the RemoteDesktop session with the old keyboard-only restore token (expected: one new dialog) is unverified. Manager hardware check: Mirror mode, tap Pen, drag with finger/pen on the tablet.
 - Presenter remote never run against a real portal, KDE/GNOME dialog, Flatpak, or a slideshow app; Android/desktop buttons only compiled, not seen. Owner: UI sketch for the buttons when available.
 - RemoteDesktop portal availability on the owner's KDE (xdg-desktop-portal-kde) unverified; a denial shows in the presenter window.
 - Extend sizing is hint-only (owner option 2): the window shows the viewer's size; not seen on a real KDE desktop.
@@ -39,6 +34,9 @@ cargo xtask ci; cargo ndk -t arm64-v8a --platform 26 clippy --release --locked -
 see `git log -1`
 
 ## Next step
+Camera QR scan step 2 (owner order 20:13 item 2), then NOTHING_LEFT if nothing hardware-free remains.
+
+(Superseded:)
 Loop waits for owner hardware checks (pen/touch, Extend dropdown, encode-size cap, KWin sizing). No hardware-free item is left except those parked/undecided.
 
 (Earlier:)
