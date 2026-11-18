@@ -273,7 +273,7 @@ OCLP may not expose VT H.264. The OpenGL (glow) path converts YUV→RGB in a
 shader instead of CPU swscale. On an old Intel Mac without Metal, the viewer defaults to OpenGL;
 `--renderer wgpu` tries Metal first.
  Keys in the viewer: `F` or double-click
-for fullscreen, `S` toggles stats, `1` toggles 1:1 pixel-exact display (nearest
+for fullscreen, `S` toggles stats, `R` shows presenter-remote buttons (Previous / Next / Click / Escape: the Linux presenter taps Left / Right / Space / Esc through the RemoteDesktop portal and asks for keyboard permission on the first tap; on Android the buttons show with the tap overlay), `1` toggles 1:1 pixel-exact display (nearest
 neighbour, one stream pixel = one framebuffer pixel, taking `pixels_per_point`
 into account), `Esc` disconnects. The stats overlay shows native resolution,
 source fps (portal may send only damage, so this can be well below the configured

@@ -400,7 +400,7 @@ connection (do not switch to TCP).
 
 | Mode | Notes | Rough size |
 |---|---|---|
-| Presenter remote | Next, previous, and click as arrow / space keys. PowerPoint, LibreOffice Impress, and PDF viewers already understand these. | ~300–500 LOC |
+| Presenter remote (**built 2026-11-18**, untested on hardware: protocol 9 `remote_key`, RemoteDesktop portal, buttons on desktop and Android viewers) | Next, previous, and click as arrow / space keys. PowerPoint, LibreOffice Impress, and PDF viewers already understand these. | ~300–500 LOC |
 | Laser pointer | Finger position drawn as a coloured dot in a transparent overlay on the presenter; colours selectable. The KDE Wayland overlay is the hard part. | ~300–600 LOC |
 | Drawing overlay | The same overlay, plus strokes and colours, with an optional fade-out like old Linux screen-annotation / "flame" effects. | ~800–1500 LOC |
 | Touchpad | One finger moves the cursor, a tap clicks, two fingers scroll or right-click. | ~500–800 LOC |
