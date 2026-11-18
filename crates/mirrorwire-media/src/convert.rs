@@ -66,42 +66,129 @@ pub fn packed_to_i420(
         bail!("buffer too small for a {width}x{height} I420 conversion");
     }
     let (ro, go, bo) = rgb_offsets(format);
-    let px = |x: usize, y: usize| -> (i32, i32, i32) {
-        let i = y * src_stride + x * 4;
-        match src.get(i..i + 4) {
-            Some(p) => (
-                p.get(ro).copied().unwrap_or(0) as i32,
-                p.get(go).copied().unwrap_or(0) as i32,
-                p.get(bo).copied().unwrap_or(0) as i32,
-            ),
-            None => (0, 0, 0),
-        }
+    let rgb = |p: &[u8; 4]| {
+        (
+            p.get(ro).copied().unwrap_or(0) as i32,
+            p.get(go).copied().unwrap_or(0) as i32,
+            p.get(bo).copied().unwrap_or(0) as i32,
+        )
     };
-    for y in 0..height {
-        for x in 0..width {
-            let (r, g, b) = px(x, y);
-            if let Some(d) = dst.y.get_mut(y * dst.y_stride + x) {
+    // Two source rows per chroma row. Rows are sliced once (bounds checked up front), so the
+    // inner loops index fixed-size chunks.
+    let row_bytes = width * 4;
+    for cy in 0..ch {
+        let y0 = cy * 2;
+        let y1 = (y0 + 1).min(height - 1);
+        let (Some(r0), Some(r1)) = (
+            src.get(y0 * src_stride..y0 * src_stride + row_bytes),
+            src.get(y1 * src_stride..y1 * src_stride + row_bytes),
+        ) else {
+            bail!("source too small for a {width}x{height} frame");
+        };
+        for (yy, row) in [(y0, r0), (y1, r1)] {
+            if yy == y1 && y1 == y0 {
+                continue; // odd height: the last row is its own pair
+            }
+            let Some(drow) = dst.y.get_mut(yy * dst.y_stride..yy * dst.y_stride + width) else {
+                bail!("luma plane too small");
+            };
+            for (d, p) in drow.iter_mut().zip(row.as_chunks::<4>().0) {
+                let (r, g, b) = rgb(p);
                 *d = luma(r, g, b);
             }
         }
+        let (Some(urow), Some(vrow)) = (
+            dst.u.get_mut(cy * dst.uv_stride..cy * dst.uv_stride + cw),
+            dst.v.get_mut(cy * dst.uv_stride..cy * dst.uv_stride + cw),
+        ) else {
+            bail!("chroma plane too small");
+        };
+        for (cx, (du, dv)) in urow.iter_mut().zip(vrow.iter_mut()).enumerate() {
+            let x0 = cx * 2;
+            let x1 = (x0 + 1).min(width - 1);
+            let (mut r, mut g, mut b) = (2, 2, 2);
+            for row in [r0, r1] {
+                for x in [x0, x1] {
+                    let Some(p) = row.as_chunks::<4>().0.get(x) else {
+                        continue;
+                    };
+                    let (pr, pg, pb) = rgb(p);
+                    r += pr;
+                    g += pg;
+                    b += pb;
+                }
+            }
+            (*du, *dv) = chroma(r / 4, g / 4, b / 4);
+        }
     }
-    for cy in 0..ch {
-        for cx in 0..cw {
-            let (mut r, mut g, mut b) = (0, 0, 0);
-            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
-                let (pr, pg, pb) = px((cx * 2 + dx).min(width - 1), (cy * 2 + dy).min(height - 1));
-                r += pr;
-                g += pg;
-                b += pb;
-            }
-            let (u, v) = chroma((r + 2) / 4, (g + 2) / 4, (b + 2) / 4);
-            let i = cy * dst.uv_stride + cx;
-            if let Some(d) = dst.u.get_mut(i) {
-                *d = u;
-            }
-            if let Some(d) = dst.v.get_mut(i) {
-                *d = v;
-            }
+    Ok(())
+}
+
+/// Chroma source of [`yuv_to_rgba`]: separate U and V planes, or one interleaved UV plane (NV12).
+pub enum Chroma<'a> {
+    Planar {
+        u: &'a [u8],
+        u_stride: usize,
+        v: &'a [u8],
+        v_stride: usize,
+    },
+    Interleaved {
+        uv: &'a [u8],
+        uv_stride: usize,
+    },
+}
+
+/// YUV 4:2:0 (BT.601 limited range, nearest chroma) to tightly packed RGBA, the inverse of
+/// [`packed_to_i420`]. The viewer's CPU fallback when FFmpeg's swscale is not compiled in.
+/// All plane sizes are checked; a short plane is an error.
+pub fn yuv_to_rgba(
+    width: usize,
+    height: usize,
+    y: &[u8],
+    y_stride: usize,
+    chroma: &Chroma<'_>,
+    dst: &mut Vec<u8>,
+) -> Result<()> {
+    dst.clear();
+    if width == 0 || height == 0 {
+        return Ok(());
+    }
+    let cw = width.div_ceil(2);
+    let short = || anyhow::anyhow!("YUV plane is too short for {width}x{height}");
+    dst.reserve(width * height * 4);
+    for row in 0..height {
+        let yrow = y
+            .get(row * y_stride..row * y_stride + width)
+            .ok_or_else(short)?;
+        let crow = row / 2;
+        for (x, &yv) in yrow.iter().enumerate() {
+            let cx = x / 2;
+            let (u, v) = match chroma {
+                Chroma::Planar {
+                    u,
+                    u_stride,
+                    v,
+                    v_stride,
+                } => (
+                    *u.get(crow * u_stride + cx).ok_or_else(short)?,
+                    *v.get(crow * v_stride + cx).ok_or_else(short)?,
+                ),
+                Chroma::Interleaved { uv, uv_stride } => {
+                    let i = crow * uv_stride + cx.min(cw - 1) * 2;
+                    (
+                        *uv.get(i).ok_or_else(short)?,
+                        *uv.get(i + 1).ok_or_else(short)?,
+                    )
+                }
+            };
+            let c = 298 * (yv as i32 - 16);
+            let (d, e) = (u as i32 - 128, v as i32 - 128);
+            dst.extend_from_slice(&[
+                clamp_u8((c + 409 * e + 128) >> 8),
+                clamp_u8((c - 100 * d - 208 * e + 128) >> 8),
+                clamp_u8((c + 516 * d + 128) >> 8),
+                255,
+            ]);
         }
     }
     Ok(())
@@ -190,6 +277,7 @@ mod tests {
     }
 
     /// Within a small tolerance of swscale's BGRA → YUV420P.
+    #[cfg(feature = "ffmpeg")]
     #[test]
     fn matches_swscale() {
         use ffmpeg_next::{format::Pixel, frame::Video, software::scaling};
@@ -230,5 +318,27 @@ mod tests {
         // Chroma differs more at hard edges (swscale's chroma siting/filter).
         cmp(1, &u, w / 2, h / 2, 20);
         cmp(2, &v, w / 2, h / 2, 20);
+    }
+
+    #[test]
+    fn rgba_round_trip_is_close_and_short_planes_error() {
+        let (w, h) = (64usize, 48usize);
+        let src = picture(w, h);
+        let (y, u, v) = convert(&src, w, h, PixelFormat::Rgba);
+        let mut out = Vec::new();
+        let c = Chroma::Planar {
+            u: &u,
+            u_stride: w / 2,
+            v: &v,
+            v_stride: w / 2,
+        };
+        yuv_to_rgba(w, h, &y, w, &c, &mut out).unwrap();
+        assert_eq!(out.len(), w * h * 4);
+        // Smooth area (top-left corner, away from the hard block): within chroma-subsampling error.
+        for i in [0usize, 1, 2, 5, 6, 7] {
+            let d = (out[i] as i32 - src[i] as i32).abs();
+            assert!(d <= 12, "channel {i}: {} vs {}", out[i], src[i]);
+        }
+        assert!(yuv_to_rgba(w, h, &y[..10], w, &c, &mut out).is_err());
     }
 }
