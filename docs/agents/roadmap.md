@@ -246,7 +246,7 @@ target), **planned**, **idea**. Update this file when an item moves.
       pipeline.rs (`maybe_reopen` / `maybe_replace_encoder`).
    Already in force: decision records with alternatives (decisions.md) and small commits (AGENTS.md).
 
-0c. **Remove `unsafe` Rust where possible (owner, 2026-11-14; after 0 and 0b, D15).** Go through
+0c. **Remove `unsafe` Rust where possible (owner, 2026-11-14; after 0 and 0b, D15). DONE 2026-11-18: realistic goal reached (manager decision, option 2): all unsafe is in mirrorwire-media (plus glow/EGL FFI in the viewers), never in proto or net, every site has a SAFETY comment, the lint is enforced, the ASan job runs in CI. No move-only refactor of the untested VAAPI/PipeWire paths; revisit only if the parked own VA-API encoder replaces FFmpeg.** Go through
    every `unsafe` site (encode.rs, decode.rs, hw.rs, source/portal.rs, yuv_glow.rs, applog.rs;
    net/diag.rs is done) and check for a safe replacement: safe methods of `ffmpeg-next`/`ffmpeg-sys`
    wrappers, `glow`/egui-safe GL paths or a wgpu-only path, safe crates for the libc/socket calls,

@@ -17,6 +17,8 @@ Pen/touch as an absolute pointer on the presenter (owner decision 16:11): protoc
 
 - Extend size dropdown (14:13 decision): done as UI + hint everywhere (`ExtendSize`, unit test). NOT done: applying the size via KWin on non-Flatpak builds, and using the chosen size as encode target (both noted in decisions.md; KWin route needs D-Bus, left for a later session).
 
+- Roadmap 0c marked done (realistic goal reached, manager option 2) in roadmap.md and decisions.md. Docs-only session, no code changes.
+
 ## Decisions
 - See decisions.md log 2026-11-18 (presenter remote). Rejected: cursor datagram path, sharing the ScreenCast session, raw keycodes.
 
@@ -37,6 +39,9 @@ cargo xtask ci; cargo ndk -t arm64-v8a --platform 26 clippy --release --locked -
 see `git log -1`
 
 ## Next step
+Loop waits for owner hardware checks (pen/touch, Extend dropdown, encode-size cap, KWin sizing). No hardware-free item is left except those parked/undecided.
+
+(Earlier:)
 Pen: hardware check by the manager; then (if wanted) unify capture + input into one RemoteDesktop session for Extend. Otherwise as below.
 
 (Previous next step:)
