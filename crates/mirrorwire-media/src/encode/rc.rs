@@ -63,6 +63,7 @@ pub(super) fn apply_vaapi_opts(
     rc: RateControl,
     bitrate: i64,
     config: &EncoderConfig,
+    low_power: bool,
 ) {
     let mode = match rc {
         RateControl::Cbr => "CBR",
@@ -74,7 +75,7 @@ pub(super) fn apply_vaapi_opts(
     opts.set("rc_mode", mode);
     opts.set("async_depth", "1");
     opts.set("profile", "high");
-    opts.set("low_power", "0");
+    opts.set("low_power", if low_power { "1" } else { "0" });
     if config.intra_refresh {
         opts.set("idr_interval", "0");
         opts.set("int_ref_type", "1");

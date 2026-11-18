@@ -159,7 +159,29 @@ impl FfmpegEncoder {
         )
     }
 
+    /// Opens the encoder. VAAPI first uses the normal entrypoint (`EncSlice`); drivers that
+    /// only offer the low-power one (`EncSliceLP`, e.g. Intel iHD on UHD 620 without the
+    /// non-free driver) reject CBR/VBR there, so it is retried with `low_power=1`.
     pub fn open(config: &EncoderConfig, backend: EncoderBackend) -> Result<Self> {
+        if backend != EncoderBackend::Vaapi {
+            return Self::open_with(config, backend, false);
+        }
+        match Self::open_with(config, backend, false) {
+            Ok(e) => Ok(e),
+            Err(first) => {
+                tracing::info!("h264_vaapi failed ({first:#}); retrying with low_power=1");
+                Self::open_with(config, backend, true).map_err(|second| {
+                    anyhow!(
+                        "{first:#}; low-power entrypoint: {second:#}. If vainfo lists H.264 only \
+                         as VAEntrypointEncSliceLP, the driver may lack rate control (Debian: \
+                         install intel-media-va-driver-non-free)"
+                    )
+                })
+            }
+        }
+    }
+
+    fn open_with(config: &EncoderConfig, backend: EncoderBackend, low_power: bool) -> Result<Self> {
         let (codec_name, sw_format) = match backend {
             EncoderBackend::Vaapi => ("h264_vaapi", Pixel::NV12),
             EncoderBackend::X264 => ("libx264", Pixel::YUV420P),
@@ -212,7 +234,7 @@ impl FfmpegEncoder {
                 // SAFETY: `enc` is a live, unopened context; `new_ref` gives it its own reference
                 // to the frames context, which the codec context releases when freed.
                 unsafe { (*enc.as_mut_ptr()).hw_frames_ctx = frames.new_ref() };
-                apply_vaapi_opts(&mut opts, rc, bitrate, config);
+                apply_vaapi_opts(&mut opts, rc, bitrate, config, low_power);
                 Upload::Vaapi {
                     vpp: None,
                     dma: None,
