@@ -1,16 +1,14 @@
 # HANDOFF
 
 ## Goal
-Windows step 2 (roadmap 7, D16): package the viewer.
+Roadmap 0b/0c: lint enforcement for unsafe.
 
 ## Done
-- `Windows viewer` job in build.yml: viewer build (`gui,ffmpeg`), zip with mirrorwire.exe, BtbN LGPL shared FFmpeg DLLs, FFmpeg + our licences, README; `--version` smoke test; attached to the release job. CI + Build green (artifact produced).
-- Docs: roadmap 7, decisions.md log entry.
+- `clippy::undocumented_unsafe_blocks = deny` in `[workspace.lints.clippy]` (was media only); fixed 3 comments in app yuv_glow.rs and android gpu.rs. Roadmap 0b updated.
 - Gates green locally (xtask ci incl. loopback, Android clippy).
 
 ## Decisions
-- FFmpeg-free Windows zip rejected for now (FilmCraft decode speed on Windows unmeasured).
-- Breaks: none.
+- No new unsafe. Breaks: none.
 
 ## Open questions
 - Owner: SonarCloud switch (SONAR_CI_ANALYSIS) pending.
@@ -30,4 +28,4 @@ cargo xtask ci; cargo ndk -t arm64-v8a --platform 26 clippy --release --locked -
 see `git log -1`
 
 ## Next step
-Remaining roadmap items (0b/0c, etc.) per answers.md order.
+0b/0c lint part done; remaining there needs nightly (ASan/cargo-fuzz, owner question). Next: item 6 extend testable parts.
