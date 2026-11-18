@@ -22,6 +22,8 @@ use std::time::{Duration, Instant};
 
 #[derive(Clone, Default)]
 pub struct Status {
+    /// Control stream sender, for presenter-remote taps; set once connected.
+    pub control: Option<tokio::sync::mpsc::UnboundedSender<Control>>,
     pub connected: bool,
     pub error: Option<String>,
     pub stream: Option<StreamInfo>,
@@ -230,6 +232,7 @@ async fn run(
         s.stream = Some(info.clone());
         s.cursor_mode = Some(session.cursor_mode());
         s.cursor = Some(session.cursor.clone());
+        s.control = Some(session.control_sender());
     }
     repaint();
     let mut stream_updates = session.stream_updates.clone();

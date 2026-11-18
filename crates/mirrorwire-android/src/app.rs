@@ -403,7 +403,7 @@ impl ViewerApp {
         if self.show_overlay {
             let stream = status.stream.as_ref();
             let text = format!(
-                "{}x{}  {:.1} fps  {:.2} Mbit/s  presenter encodes with {}\n{}\ndecode {:.1} ms  to RGBA {:.1} ms  lost {}\npicture age {:.0} ms  reader behind {:.0} ms  out of order {}\n{}\n{}\ncursor {}\n{}\ntap: hide",
+                "{}x{}  {:.1} fps  {:.2} Mbit/s  presenter encodes with {}\n{}\ndecode {:.1} ms  to RGBA {:.1} ms  lost {}\npicture age {:.0} ms  reader behind {:.0} ms  out of order {}\n{}\n{}\ncursor {}\n{}\ntap: hide / show remote buttons",
                 stream.map(|s| s.width).unwrap_or(0),
                 stream.map(|s| s.height).unwrap_or(0),
                 status.fps,
@@ -462,6 +462,23 @@ impl ViewerApp {
             );
             if ui.put(button, egui::Button::new("Disconnect")).clicked() {
                 self.disconnect();
+            }
+            // Presenter remote: one tap = one key on the presenter (protocol 9).
+            let keys = mirrorwire_proto::control::RemoteKey::ALL;
+            let (bw, bh, gap) = (150.0, 64.0, 8.0);
+            let row_w = bw * keys.len() as f32 + gap * (keys.len() as f32 - 1.0);
+            let row_x = (rect.center().x - row_w / 2.0).max(rect.left() + 4.0);
+            for (i, key) in keys.into_iter().enumerate() {
+                let r = egui::Rect::from_min_size(
+                    egui::pos2(row_x + i as f32 * (bw + gap), rect.bottom() - bh - 24.0),
+                    egui::vec2(bw, bh),
+                );
+                let label = egui::RichText::new(key.label()).size(22.0);
+                if ui.put(r, egui::Button::new(label)).clicked() {
+                    if let Some(tx) = &status.control {
+                        let _ = tx.send(mirrorwire_proto::control::Control::RemoteKey { key });
+                    }
+                }
             }
         }
     }
