@@ -449,6 +449,8 @@ fn present_session(
         presenter.viewer_connected.clone(),
     )?;
 
+    ctl.lock_ok().viewer_display = Some(presenter.viewer_display.clone());
+
     let _advert = if args.no_mdns {
         None
     } else {

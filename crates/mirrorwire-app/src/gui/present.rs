@@ -161,6 +161,14 @@ impl MirrorApp {
                             if let Some(note) = &cap.remote_note {
                                 ui.weak(note);
                             }
+                            if cap.prefs.mode == mirrorwire_media::source::CaptureMode::Extend {
+                                if let Some(d) = &cap.viewer_display {
+                                    ui.weak(format!(
+                                        "Extend: the viewer's display is {}x{}. The virtual monitor keeps the desktop's default size; set {}x{} for it in System Settings → Display.",
+                                        d.width, d.height, d.width, d.height
+                                    ));
+                                }
+                            }
                             ui.weak(format!(
                                 "Frame rate: asked up to {} fps  ·  compositor allows {}  ·  encoder runs at {} fps",
                                 cap.fps_requested,

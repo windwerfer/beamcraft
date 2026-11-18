@@ -1,6 +1,8 @@
 # HANDOFF
 
 ## Goal
+Latest session: Extend sizing per owner option 2 (presenter window shows viewer display size + hint). Next: desktop camera QR scan.
+
 Owner order 2026-11-18 11:25: (1) live VAAPI bitrate (blocked, see Open questions), (2) presenter remote.
 
 ## Done
@@ -17,7 +19,7 @@ Owner order 2026-11-18 11:25: (1) live VAAPI bitrate (blocked, see Open question
 - Roadmap 0.6 live VAAPI bitrate: needs new `unsafe` (direct libva) in media; owner decision (earlier rejected cros-codecs).
 - Presenter remote never run against a real portal, KDE/GNOME dialog, Flatpak, or a slideshow app; Android/desktop buttons only compiled, not seen. Owner: UI sketch for the buttons when available.
 - RemoteDesktop portal availability on the owner's KDE (xdg-desktop-portal-kde) unverified; a denial shows in the presenter window.
-- Extend does not use `viewer_display` yet (KDE-specific path; may need NEED_MANAGER).
+- Extend sizing is hint-only (owner option 2): the window shows the viewer's size; not seen on a real KDE desktop.
 - Loopback p95 close to the 40 ms budget on loaded boxes (this run 16.5 ms); watch CI.
 - Owner: report the craft-libs h264 decoder.rs:532 overflow upstream, bump rev, drop continue-on-error in fuzz.yml.
 - Flatpak portal-version check for VIRTUAL untested; Flatpak ffmpeg-full x264 and AppImage on FFmpeg 6.1 unverified on hardware.
@@ -30,4 +32,4 @@ cargo xtask ci; cargo ndk -t arm64-v8a --platform 26 clippy --release --locked -
 see `git log -1`
 
 ## Next step
-Roadmap 2 turned out already done (marked in roadmap.md). Remaining: Extend sizing (KDE path; likely NEED_MANAGER: KWin's `zkde_screencast stream_virtual_output` is reserved to the portal backend and `org.kde.KWin` D-Bus would need a new Flatpak `--talk-name`, forbidden by rule 1.2), desktop camera QR. Input features beyond the presenter remote are not yet wanted.
+Roadmap 2 turned out already done (marked in roadmap.md). Remaining: desktop camera QR scan (no camera on the box: unit tests on sample images only). Input features beyond the presenter remote are not yet wanted.

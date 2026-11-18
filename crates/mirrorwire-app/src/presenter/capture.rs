@@ -4,8 +4,9 @@ use crate::capture_prefs::{CapturePrefs, CursorPref};
 use mirrorwire_media::source::CaptureMode;
 use mirrorwire_media::source::CursorCapture;
 use mirrorwire_net::transport::{LinkControl, LinkState};
-use mirrorwire_proto::control::CursorMode;
+use mirrorwire_proto::control::{CursorMode, DisplayInfo};
 use std::sync::Arc;
+use tokio::sync::watch;
 
 /// Live capture settings and what the running source actually does. Shared
 /// between the encode thread, the transport's viewer callback and the GUI.
@@ -22,6 +23,8 @@ pub struct CaptureCtl {
     pub(super) cursor_note: Option<String>,
     /// State of the presenter remote (keyboard permission), for the window.
     pub(super) remote_note: Option<String>,
+    /// Display size the viewer reported in hello (for the Extend hint).
+    pub(super) viewer_display: Option<watch::Receiver<Option<DisplayInfo>>>,
     pub(super) negotiated_fps: Option<u32>,
     pub(super) source_desc: String,
     /// FEC setting and link feedback, shared with the transport.
@@ -41,6 +44,7 @@ impl CaptureCtl {
             active_cursor: CursorCapture::Embedded,
             cursor_note: None,
             remote_note: None,
+            viewer_display: None,
             negotiated_fps: None,
             source_desc: String::new(),
         }
@@ -69,6 +73,7 @@ impl CaptureCtl {
             cursor_mode: self.active_cursor.mode(),
             cursor_note: self.cursor_note.clone(),
             remote_note: self.remote_note.clone(),
+            viewer_display: self.viewer_display.as_ref().and_then(|rx| *rx.borrow()),
             fps_requested: self.asked_fps,
             fps_negotiated: self.negotiated_fps,
             fec: self.fec.snapshot(),
@@ -85,6 +90,8 @@ pub struct CaptureStatus {
     pub cursor_mode: CursorMode,
     pub cursor_note: Option<String>,
     pub remote_note: Option<String>,
+    /// The viewer's display size, once it has connected.
+    pub viewer_display: Option<DisplayInfo>,
     pub fps_requested: u32,
     pub fps_negotiated: Option<u32>,
     /// FEC setting, applied overhead and what the viewer reports.
