@@ -1,19 +1,16 @@
 # HANDOFF
 
 ## Goal
-Roadmap 0b/0c: lint enforcement for unsafe.
+Owner decision 2026-11-18: tighten loopback budget.
 
 ## Done
-- `clippy::undocumented_unsafe_blocks = deny` in `[workspace.lints.clippy]` (was media only); fixed 3 comments in app yuv_glow.rs and android gpu.rs. Roadmap 0b updated.
-- Gates green locally (xtask ci incl. loopback, Android clippy).
+- perf-budgets.toml capture_to_decoded p95 60 -> 40 ms (measured 11-29 ms); decisions.md + testing.md updated. xtask ci and Android clippy green.
 
 ## Decisions
 - No new unsafe. Breaks: none.
 
 ## Open questions
 - Owner: SonarCloud switch (SONAR_CI_ANALYSIS) pending.
-- Owner: ASan CI job for media tests (needs nightly)?
-- 60 ms loopback budget for CI runners: tighten after first CI run.
 - Extend: viewer size in hello (protocol 8)? Flatpak portal-version check for VIRTUAL untested.
 - Not verified at run time: Flatpak ffmpeg-full extension providing libx264; AppImage on Ubuntu FFmpeg 6.1 (never run on hardware). build-ffmpeg.sh has an unused Linux branch (x264).
 - Windows zip: never run on Windows (only --version smoke in CI); no installer/signing.
@@ -28,4 +25,4 @@ cargo xtask ci; cargo ndk -t arm64-v8a --platform 26 clippy --release --locked -
 see `git log -1`
 
 ## Next step
-0b/0c lint part done; remaining there needs nightly (ASan/cargo-fuzz, owner question). Next: item 6 extend testable parts.
+Next: nightly ASan + cargo-fuzz CI job (owner YES, see answers), then protocol 8 (viewer size in hello).

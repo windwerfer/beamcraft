@@ -1,11 +1,11 @@
 # Machine-checked loopback budgets (roadmap 0b.4). `cargo xtask loopback [secs]` runs
 # scripts/loopback-test.sh with the x264 test pattern and fails if a limit is exceeded.
-# Limits are deliberately loose (shared CI VMs are noisy): they catch a regression of a
-# factor, not a few percent. Measured 2026-11-17 on the dev VM (6 s): capture_to_decoded
-# p95 15 ms. Tighten only with numbers from the same machine class. Integrity counters
+# Limits keep headroom for noisy shared CI VMs: they catch a regression of a factor, not a few
+# percent. Measured p95: 11-15 ms on the dev VM (2026-11-18), 15-29 ms on CI runners; limit 40 ms
+# (owner, 2026-11-18). Tighten only with numbers from the same machine class. Integrity counters
 # must stay 0. Keys: <name>_max, whole numbers or decimals.
 [loopback]
-capture_to_decoded_p95_ms_max = 60
+capture_to_decoded_p95_ms_max = 40
 lost_max = 0
 mismatches_max = 0
 decode_errors_max = 0
