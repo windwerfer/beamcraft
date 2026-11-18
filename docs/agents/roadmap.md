@@ -302,7 +302,7 @@ target), **planned**, **idea**. Update this file when an item moves.
    in the system display settings. Must work in the Flatpak (check the portal version needed).
    Tests, docs.
 
-7a. **Optional FFmpeg (owner, 2026-11-17, D17):** step 1 done 2026-11-18 (`convert.rs`, pure-Rust BGRA→I420, tested against swscale; not wired). Step 2 open: cargo feature `ffmpeg`, FilmCraft-only build compiles and is built by CI.
+7a. **Optional FFmpeg (owner, 2026-11-17, D17):** done 2026-11-18. Cargo feature `ffmpeg` (default on); `--no-default-features --features filmcraft` builds a libav-free binary (FilmCraft encode + decode, pure-Rust converters), checked by CI and `cargo xtask ci`. Later: direct VAAPI encode/decode backend (no FFmpeg), Windows/macOS encoders without FFmpeg.
 
 7. **Windows build (owner request 2026-11-17, D16).** Step 1: CI job `Check (Windows)` on
    `windows-latest` (MSVC) builds, clippy-checks and tests the workspace with the viewer

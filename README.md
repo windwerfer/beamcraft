@@ -194,7 +194,7 @@ the encoder's rate in those modes), `--qp 18`, `--keyint` (frames; 0 = 10 s),
 `--port` (or `MIRRORWIRE_PORT`; the GUI also saves the port in `settings.json`),
 `--no-dmabuf` (capture through shared memory instead of zero-copy GPU buffers).
 `filmcraft` is an optional pure-Rust H.264 encoder for comparison (built into the Flatpak
-and AppImage; from source add `--features filmcraft`). It can also be switched live in the
+and AppImage; from source add `--features filmcraft`). It does not scale: omit `--size`. A build without FFmpeg (`--no-default-features --features gui,filmcraft`) has only this encoder and FilmCraft's decoder. It can also be switched live in the
 presenter window under Quality › Encoder. FFmpeg (VAAPI, then x264) stays the default.
 The default size is the native capture. `--size 1920x1080` (or `--width` / `--height`)
 overrides it and scales.
