@@ -100,6 +100,15 @@ pub enum Control {
     RemoteKey {
         key: RemoteKey,
     },
+    /// Viewer -> presenter: pen or finger as an absolute pointer (protocol 10). `x`/`y` are
+    /// the position inside the *picture* (not the window), 0 = left/top, 65535 = right/bottom.
+    /// Sent on the reliable control stream so down/up are never lost or reordered; the viewer
+    /// coalesces `move`s (about 60 per second) and the presenter rate limits them.
+    Pointer {
+        phase: PointerPhase,
+        x: u16,
+        y: u16,
+    },
     Bye,
 }
 
@@ -139,6 +148,47 @@ impl RemoteKey {
             Self::Escape => "Escape",
         }
     }
+}
+
+/// Input a viewer may inject on the presenter, after parsing and rate limiting (the presenter
+/// side's channel item).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RemoteInput {
+    Key(RemoteKey),
+    Pointer { phase: PointerPhase, x: u16, y: u16 },
+}
+
+/// Phase of a [`Control::Pointer`] event. Down = left button pressed, up = released.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PointerPhase {
+    Down,
+    Move,
+    Up,
+}
+
+/// Wire position for a point `(px, py)` inside the picture rectangle `(left, top, width, height)`
+/// (any unit, same for all). Clamped to the picture; `None` if the rectangle is empty or any
+/// input is not finite. Used by both viewers.
+pub fn pointer_in_rect(px: f32, py: f32, rect: (f32, f32, f32, f32)) -> Option<(u16, u16)> {
+    let (l, t, w, h) = rect;
+    if ![px, py, l, t, w, h].iter().all(|v| v.is_finite()) || w <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    let f = |v: f32| (v.clamp(0.0, 1.0) * 65535.0).round() as u16;
+    Some((f((px - l) / w), f((py - t) / h)))
+}
+
+/// Map a normalised 0..=65535 position onto a stream of `size` pixels. `None` if the size
+/// is empty or absurd. The result is always inside `0..=size-1`, so a hostile value cannot
+/// point outside the captured monitor.
+pub fn pointer_to_stream(x: u16, y: u16, size: (i32, i32)) -> Option<(f64, f64)> {
+    let ok = |v: i32| (1..=DisplayInfo::MAX_SIDE as i32).contains(&v);
+    if !ok(size.0) || !ok(size.1) {
+        return None;
+    }
+    let map = |v: u16, n: i32| f64::from(v) / 65535.0 * f64::from(n - 1);
+    Some((map(x, size.0), map(y, size.1)))
 }
 
 /// Which stage limits the stream, as judged by the viewer.
@@ -336,6 +386,47 @@ mod tests {
         let syms: std::collections::HashSet<i32> =
             RemoteKey::ALL.iter().map(|k| k.keysym()).collect();
         assert_eq!(syms.len(), RemoteKey::ALL.len());
+    }
+
+    #[test]
+    fn pointer_wire_and_mapping() {
+        let msg = Control::Pointer {
+            phase: PointerPhase::Down,
+            x: 100,
+            y: 65535,
+        };
+        let wire = msg.encode();
+        assert_eq!(
+            std::str::from_utf8(&wire[4..]).unwrap(),
+            r#"{"type":"pointer","phase":"down","x":100,"y":65535}"#
+        );
+        assert_eq!(Control::decode_body(&wire[4..]).unwrap(), msg);
+        // Out of range, negative, float, unknown phase: errors.
+        for bad in [
+            r#"{"type":"pointer","phase":"down","x":65536,"y":0}"#,
+            r#"{"type":"pointer","phase":"down","x":-1,"y":0}"#,
+            r#"{"type":"pointer","phase":"down","x":0.5,"y":0}"#,
+            r#"{"type":"pointer","phase":"drag","x":0,"y":0}"#,
+            r#"{"type":"pointer","phase":"up","x":0}"#,
+        ] {
+            assert!(Control::decode_body(bad.as_bytes()).is_err(), "{bad}");
+        }
+        assert_eq!(pointer_to_stream(0, 0, (1920, 1080)), Some((0.0, 0.0)));
+        assert_eq!(
+            pointer_to_stream(65535, 65535, (1920, 1080)),
+            Some((1919.0, 1079.0))
+        );
+        let (x, y) = pointer_to_stream(32768, 32768, (1001, 501)).unwrap();
+        assert!((x - 500.0).abs() < 0.1 && (y - 250.0).abs() < 0.1);
+        let r = (10.0, 20.0, 100.0, 50.0);
+        assert_eq!(pointer_in_rect(10.0, 20.0, r), Some((0, 0)));
+        assert_eq!(pointer_in_rect(110.0, 70.0, r), Some((65535, 65535)));
+        assert_eq!(pointer_in_rect(-500.0, 9999.0, r), Some((0, 65535)));
+        assert_eq!(pointer_in_rect(f32::NAN, 0.0, r), None);
+        assert_eq!(pointer_in_rect(1.0, 1.0, (0.0, 0.0, 0.0, 5.0)), None);
+        assert_eq!(pointer_to_stream(1, 1, (0, 100)), None);
+        assert_eq!(pointer_to_stream(1, 1, (100, -5)), None);
+        assert_eq!(pointer_to_stream(1, 1, (i32::MAX, 5)), None);
     }
 
     #[test]

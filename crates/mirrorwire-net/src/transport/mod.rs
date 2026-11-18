@@ -345,7 +345,7 @@ mod tests {
     fn test_presenter_with(
         dir: &std::path::Path,
         fec: FecMode,
-        remote_keys: Option<mpsc::Sender<mirrorwire_proto::control::RemoteKey>>,
+        remote_keys: Option<mpsc::Sender<mirrorwire_proto::control::RemoteInput>>,
     ) -> (Presenter, Identity) {
         std::fs::create_dir_all(dir).unwrap();
         let id = Identity::generate().unwrap();
@@ -396,8 +396,51 @@ mod tests {
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn pointer_events_arrive_in_order() {
+        use mirrorwire_proto::control::{PointerPhase, RemoteInput};
+        let dir = std::env::temp_dir().join(format!("mirrorwire-ptr-{}", std::process::id()));
+        let (tx, mut rx) = mpsc::channel(64);
+        let (presenter, id) = test_presenter_with(&dir, FecMode::Off, Some(tx));
+        let viewer = ViewerSession::connect_traced(
+            &Identity::generate().unwrap(),
+            &target_of(&presenter, &id),
+            "t",
+            test_display(),
+            &ConnectTrace::new(),
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        viewer.send_pointer(PointerPhase::Down, 10, 20);
+        viewer.send_pointer(PointerPhase::Move, 30, 40);
+        viewer.send_pointer(PointerPhase::Up, 30, 40);
+        for want in [
+            RemoteInput::Pointer {
+                phase: PointerPhase::Down,
+                x: 10,
+                y: 20,
+            },
+            RemoteInput::Pointer {
+                phase: PointerPhase::Move,
+                x: 30,
+                y: 40,
+            },
+            RemoteInput::Pointer {
+                phase: PointerPhase::Up,
+                x: 30,
+                y: 40,
+            },
+        ] {
+            let got = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+                .await
+                .unwrap();
+            assert_eq!(got, Some(want));
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn remote_taps_reach_the_presenter_and_are_rate_limited() {
-        use mirrorwire_proto::control::RemoteKey;
+        use mirrorwire_proto::control::{RemoteInput, RemoteKey};
         let dir = std::env::temp_dir().join(format!("mirrorwire-remote-{}", std::process::id()));
         let (tx, mut rx) = mpsc::channel(64);
         let (presenter, id) = test_presenter_with(&dir, FecMode::Off, Some(tx));
@@ -417,7 +460,7 @@ mod tests {
         let first = tokio::time::timeout(Duration::from_secs(5), rx.recv())
             .await
             .unwrap();
-        assert_eq!(first, Some(RemoteKey::Next));
+        assert_eq!(first, Some(RemoteInput::Key(RemoteKey::Next)));
         // Let the rest arrive, then count: a flood is cut to the per-second limit.
         tokio::time::sleep(Duration::from_millis(300)).await;
         let mut n = 1;

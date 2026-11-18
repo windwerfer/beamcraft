@@ -9,7 +9,9 @@ use crate::tls;
 use anyhow::{bail, Context, Result};
 use bytes::Bytes;
 use mirrorwire_proto::clock::now_us;
-use mirrorwire_proto::control::{hello_protocol, Control, DisplayInfo, RemoteKey, StreamInfo};
+use mirrorwire_proto::control::{
+    hello_protocol, Control, DisplayInfo, PointerPhase, RemoteInput, StreamInfo,
+};
 use mirrorwire_proto::cursor::{CursorEvent, CursorImage, PointerUpdate};
 use mirrorwire_proto::fec::FecMode;
 use mirrorwire_proto::fragment::{fragment, FrameTiming, PacketHeader};
@@ -88,7 +90,7 @@ pub struct PresenterConfig {
     pub fec: Arc<LinkControl>,
     /// Presenter-remote taps from the viewer (`remote_key`), rate limited here. `None` = the
     /// presenter cannot inject keys; taps are dropped.
-    pub remote_keys: Option<mpsc::Sender<RemoteKey>>,
+    pub remote_keys: Option<mpsc::Sender<RemoteInput>>,
 }
 
 type Callback = Arc<dyn Fn() + Send + Sync>;
@@ -211,7 +213,7 @@ struct SessionShared {
     on_keyframe_request: Callback,
     attempts: Arc<Mutex<Vec<IncomingAttempt>>>,
     fec: Arc<LinkControl>,
-    remote_keys: Option<mpsc::Sender<RemoteKey>>,
+    remote_keys: Option<mpsc::Sender<RemoteInput>>,
     /// Recently sent video packets, for NACK resends.
     resend: Arc<Mutex<ResendWindow>>,
 }
@@ -381,6 +383,7 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
     // ~0.5 s of black at startup in the loopback).
     let mut keyframe_gate = KeyframeGate::default();
     let mut remote_gate = TapGate::default();
+    let mut pointer_gate = PointerGate::default();
     let result = async {
         loop {
             let msg = match read_msg(&mut recv).await {
@@ -425,7 +428,21 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
                 Control::RemoteKey { key } => {
                     if let Some(tx) = &shared.remote_keys {
                         if remote_gate.allow(Instant::now()) {
-                            let _ = tx.try_send(key);
+                            let _ = tx.try_send(RemoteInput::Key(key));
+                        }
+                    }
+                }
+                Control::Pointer { phase, x, y } => {
+                    if let Some(tx) = &shared.remote_keys {
+                        if pointer_gate.allow(phase, Instant::now()) {
+                            // A full channel drops a move (a newer one follows); a lost
+                            // up would leave the button stuck, so ups wait for room.
+                            let input = RemoteInput::Pointer { phase, x, y };
+                            if phase == PointerPhase::Move {
+                                let _ = tx.try_send(input);
+                            } else {
+                                let _ = tx.send(input).await;
+                            }
                         }
                     }
                 }
@@ -838,6 +855,62 @@ impl TapGate {
         }
         self.count += 1;
         self.count <= Self::PER_SECOND
+    }
+}
+
+/// Rate limit for pen/touch events: moves are cut to [`PointerGate::MOVES_PER_SECOND`], downs
+/// to [`PointerGate::EDGES_PER_SECOND`] (a stuck or hostile viewer must not flood the
+/// presenter's pointer). Ups are never refused: a dropped `up` would leave the button pressed.
+#[derive(Default)]
+struct PointerGate {
+    window_start: Option<Instant>,
+    moves: u32,
+    edges: u32,
+}
+
+impl PointerGate {
+    const MOVES_PER_SECOND: u32 = 120;
+    const EDGES_PER_SECOND: u32 = 40;
+
+    fn allow(&mut self, phase: PointerPhase, now: Instant) -> bool {
+        match self.window_start {
+            Some(t) if now.duration_since(t) < Duration::from_secs(1) => {}
+            _ => {
+                self.window_start = Some(now);
+                self.moves = 0;
+                self.edges = 0;
+            }
+        }
+        match phase {
+            PointerPhase::Move => {
+                self.moves += 1;
+                self.moves <= Self::MOVES_PER_SECOND
+            }
+            // Releases are never refused: a pointer stuck down is worse than a burst of ups,
+            // and an up without a down is harmless on the portal.
+            PointerPhase::Up => true,
+            PointerPhase::Down => {
+                self.edges += 1;
+                self.edges <= Self::EDGES_PER_SECOND
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod pointer_gate_tests {
+    use super::*;
+
+    #[test]
+    fn limits_moves_and_downs_but_never_ups() {
+        let mut g = PointerGate::default();
+        let t0 = Instant::now();
+        let moves = (0..500).filter(|_| g.allow(PointerPhase::Move, t0)).count();
+        assert_eq!(moves, PointerGate::MOVES_PER_SECOND as usize);
+        let downs = (0..500).filter(|_| g.allow(PointerPhase::Down, t0)).count();
+        assert_eq!(downs, PointerGate::EDGES_PER_SECOND as usize);
+        assert!((0..500).all(|_| g.allow(PointerPhase::Up, t0)));
+        assert!(g.allow(PointerPhase::Move, t0 + Duration::from_millis(1001)));
     }
 }
 
