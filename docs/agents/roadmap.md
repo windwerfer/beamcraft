@@ -234,8 +234,8 @@ target), **planned**, **idea**. Update this file when an item moves.
       alternative, stays, documented; media SAFETY comments + deny lint done; net/diag.rs done: tz-rs, net forbids unsafe; app/applog.rs done 2026-11-17:
       `IsTerminal`, app is `deny(unsafe_code)` except yuv_glow.rs) via safe APIs (D15); lock poisoning via `unwrap_or_else(PoisonError::into_inner)`. ~1 day.
    2. **cargo-fuzz targets** for fragment, fec, cursor and control decode, plus a CI job (if not
-      already done alongside item 0). ~½ day. Replaced 2026-11-17 by `cargo test` hostile-input
-      tests (decisions.md); cargo-fuzz stays open until a nightly CI job exists.
+      already done alongside item 0). ~½ day. Done 2026-11-18: `fuzz/` crate + `.github/workflows/fuzz.yml` (nightly, D18); the
+      2026-11-17 `cargo test` hostile-input tests stay as the stable check.
    3. **A `cargo xtask ci` gate: done 2026-11-17** (`cargo xtask ci [--no-loopback]`, `cargo xtask layers`; std-only `xtask/` crate; the layer check reads each crate's `mirrorwire-*` deps against architecture.md and limits proto's external deps; CI runs `cargo xtask layers`; audit/deny stay manual) (the formatting-only commit and the CI fmt check are done,
       rustfmt defaults, no `rustfmt.toml`): fmt, clippy, tests, a crate-layer check
       (architecture.md made mechanical), loopback test.
@@ -261,7 +261,7 @@ target), **planned**, **idea**. Update this file when an item moves.
    need FFI too). No known pure-Rust H.264 decoder is fast enough; one written from scratch
    would likely be several times slower and break the latency budget. Best practice for that FFI layer: one small module with a safe API,
    a `// SAFETY:` invariant on every block, `clippy::undocumented_unsafe_blocks`, a CI job running
-   the media tests under AddressSanitizer (needs nightly, open), and fuzzing the decode path with corrupt H.264 input
+   the media tests under AddressSanitizer (done 2026-11-18, fuzz.yml, D18), and fuzzing the decode path with corrupt H.264 input
    (a `cargo test` version is done 2026-11-17: `decode::tests::corrupt_h264_never_panics_and_decoder_recovers`; the `VideoDecoder` trait with our own `YuvImage` also exists).
    Part of the same safe API: a `Decoder` trait with our own frame type (today `decode.rs`
    returns `ffmpeg_next::frame::Video`, and there is only one FFmpeg-based decoder), so other

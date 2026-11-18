@@ -308,6 +308,10 @@ Latency stages reported (ms, mean/p50/p95/max):
 `convert` (YUV->RGBA, GUI only) and `capture_to_decoded` end to end. The GUI
 overlay also shows capture->texture.
 
+Hostile-input checks: a nightly CI job (`fuzz.yml`) runs the media tests under AddressSanitizer
+and short `cargo-fuzz` runs of the H.264 decoder and the wire parsers (`fuzz/`, outside the
+workspace). Nightly Rust is used only there; everything else, including releases, is stable.
+
 ## Status
 
 Tested on a Debian 13 VM (8 vCPU Xeon, no GPU), loopback (x264 software):
