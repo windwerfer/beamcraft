@@ -5,7 +5,7 @@ Session 2026-11-18 (hardware findings): fixed VAAPI LP open and the x264 post-ou
 
 Latest session: camera QR scan step 1: `pairing::scan_qr_luma` (rqrr, net), unit-tested on rendered codes. Earlier: Extend size dropdown.
 
-Owner order 2026-11-18 11:25: (1) live VAAPI bitrate (blocked, see Open questions), (2) presenter remote.
+Latest: roadmap 0.6 closed as done via reopen (manager decision 15:58), hardware results recorded in testing.md §3.10 (VAAPI LP, reopen ~27 ms, presenter remote confirmed). Docs only, no new unsafe.
 
 ## Done
 - Presenter remote, protocol 9: `Control::RemoteKey{key}` (closed enum next/previous/space/escape) on the control stream, rate-limited 10/s in the presenter (`TapGate`), `ViewerSession::send_remote_key`; unit tests (wire form, hostile values, rate limit, loopback).
@@ -23,7 +23,6 @@ Owner order 2026-11-18 11:25: (1) live VAAPI bitrate (blocked, see Open question
 - See decisions.md log 2026-11-18 (presenter remote). Rejected: cursor datagram path, sharing the ScreenCast session, raw keycodes.
 
 ## Open questions
-- Roadmap 0.6 live VAAPI bitrate: needs new `unsafe` (direct libva) in media; owner decision (earlier rejected cros-codecs).
 - Presenter remote never run against a real portal, KDE/GNOME dialog, Flatpak, or a slideshow app; Android/desktop buttons only compiled, not seen. Owner: UI sketch for the buttons when available.
 - RemoteDesktop portal availability on the owner's KDE (xdg-desktop-portal-kde) unverified; a denial shows in the presenter window.
 - Extend sizing is hint-only (owner option 2): the window shows the viewer's size; not seen on a real KDE desktop.
@@ -39,5 +38,8 @@ cargo xtask ci; cargo ndk -t arm64-v8a --platform 26 clippy --release --locked -
 see `git log -1`
 
 ## Next step
+KWin sizing on non-Flatpak builds (needs D-Bus; check for a safe zbus/ashpd route, no new Flatpak permission; if unclean ship as is) and the Extend size as encode target (14:13 entry). Then camera QR step 2.
+
+(Older next step:)
 Camera QR scan step 2 (needs a camera box): portal Camera + PipeWire video-input source in media, 'Scan' button in the desktop viewer feeding `scan_qr_luma` with the luma plane (YUY2/NV12/MJPEG decode). Not testable here. Hardware check deferred. (Old note follows.)
 Roadmap 2 turned out already done (marked in roadmap.md). Remaining: desktop camera QR scan (no camera on the box: unit tests on sample images only). Input features beyond the presenter remote are not yet wanted.

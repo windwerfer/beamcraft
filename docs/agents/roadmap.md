@@ -317,9 +317,9 @@ target), **planned**, **idea**. Update this file when an item moves.
 
 ## Planned
 
-- **Adaptive bitrate follow-ups:** tune the thresholds on the T480s → iMac Wi-Fi; a live
-  bitrate change for VAAPI (FFmpeg's h264_vaapi only reads the rate when opened, so today it
-  reopens with a keyframe, rate-limited); per-frame pacing to the budget for every frame (keyframes and the frames behind them are paced since 2026-11-16; pacing everything at exactly the budget built up seconds of lag in the sim).
+- **Adaptive bitrate follow-ups:** tune the thresholds on the T480s → iMac Wi-Fi; VAAPI bitrate
+  changes **done via encoder reopen (item 0.6 closed 2026-11-18)**: FFmpeg's h264_vaapi only reads the
+  rate when opened, so it reopens with a keyframe, rate-limited; a live libva change is not worth its size (see decisions.md); per-frame pacing to the budget for every frame (keyframes and the frames behind them are paced since 2026-11-16; pacing everything at exactly the budget built up seconds of lag in the sim).
 - **FEC follow-ups:** measure on real Wi-Fi and tune the auto curve. (Keyframes, parity
   included, are paced over up to 100 ms since 2026-11-16.)
 - **Zero-copy (viewer):** VideoToolbox → texture and a YUV→RGB shader on the wgpu path too

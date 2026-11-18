@@ -254,7 +254,7 @@ Paced: a keyframe at 1.25 × the budget, frames that waited behind a paced one a
 - Rejected before pacing: ignoring loss/queue for 1 s after each keyframe (roadmap item 0.3).
   An upward reopen also starts with a keyframe, so the grace hid exactly that overrun.
 - Left: VAAPI behind a 20–50 ms buffer still freezes 6–16 % of the time; a live VAAPI rate
-  (roadmap item 0.6) would remove the reopen keyframes.
+  (roadmap item 0.6) would have removed the reopen keyframes; dropped 2026-11-18, see §3.10.
 
 **Roadmap item 0.5 tried and rejected (2026-11-16).** The sim now counts lost frames (more
 packets lost than parity, pooled per frame) in every mode and passes the count of each 500 ms
@@ -585,6 +585,18 @@ lost 3 instead of 662 QUIC packets and 0 instead of 28 frames, with no frame wai
 keyframe (15 before), for −4 % video (13.4 vs 14.0 Mbit/s mean; pair 2 after sent 11.0).
 Two pairs are few, but here the difference is larger than the run-to-run spread.
 Shown fps stays at ~50 of 60 in every run, both builds (the open display-side item).
+
+### 3.10 Hardware: VAAPI low-power, reopen cost, presenter remote (owner/manager, 2026-11-18)
+
+Presenter: T480s dev container (Debian 13, Intel UHD 620, `intel-media-va-driver-non-free`,
+H.264 only as `EncSliceLP`), KDE Plasma Wayland, portal capture, `--encoder vaapi`; viewer:
+TB336FU tablet over Wi-Fi. Run: `scripts/android-wifi-run.sh 60` plus the owner's movie session.
+
+- VAAPI opens on the low-power entrypoint (`low_power=1` retry). A bitrate change reopens the
+  encoder in about 27 ms, about 3 cuts per minute; the viewer showed about 50 fps, 0 unrecoverable
+  frames, and the owner saw no stutter. So the reopen path is accepted (roadmap 0.6 closed).
+- On-the-fly quality changes work on hardware.
+- Presenter remote works end to end: KDE RemoteDesktop portal, Android buttons, a real document.
 
 ## 4. Real hardware
 
