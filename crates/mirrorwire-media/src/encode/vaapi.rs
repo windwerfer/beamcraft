@@ -1,6 +1,7 @@
 //! VAAPI helpers: the VPP filter graph (upload, scale, convert to NV12 on the GPU) and the
 //! DMA-BUF import (DRM-PRIME frame mapped into a VAAPI surface). Pure move out of `mod.rs`.
 
+#[cfg(unix)]
 use crate::frame::RawFrame;
 use crate::hw::HwRef;
 use anyhow::{anyhow, bail, Context as _, Result};
