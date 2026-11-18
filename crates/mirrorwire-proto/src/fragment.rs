@@ -445,8 +445,6 @@ pub struct Reassembler {
     stats: LinkStats,
     delay: DelayMeter,
     rtt_us: u64,
-    /// The frame the delivery waits for and since when a newer one has been waiting behind it.
-    gap: Option<(u32, u64)>,
     /// Frames given up since the last delivered one.
     pending_lost: u32,
     /// Whole-frame NACKs: frame_id -> (rounds, last time).
@@ -466,7 +464,6 @@ impl Reassembler {
             stats: LinkStats::default(),
             delay: DelayMeter::default(),
             rtt_us: 0,
-            gap: None,
             pending_lost: 0,
             absent: BTreeMap::new(),
             nacks: NackStats::default(),
@@ -541,7 +538,6 @@ impl Reassembler {
             if self.partial.get(&head).is_some_and(Partial::complete) {
                 let done = self.partial.remove(&head)?;
                 self.last_delivered = Some(head);
-                self.gap = None;
                 let want_crc = done.layout.frame_crc;
                 let lost_frames = self.pending_lost;
                 let (frame, event) = finish(head, done, lost_frames, now_us);
@@ -559,22 +555,28 @@ impl Reassembler {
             if head >= newest {
                 return None; // nothing newer yet: the frame is still arriving
             }
-            let since = match self.gap {
-                Some((id, since)) if id == head => since,
-                _ => {
-                    self.gap = Some((head, now_us));
-                    now_us
-                }
-            };
-            if now_us.saturating_sub(since) < self.hold_us() {
+            // How long a newer frame has been waiting behind the head, measured from the
+            // arrival of its first packet (not from when the head was first examined: a run
+            // of missing frames must be given up together, or after an outage the viewer
+            // gives up one frame per hold time, slower than the presenter sends new ones,
+            // and never delivers again).
+            let (&next, blocker) = self
+                .partial
+                .range(head.wrapping_add(u32::from(self.partial.contains_key(&head)))..)
+                .next()?;
+            if now_us.saturating_sub(blocker.first_us) < self.hold_us() {
                 return None;
             }
-            // Resends did not arrive in time: give the frame up.
-            self.partial.remove(&head);
-            self.last_delivered = Some(head);
-            self.gap = None;
-            self.pending_lost += 1;
-            self.stats.unrecoverable_frames += 1;
+            // Resends did not arrive in time: give up the head, and with it every frame id
+            // before the next one that has anything.
+            let skipped = if self.partial.remove(&head).is_some() {
+                1
+            } else {
+                next.wrapping_sub(head)
+            };
+            self.last_delivered = Some(head.wrapping_add(skipped - 1));
+            self.pending_lost = self.pending_lost.saturating_add(skipped);
+            self.stats.unrecoverable_frames += u64::from(skipped);
         }
     }
 
@@ -774,6 +776,38 @@ mod tests {
         assert!(frame.keyframe);
         assert_eq!(frame.timing, T);
         assert_eq!(ev.lost_frames, 0);
+    }
+
+    /// Regression (hardware run 2026-11-18): after an outage of N whole frames the head was
+    /// given up one frame per hold time, slower than new frames arrive, so nothing was ever
+    /// delivered again ("in 0.0 fps" for 40 s).
+    #[test]
+    fn missing_run_is_skipped_at_once() {
+        let mut r = Reassembler::new(1_000_000);
+        for f in fragment(1, true, T, &payload(100), 1200, None) {
+            assert!(r.push(f, 0).is_some());
+        }
+        // Frames 2..=100 never arrive; 101.. arrive complete every 16 ms.
+        let mut delivered = None;
+        let mut now = 1_000_000;
+        for id in 101..140u32 {
+            for f in fragment(id, false, T, &payload(100), 1200, None) {
+                if let Some(x) = r.push(f, now) {
+                    delivered.get_or_insert((x.0.frame_id, x.1.lost_frames, now));
+                }
+            }
+            if delivered.is_some() {
+                break;
+            }
+            now += 16_000;
+        }
+        let (id, lost, at) = delivered.expect("delivery resumes");
+        assert!(
+            at <= 1_000_000 + r.hold_us() + 16_000,
+            "resumed too late: {at}"
+        );
+        assert_eq!(id, 101);
+        assert_eq!(lost, 99);
     }
 
     #[test]

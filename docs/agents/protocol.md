@@ -207,7 +207,7 @@ as many missing **data** shards as the block still lacks (parity that arrived co
 fewest packets that complete it. A frame of which nothing arrived is asked for whole. Each fragment is asked for again
 after RTT + 2 ms, three rounds at most. Frames are still delivered strictly in order: an
 incomplete frame holds the newer ones back for `hold_us` = 2 × RTT + 4 ms (6–100 ms); only
-when that expires is the frame **lost** (`unrecoverable`, and the viewer asks for a keyframe,
+when that expires (measured from the first packet of the oldest newer frame, so a run of missing frames is given up at once, not one `hold_us` each) is the frame **lost** (`unrecoverable`, and the viewer asks for a keyframe,
 §2). So a keyframe is requested only if the resend missed about one round trip. Resent packets
 are not counted in `link_report` loss or in the queueing-delay measurement (they are not first
 transmissions); the HUD shows `resent N`.
