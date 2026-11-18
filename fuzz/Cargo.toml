@@ -1,0 +1,40 @@
+[package]
+name = "mirrorwire-fuzz"
+version = "0.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Outside the main workspace on purpose: cargo-fuzz needs nightly Rust and libFuzzer, and the
+# normal build, tests and releases stay on stable (decisions.md D18).
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+bytes = "1"
+mirrorwire-film = { path = "../crates/mirrorwire-film" }
+mirrorwire-proto = { path = "../crates/mirrorwire-proto" }
+
+[[bin]]
+name = "film_decode"
+path = "fuzz_targets/film_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "proto_parse"
+path = "fuzz_targets/proto_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "reassembler"
+path = "fuzz_targets/reassembler.rs"
+test = false
+doc = false
+bench = false
