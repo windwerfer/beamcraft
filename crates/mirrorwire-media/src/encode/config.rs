@@ -119,6 +119,9 @@ pub struct EncoderConfig {
     pub keyint: Option<u32>,
     pub intra_refresh: bool,
     pub vaapi_device: String,
+    /// Upper bound for the encoded picture (Extend mode: the chosen size). A larger result
+    /// is scaled down keeping the aspect ratio; a smaller one is never scaled up.
+    pub max_size: Option<(u32, u32)>,
 }
 
 impl Default for EncoderConfig {
@@ -134,6 +137,7 @@ impl Default for EncoderConfig {
             keyint: None,
             intra_refresh: false,
             vaapi_device: "/dev/dri/renderD128".into(),
+            max_size: None,
         }
     }
 }
@@ -153,6 +157,14 @@ impl EncoderConfig {
             (0, h) => (scale_dim(h, src_w, src_h), h),
             (w, 0) => (w, scale_dim(w, src_h, src_w)),
             (w, h) => (w, h),
+        };
+        let (w, h) = match self.max_size {
+            Some((mw, mh)) if mw > 0 && mh > 0 && (w > mw || h > mh) => {
+                let f = (f64::from(mw) / f64::from(w)).min(f64::from(mh) / f64::from(h));
+                let fit = |v: u32| (f64::from(v) * f).round() as u32;
+                (fit(w), fit(h))
+            }
+            _ => (w, h),
         };
         limit_size(w, h)
     }

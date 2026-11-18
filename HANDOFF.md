@@ -8,6 +8,7 @@ Latest session: camera QR scan step 1: `pairing::scan_qr_luma` (rqrr, net), unit
 Latest: roadmap 0.6 closed as done via reopen (manager decision 15:58), hardware results recorded in testing.md §3.10 (VAAPI LP, reopen ~27 ms, presenter remote confirmed). Docs only, no new unsafe.
 
 ## Done
+- Extend size as encode target: `EncoderConfig::max_size` (fit-within, no upscale), set by the presenter window from the resolved Extend size; unit test; decisions.md 2026-11-18. KWin sizing on non-Flatpak NOT done (no verifiable clean route without a KDE desktop; hint + dropdown stay). Not tried on hardware. Loopback p95 is flaky on this box (43-69 ms once, passes on rerun, same without my change).
 - Presenter remote, protocol 9: `Control::RemoteKey{key}` (closed enum next/previous/space/escape) on the control stream, rate-limited 10/s in the presenter (`TapGate`), `ViewerSession::send_remote_key`; unit tests (wire form, hostile values, rate limit, loopback).
 - Linux presenter: `media/src/source/remote.rs` taps keysyms through the RemoteDesktop portal (keyboard only, lazy session, restore token `remote-desktop.token`); status line in the presenter window (`CaptureCtl.remote_note`). No new unsafe, no new crate, no new Flatpak permission.
 - Desktop viewer: R toggles Previous/Next/Click/Escape buttons. Android: same buttons in the tap overlay.
@@ -38,7 +39,7 @@ cargo xtask ci; cargo ndk -t arm64-v8a --platform 26 clippy --release --locked -
 see `git log -1`
 
 ## Next step
-KWin sizing on non-Flatpak builds (needs D-Bus; check for a safe zbus/ashpd route, no new Flatpak permission; if unclean ship as is) and the Extend size as encode target (14:13 entry). Then camera QR step 2.
+Camera QR step 2 (needs a camera box). KWin sizing is parked (see decisions.md); revisit only with a KDE desktop to test on. Otherwise remaining mirroring items (0.4 hysteresis, native resolution, connection diagnostics) if not yet done per roadmap.
 
 (Older next step:)
 Camera QR scan step 2 (needs a camera box): portal Camera + PipeWire video-input source in media, 'Scan' button in the desktop viewer feeding `scan_qr_luma` with the luma plane (YUY2/NV12/MJPEG decode). Not testable here. Hardware check deferred. (Old note follows.)

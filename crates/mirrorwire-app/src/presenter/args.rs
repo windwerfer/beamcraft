@@ -143,6 +143,7 @@ impl PresentArgs {
             keyint: (self.keyint > 0).then_some(self.keyint),
             intra_refresh: self.intra_refresh,
             vaapi_device: self.vaapi_device.clone(),
+            max_size: None,
         })
     }
 

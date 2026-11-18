@@ -272,6 +272,23 @@ mod tests {
     }
 
     #[test]
+    fn max_size_caps_keeping_aspect_and_never_upscales() {
+        let c = EncoderConfig {
+            max_size: Some((1280, 800)),
+            ..EncoderConfig::default()
+        };
+        assert_eq!(c.resolved_size(2560, 1600), (1280, 800));
+        assert_eq!(c.resolved_size(1920, 1080), (1280, 720));
+        assert_eq!(c.resolved_size(1024, 600), (1024, 600));
+        assert_eq!(c.resolved_size(1280, 800), (1280, 800));
+        let zero = EncoderConfig {
+            max_size: Some((0, 0)),
+            ..EncoderConfig::default()
+        };
+        assert_eq!(zero.resolved_size(1920, 1080), (1920, 1080));
+    }
+
+    #[test]
     fn default_bitrate_is_forty_mbps() {
         assert_eq!(DEFAULT_BITRATE_KBPS, 40_000);
         assert_eq!(EncoderConfig::default().bitrate_kbps, 40_000);

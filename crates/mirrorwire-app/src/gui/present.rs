@@ -93,6 +93,17 @@ impl MirrorApp {
                             ui.add_space(4.0);
                             ui.label(status.capture.fec.bitrate_line());
                         }
+                        // Extend mode caps the encoded size at the chosen size (Auto: the viewer's display).
+                        if let Some(h) = &self.presenting {
+                            let cap = &status.capture;
+                            let max = (cap.prefs.mode == mirrorwire_media::source::CaptureMode::Extend)
+                                .then(|| {
+                                    let viewer = cap.viewer_display.map(|d| (d.width, d.height));
+                                    cap.prefs.extend_size.resolve(viewer)
+                                })
+                                .flatten();
+                            h.set_max_size(max);
+                        }
                         quality_controls(ui, self, &status.settings);
                         ui.add_space(8.0);
                         // Diagnostics stay one click away; the essentials above fit a laptop screen.
@@ -163,10 +174,11 @@ impl MirrorApp {
                             }
                             if cap.prefs.mode == mirrorwire_media::source::CaptureMode::Extend {
                                 let viewer = cap.viewer_display.map(|d| (d.width, d.height));
-                                match cap.prefs.extend_size.resolve(viewer) {
+                                let target = cap.prefs.extend_size.resolve(viewer);
+                                match target {
                                     Some((w, h)) => {
                                         ui.weak(format!(
-                                            "Extend: target size {w}x{h}{}. The virtual monitor keeps the desktop's default size; set {w}x{h} for it in System Settings → Display.",
+                                            "Extend: target size {w}x{h}{}. Encoding is capped to this size. The virtual monitor keeps the desktop's default size; set {w}x{h} for it in System Settings → Display.",
                                             if cap.prefs.extend_size == ExtendSize::Auto { " (the viewer's display)" } else { "" }
                                         ));
                                     }

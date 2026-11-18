@@ -59,6 +59,15 @@ impl PresenterHandle {
         self.controls.request_keyframe();
     }
 
+    /// Cap the encoded size (Extend mode: the chosen size). A change reopens the encoder
+    /// through the usual size check; the same value is a no-op.
+    pub fn set_max_size(&self, max: Option<(u32, u32)>) {
+        let mut s = self.settings.lock_ok();
+        if s.max_size != max {
+            s.max_size = max;
+        }
+    }
+
     /// Change the capture mode, cursor mode or frame-rate cap: saved for the next start,
     /// and the capture is reopened (silently, with the portal restore token)
     /// when it changes what is asked of the compositor.

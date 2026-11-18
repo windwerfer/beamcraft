@@ -293,7 +293,7 @@ target), **planned**, **idea**. Update this file when an item moves.
    vs cable detection" – unreliable, because the achievable maximum depends on the encoder,
    content and the other traffic on the link, and the OS does not tell us reliably whether the
    path crosses Wi-Fi.
-6. **Extend mode / virtual monitor (setting, portal source type, fallback, per-mode token, Quality-panel box and unit tests done 2026-11-17; not tried on a real KDE/GNOME desktop; viewer size in hello done 2026-11-18 (protocol 8, `Presenter::viewer_display`; shown in the presenter window as a "set this resolution" hint 2026-11-18, no automatic sizing: the ScreenCast portal has no size parameter, see D19), Flatpak portal-version check open):** presenter setting Mirror/Extend (CLI, env,
+6. **Extend mode / virtual monitor (setting, portal source type, fallback, per-mode token, Quality-panel box and unit tests done 2026-11-17; not tried on a real KDE/GNOME desktop; viewer size in hello done 2026-11-18 (protocol 8, `Presenter::viewer_display`; shown in the presenter window as a "set this resolution" hint 2026-11-18, no automatic sizing; the encode size is capped at the chosen Extend size 2026-11-18: the ScreenCast portal has no size parameter, see D19), Flatpak portal-version check open):** presenter setting Mirror/Extend (CLI, env,
    settings.json, start screen, Quality panel). Extend asks the ScreenCast portal for source
    type VIRTUAL (4) after checking AvailableSourceTypes (KDE Plasma 6 and GNOME mutter support
    it); Mirror asks for MONITOR. Switching mode re-opens the portal dialog; one restore token per
