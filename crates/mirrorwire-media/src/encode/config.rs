@@ -139,13 +139,22 @@ impl Default for EncoderConfig {
 }
 
 impl EncoderConfig {
+    /// The encoded size for a capture of `src_w`x`src_h`.
+    ///
+    /// Default (0x0): the native size. One dimension given: the other follows the
+    /// capture's aspect ratio. Both given: used as asked. The result is always
+    /// even (4:2:0 chroma) and within [`MAX_ENCODE_PIXELS`] / [`MAX_ENCODE_EDGE`]
+    /// (H.264 level 5.1, what hardware encoders accept): a larger request or capture is
+    /// scaled down keeping its aspect ratio (5K -> 4096x2304). Never below 2x2.
     pub fn resolved_size(&self, src_w: u32, src_h: u32) -> (u32, u32) {
-        match (self.width, self.height) {
+        let (src_w, src_h) = (src_w.max(1), src_h.max(1));
+        let (w, h) = match (self.width, self.height) {
             (0, 0) => (src_w, src_h),
-            (0, h) => (src_w, h),
-            (w, 0) => (w, src_h),
+            (0, h) => (scale_dim(h, src_w, src_h), h),
+            (w, 0) => (w, scale_dim(w, src_h, src_w)),
             (w, h) => (w, h),
-        }
+        };
+        limit_size(w, h)
     }
 
     pub fn gop_frames(&self) -> u32 {
@@ -168,6 +177,33 @@ impl EncoderConfig {
             || self.vaapi_device != other.vaapi_device
             || self.fps != other.fps
     }
+}
+
+/// Longest edge the encoders are asked for (H.264 level 5.1 allows 4096 on VA-API hardware).
+pub const MAX_ENCODE_EDGE: u32 = 4096;
+/// Largest picture area (level 5.1: 36 864 macroblocks = 9 437 184 px; 4096x2304 fits).
+pub const MAX_ENCODE_PIXELS: u64 = 4096 * 2304;
+
+/// `num * other / den`, rounded.
+fn scale_dim(num: u32, other: u32, den: u32) -> u32 {
+    let v = (u64::from(num) * u64::from(other) + u64::from(den) / 2) / u64::from(den);
+    u32::try_from(v).unwrap_or(u32::MAX)
+}
+
+/// Fits a size into the encoder limits, keeping the aspect ratio, and makes both edges even.
+fn limit_size(w: u32, h: u32) -> (u32, u32) {
+    let (w, h) = (f64::from(w.max(2)), f64::from(h.max(2)));
+    let mut f = 1.0f64;
+    let edge = w.max(h);
+    if edge > f64::from(MAX_ENCODE_EDGE) {
+        f = f64::from(MAX_ENCODE_EDGE) / edge;
+    }
+    let area = w * h * f * f;
+    if area > MAX_ENCODE_PIXELS as f64 {
+        f *= (MAX_ENCODE_PIXELS as f64 / area).sqrt();
+    }
+    let even = |v: f64| ((v * f) as u32 & !1).clamp(2, MAX_ENCODE_EDGE);
+    (even(w), even(h))
 }
 
 /// Parses `1920x1080` or `1920×1080`.

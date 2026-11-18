@@ -1,16 +1,18 @@
 # HANDOFF
 
 ## Goal
-Owner decision 2026-11-18: protocol 8, viewer display size in hello (D19).
+"Finish mirroring first" list (owner 2026-11-18 11:24), item 1-3.
 
 ## Done
-- `PROTOCOL_VERSION` 8; `hello.display {width,height,scale_milli}` (proto `DisplayInfo`, sanitised, tested). Desktop and Android viewers send egui content rect x ppp. Presenter exposes `Presenter::viewer_display` (watch). Test: presenter learns display from hello. protocol.md, D19, roadmap updated.
-- Earlier this chain: fuzz/ASan job (D18), loopback budget 40 ms.
+- Item 1 (live VAAPI bitrate, roadmap 0.6): not doable without new unsafe; see Open questions.
+- Item 2 (0.4 hysteresis/probing): already done and sim-verified earlier (roadmap 0.4); nothing to do.
+- Item 3 (roadmap 1): native size was already the default; added limits in `EncoderConfig::resolved_size` (even edges, aspect kept when one of width/height is set, cap 4096 edge / 4096x2304 area, 5K -> 4096x2304) with a unit test. Not run on a 4K/5K display. Decision logged in decisions.md. No new unsafe, no protocol break.
 
 ## Decisions
-- D19. No new unsafe. Breaks: PROTOCOL_VERSION 7 -> 8.
+- See decisions.md log 2026-11-18 (native size and limits).
 
 ## Open questions
+- Roadmap 0.6 live VAAPI bitrate: FFmpeg sends rate control only with an IDR; only a direct libva path (new `unsafe` in media, new dependency or hand-written FFI; owner earlier rejected cros-codecs) could do it. Owner decision needed.
 - Extend does not use `viewer_display` yet: the ScreenCast portal has no size parameter; matching virtual monitor needs KDE/GNOME-specific work (owner decision on approach).
 - Loopback p95 measured 38.9 ms in the last local run against the 40 ms budget (loaded box?); watch for flakiness in CI and raise if needed.
 - Owner: report the craft-libs h264 decoder.rs:532 overflow upstream, bump rev, drop continue-on-error in fuzz.yml.
@@ -25,4 +27,4 @@ cargo xtask ci; cargo ndk -t arm64-v8a --platform 26 clippy --release --locked -
 see `git log -1`
 
 ## Next step
-Remaining listed items are done or need owner decisions; Extend virtual monitor sizing (needs owner approach) is the main open one.
+Roadmap 2 (GUI connection diagnostics per step), then Extend sizing (item 5, KDE path; may need NEED_MANAGER), then desktop camera QR.

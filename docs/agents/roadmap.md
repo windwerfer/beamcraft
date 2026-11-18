@@ -268,7 +268,7 @@ target), **planned**, **idea**. Update this file when an item moves.
    decoders (VideoToolbox direct, FilmCraft) can be plugged in like the encoder backends. ~1 day.
    (A FilmCraft decoder option is its own item under Planned.)
 
-1. **Quality and latency fix:** stream at the screen's native resolution (no fixed
+1. **Quality and latency fix (native size + limits done 2026-11-18: default is the capture's native size; `EncoderConfig::resolved_size` makes it even, keeps the aspect when one of --width/--height is given, and scales anything above 4096 px edge / 4096x2304 area (H.264 level 5.1) down, e.g. 5K -> 4096x2304; unit-tested, not run on a 4K/5K display; the GPU scaling part is open):** stream at the screen's native resolution (no fixed
    2000×1000 scaling), higher default bitrate for desktop text, move colour conversion and
    scaling to the GPU (VAAPI `scale_vaapi`/hw upload) so `capture_to_encoded` drops.
 2. **Connection diagnostics in the GUI:** per-step status (resolve, handshake, cert, pairing,

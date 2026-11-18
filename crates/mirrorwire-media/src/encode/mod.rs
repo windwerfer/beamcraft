@@ -253,6 +253,25 @@ mod tests {
     }
 
     #[test]
+    fn resolved_size_keeps_aspect_is_even_and_bounded() {
+        let mut c = EncoderConfig::default();
+        assert_eq!(c.resolved_size(1919, 1081), (1918, 1080));
+        c.height = 720;
+        assert_eq!(c.resolved_size(1920, 1080), (1280, 720));
+        c.height = 0;
+        c.width = 1000;
+        assert_eq!(c.resolved_size(1920, 1080), (1000, 562));
+        c.width = 0;
+        assert_eq!(c.resolved_size(5120, 2880), (4096, 2304));
+        assert_eq!(c.resolved_size(7680, 4320), (4096, 2304));
+        let (w, h) = c.resolved_size(5120, 2160);
+        assert!(w <= 4096 && u64::from(w) * u64::from(h) <= MAX_ENCODE_PIXELS);
+        assert!(w % 2 == 0 && h % 2 == 0);
+        assert_eq!(c.resolved_size(3840, 2160), (3840, 2160));
+        assert_eq!(c.resolved_size(0, 0), (2, 2));
+    }
+
+    #[test]
     fn default_bitrate_is_forty_mbps() {
         assert_eq!(DEFAULT_BITRATE_KBPS, 40_000);
         assert_eq!(EncoderConfig::default().bitrate_kbps, 40_000);
