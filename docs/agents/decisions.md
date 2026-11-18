@@ -41,6 +41,12 @@ without new information.
 
 Newest first. Add an entry when the owner decides something non-obvious.
 
+- **2026-11-18 (Windows viewer zip, D16 step 2):** build.yml builds the viewer (`gui,ffmpeg`, no
+  portal) on windows-latest and zips `mirrorwire.exe` with the DLLs of the BtbN LGPL shared FFmpeg
+  build, the FFmpeg licence text and our licences; the release job attaches it. Rejected: an
+  FFmpeg-free viewer zip now (FilmCraft decode speed on Windows not measured; it can follow);
+  building FFmpeg from source (slow). BtbN `latest` asset names rotate, so a rename breaks the job.
+
 - **2026-11-17 (frame-ack throughput as a second ABR signal, protocol 6):** there is no
   per-frame ack message; the viewer's `link_report` carries `rx_kbps` and `window_ms` instead
   (arrival rate of first-transmission video packets), and the presenter aligns its own sent

@@ -256,10 +256,54 @@ jobs:
           archive: false
           if-no-files-found: error
 
+  # Windows viewer zip (roadmap 7 step 2, D16). LGPL shared FFmpeg DLLs are bundled
+  # next to mirrorwire.exe; no GPL parts (no libx264), so the viewer decodes only.
+  windows:
+    name: Windows viewer
+    needs: audit
+    runs-on: windows-latest
+    env:
+      FFMPEG_DIR: ${{ github.workspace }}\\ffmpeg
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Download FFmpeg (LGPL shared)
+        shell: pwsh
+        run: |
+          $url = "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/ffmpeg-n8.1-latest-win64-lgpl-shared-8.1.zip"
+          Invoke-WebRequest $url -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-x
+          Move-Item (Get-ChildItem ffmpeg-x | Select-Object -First 1).FullName ffmpeg
+          "$env:FFMPEG_DIR\bin" | Out-File -Append -Encoding ascii $env:GITHUB_PATH
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        with:
+          key: windows
+      - name: Build
+        run: cargo build --release --locked -p mirrorwire-app --no-default-features --features gui,ffmpeg
+      - name: Package zip
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory dist/MirrorWire-windows | Out-Null
+          Copy-Item target/release/mirrorwire.exe dist/MirrorWire-windows/
+          Copy-Item "$env:FFMPEG_DIR\bin\*.dll" dist/MirrorWire-windows/
+          Copy-Item LICENSE* dist/MirrorWire-windows/
+          Copy-Item "$env:FFMPEG_DIR\LICENSE.txt" dist/MirrorWire-windows/FFmpeg-LICENSE.txt
+          Set-Content dist/MirrorWire-windows/README.txt "MirrorWire viewer for Windows. Run mirrorwire.exe. Allow it through the Windows firewall when asked. The DLLs are an unmodified LGPL FFmpeg shared build (BtbN, FFmpeg-LICENSE.txt); source: https://ffmpeg.org and https://github.com/BtbN/FFmpeg-Builds. Presenting from Windows is not supported yet."
+          Compress-Archive dist/MirrorWire-windows dist/MirrorWire-windows.zip
+      - name: Smoke test
+        run: dist/MirrorWire-windows/mirrorwire.exe --version
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          path: dist/MirrorWire-windows.zip
+          archive: false
+          if-no-files-found: error
+
   release:
     name: GitHub Release
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [macos-universal, appimage, flatpak, android]
+    needs: [macos-universal, appimage, flatpak, android, windows]
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -275,5 +319,5 @@ jobs:
         run: |
           ls -la artifacts
           gh release create "${GITHUB_REF_NAME}" \
-            artifacts/*.dmg artifacts/*.AppImage artifacts/*.flatpak artifacts/*.apk \
+            artifacts/*.dmg artifacts/*.AppImage artifacts/*.flatpak artifacts/*.apk artifacts/*.zip \
             --repo "${GITHUB_REPOSITORY}" --title "MirrorWire ${GITHUB_REF_NAME}" --generate-notes

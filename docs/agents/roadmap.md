@@ -307,8 +307,9 @@ target), **planned**, **idea**. Update this file when an item moves.
 7. **Windows build (owner request 2026-11-17, D16).** Step 1: CI job `Check (Windows)` on
    `windows-latest` (MSVC) builds, clippy-checks and tests the workspace with the viewer
    (`--no-default-features --features gui`; no portal, no PipeWire), FFmpeg from a shared LGPL
-   build (BtbN) via `FFMPEG_DIR`. Not yet run on a real Windows machine. Step 2: package the
-   viewer (zip with the FFmpeg DLLs, licence notes). Step 3 (later, separate): presenter
+   build (BtbN) via `FFMPEG_DIR`. Not yet run on a real Windows machine. Step 2 (**built 2026-11-18**, `Windows viewer` job in build.yml: zip with mirrorwire.exe, LGPL
+   FFmpeg DLLs, licence files and a README; `--version` smoke test only, never run on a real
+   Windows machine; an FFmpeg-free zip is a later option, decode speed unchecked). Step 3 (later, separate): presenter
    capture via Windows Graphics Capture / DXGI, no admin prompts; encoder via FFmpeg
    (h264_mf/NVENC/QSV/AMF or x264 is not available in LGPL builds, so check). Firewall on
    Windows: `net/firewall.rs` is a no-op there; a message must tell the user to allow the
