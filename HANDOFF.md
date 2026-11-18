@@ -30,4 +30,4 @@ cargo xtask ci; cargo ndk -t arm64-v8a --platform 26 clippy --release --locked -
 see `git log -1`
 
 ## Next step
-Remaining mirroring items from the 11:24 list: roadmap 2 (GUI connection diagnostics per step), Extend sizing (KDE path), desktop camera QR. Input features beyond the presenter remote are not yet wanted.
+Roadmap 2 turned out already done (marked in roadmap.md). Remaining: Extend sizing (KDE path; likely NEED_MANAGER: KWin's `zkde_screencast stream_virtual_output` is reserved to the portal backend and `org.kde.KWin` D-Bus would need a new Flatpak `--talk-name`, forbidden by rule 1.2), desktop camera QR. Input features beyond the presenter remote are not yet wanted.

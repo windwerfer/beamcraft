@@ -271,7 +271,7 @@ target), **planned**, **idea**. Update this file when an item moves.
 1. **Quality and latency fix (native size + limits done 2026-11-18: default is the capture's native size; `EncoderConfig::resolved_size` makes it even, keeps the aspect when one of --width/--height is given, and scales anything above 4096 px edge / 4096x2304 area (H.264 level 5.1) down, e.g. 5K -> 4096x2304; unit-tested, not run on a 4K/5K display; the GPU scaling part is open):** stream at the screen's native resolution (no fixed
    2000×1000 scaling), higher default bitrate for desktop text, move colour conversion and
    scaling to the GPU (VAAPI `scale_vaapi`/hw upload) so `capture_to_encoded` drops.
-2. **Connection diagnostics in the GUI:** per-step status (resolve, handshake, cert, pairing,
+2. **Connection diagnostics in the GUI (done; verified in code 2026-11-18: `net::diag` ConnectTrace with eight steps resolve → first frame, rendered by `step_row` in the desktop viewer and as ✓/✗ lines with advice on Android, unit-tested in diag.rs; photo-based check on hardware still the owner's):** per-step status (resolve, handshake, cert, pairing,
    stream) with actionable advice, for photo-based debugging.
 3. **FilmCraft encoder comparison:** built (feature `filmcraft`, `--encoder filmcraft`, GUI
    selector; see decisions.md log and testing.md §3.1). Still open: the owner's side-by-side on
