@@ -162,11 +162,17 @@ impl MirrorApp {
                                 ui.weak(note);
                             }
                             if cap.prefs.mode == mirrorwire_media::source::CaptureMode::Extend {
-                                if let Some(d) = &cap.viewer_display {
-                                    ui.weak(format!(
-                                        "Extend: the viewer's display is {}x{}. The virtual monitor keeps the desktop's default size; set {}x{} for it in System Settings → Display.",
-                                        d.width, d.height, d.width, d.height
-                                    ));
+                                let viewer = cap.viewer_display.map(|d| (d.width, d.height));
+                                match cap.prefs.extend_size.resolve(viewer) {
+                                    Some((w, h)) => {
+                                        ui.weak(format!(
+                                            "Extend: target size {w}x{h}{}. The virtual monitor keeps the desktop's default size; set {w}x{h} for it in System Settings → Display.",
+                                            if cap.prefs.extend_size == ExtendSize::Auto { " (the viewer's display)" } else { "" }
+                                        ));
+                                    }
+                                    None => {
+                                        ui.weak("Extend: waiting for a viewer to learn its display size, or pick a size above.");
+                                    }
                                 }
                             }
                             ui.weak(format!(
@@ -278,6 +284,25 @@ pub(super) fn quality_controls(ui: &mut egui::Ui, app: &mut MirrorApp, live: &En
                     ui.selectable_value(&mut app.capture.mode, m, m.as_str());
                 }
             });
+        if app.capture.mode == mirrorwire_media::source::CaptureMode::Extend {
+            ui.label("Size");
+            egui::ComboBox::from_id_salt("extend-size")
+                .selected_text(app.capture.extend_size.label())
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(
+                        &mut app.capture.extend_size,
+                        ExtendSize::Auto,
+                        ExtendSize::Auto.label(),
+                    );
+                    for (w, h) in EXTEND_SIZES {
+                        ui.selectable_value(
+                            &mut app.capture.extend_size,
+                            ExtendSize::Fixed(w, h),
+                            format!("{w}x{h}"),
+                        );
+                    }
+                });
+        }
         ui.label("Cursor");
         egui::ComboBox::from_id_salt("cursor")
             .selected_text(app.capture.cursor.as_str())

@@ -1,5 +1,7 @@
 use crate::applog::LogStore;
-use crate::capture_prefs::{CapturePrefs, CursorPref, FpsPref, FEC_CHOICES};
+use crate::capture_prefs::{
+    CapturePrefs, CursorPref, ExtendSize, FpsPref, EXTEND_SIZES, FEC_CHOICES,
+};
 use crate::presenter::{self, PresentPhase, PresenterHandle};
 use crate::sync::LockExt;
 use crate::viewer::{self, viewer_ui, Picture, ViewerHandle, ViewerOptions, ViewerUi};

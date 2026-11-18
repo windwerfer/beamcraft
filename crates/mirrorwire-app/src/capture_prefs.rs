@@ -125,6 +125,46 @@ pub const FEC_CHOICES: [FecMode; 6] = [
     FecMode::Fixed(50),
 ];
 
+/// Size wanted for the Extend virtual monitor. `Auto` follows the viewer's
+/// display (from hello); not saved, a session choice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ExtendSize {
+    #[default]
+    Auto,
+    Fixed(u32, u32),
+}
+
+/// Common sizes offered next to "Auto".
+#[cfg_attr(not(feature = "gui"), allow(dead_code))]
+pub const EXTEND_SIZES: [(u32, u32); 8] = [
+    (1280, 800),
+    (1920, 1080),
+    (1920, 1200),
+    (2000, 1200),
+    (2048, 1536),
+    (2560, 1440),
+    (2560, 1600),
+    (2800, 1752),
+];
+
+impl ExtendSize {
+    /// The size to aim for: the fixed choice, or the viewer's display for `Auto`.
+    pub fn resolve(self, viewer: Option<(u32, u32)>) -> Option<(u32, u32)> {
+        match self {
+            ExtendSize::Auto => viewer,
+            ExtendSize::Fixed(w, h) => Some((w, h)),
+        }
+    }
+
+    #[cfg_attr(not(feature = "gui"), allow(dead_code))]
+    pub fn label(self) -> String {
+        match self {
+            ExtendSize::Auto => "Auto (viewer's display)".into(),
+            ExtendSize::Fixed(w, h) => format!("{w}x{h}"),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CapturePrefs {
     /// Mirror an existing screen or capture a virtual monitor (re-opens the portal).
@@ -136,6 +176,8 @@ pub struct CapturePrefs {
     /// Adaptive bitrate: the bitrate setting is the ceiling and the link
     /// feedback sets the budget (applies live).
     pub adaptive: bool,
+    /// Size aimed for in Extend mode (hint only; see decisions.md).
+    pub extend_size: ExtendSize,
 }
 
 impl Default for CapturePrefs {
@@ -146,6 +188,7 @@ impl Default for CapturePrefs {
             fps: FpsPref::Fixed(60),
             fec: FecMode::Auto,
             adaptive: true,
+            extend_size: ExtendSize::Auto,
         }
     }
 }
@@ -206,6 +249,7 @@ pub fn resolve_with(
         mode: d.mode,
         fec: d.fec,
         adaptive: d.adaptive,
+        extend_size: d.extend_size,
     }
 }
 
@@ -278,6 +322,20 @@ pub fn resolve(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extend_size_resolves_auto_to_the_viewer() {
+        assert_eq!(ExtendSize::Auto.resolve(None), None);
+        assert_eq!(
+            ExtendSize::Auto.resolve(Some((2000, 1200))),
+            Some((2000, 1200))
+        );
+        assert_eq!(
+            ExtendSize::Fixed(1920, 1080).resolve(Some((2000, 1200))),
+            Some((1920, 1080))
+        );
+        assert_eq!(ExtendSize::Fixed(1280, 800).label(), "1280x800");
+    }
 
     #[test]
     fn mode_precedence() {
@@ -363,6 +421,7 @@ mod tests {
                 fps: FpsPref::Fixed(30),
                 fec: FecMode::Auto,
                 adaptive: true,
+                extend_size: ExtendSize::Auto,
             }
         );
         let env = resolve_with(
@@ -381,6 +440,7 @@ mod tests {
                 fps: FpsPref::Max,
                 fec: FecMode::Auto,
                 adaptive: true,
+                extend_size: ExtendSize::Auto,
             }
         );
         let cli = resolve_with(
@@ -409,6 +469,7 @@ mod tests {
                 fps: FpsPref::Fixed(60),
                 fec: FecMode::Auto,
                 adaptive: true,
+                extend_size: ExtendSize::Auto,
             }
         );
     }
