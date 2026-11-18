@@ -13,15 +13,18 @@
 //! (changed) bitmap go to a [`CursorSink`], independent of video frames. When
 //! the portal does not offer metadata cursors, it falls back to embedded.
 
+use super::remote::{inject, RemoteStatusSink};
 use super::{CaptureMode, CursorCapture, CursorSink, FrameSource};
 use crate::frame::{
     DmaBufFrame, PixelFormat, RawFrame, DRM_FORMAT_MOD_INVALID, DRM_FORMAT_MOD_LINEAR,
 };
 use anyhow::{anyhow, bail, Context, Result};
+use ashpd::desktop::remote_desktop::{DeviceType, RemoteDesktop, SelectDevicesOptions};
 use ashpd::desktop::screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType};
-use ashpd::desktop::PersistMode;
+use ashpd::desktop::{PersistMode, Session};
 use crossbeam_channel::{bounded, Receiver, Sender, TrySendError};
 use mirrorwire_proto::clock::now_us;
+use mirrorwire_proto::control::RemoteInput;
 use mirrorwire_proto::cursor::{
     CursorEvent, CursorImage, PointerTool, PointerUpdate, MAX_CURSOR_SIDE,
 };
@@ -46,6 +49,38 @@ pub struct PortalOptions {
     /// Offer DMA-BUF (zero-copy) before shared memory. Only useful when the
     /// encoder can import DMA-BUFs (VAAPI); x264 needs shared memory.
     pub dmabuf: bool,
+    /// Share one RemoteDesktop session between capture and remote input (keys, pen/touch), so
+    /// the pointer also maps onto Extend's virtual monitor. If the combined session is
+    /// unavailable or denied, capture falls back to a plain ScreenCast session and the input
+    /// sender stays `None` (the caller then starts the separate injector in `remote.rs`).
+    pub input: Option<InputOptions>,
+}
+
+#[derive(Clone)]
+pub struct InputOptions {
+    /// Restore token of the combined session (separate from the capture-only token: the
+    /// portal ties a token to the device set it was granted for).
+    pub restore_token_path: PathBuf,
+    /// One line per state change for the presenter window (AGENTS.md §1.8).
+    pub status: RemoteStatusSink,
+}
+
+/// File name of the combined capture + input restore token for a mode.
+pub fn input_token_file(mode: CaptureMode) -> &'static str {
+    match mode {
+        CaptureMode::Mirror => "portal_restore_token_input",
+        CaptureMode::Extend => "portal_restore_token_extend_input",
+    }
+}
+
+/// The session the capture runs on; closed when the source is dropped.
+enum Held {
+    Cast(Screencast, Session<Screencast>),
+    Combined(
+        RemoteDesktop,
+        Session<RemoteDesktop>,
+        Option<(u32, (i32, i32))>,
+    ),
 }
 
 /// Modifiers we offer for DMA-BUF. Only single-plane layouts: VAAPI's
@@ -80,6 +115,10 @@ struct Negotiated {
     size: Option<(i32, i32)>,
     cursor: CursorCapture,
     cursor_note: Option<String>,
+    /// The session also carries remote input (keys, pointer).
+    combined: bool,
+    /// Why the combined session was not used, if input was asked for and it failed.
+    input_fallback: Option<String>,
 }
 
 pub struct PortalSource {
@@ -93,6 +132,8 @@ pub struct PortalSource {
     shared: Arc<Shared>,
     cursor: CursorCapture,
     cursor_note: Option<String>,
+    input: Option<tokio::sync::mpsc::Sender<RemoteInput>>,
+    input_note: Option<String>,
 }
 
 impl PortalSource {
@@ -100,6 +141,8 @@ impl PortalSource {
         let (negotiated_tx, negotiated_rx) = bounded::<Result<Negotiated>>(1);
         let (stop_portal, stop_portal_rx) = tokio::sync::oneshot::channel::<()>();
         let portal_opts = options.clone();
+        let (input_tx, mut input_rx) = tokio::sync::mpsc::channel::<RemoteInput>(64);
+        let input_status = options.input.as_ref().map(|i| i.status.clone());
         let portal_thread = std::thread::Builder::new()
             .name("portal".into())
             .spawn(move || {
@@ -115,11 +158,33 @@ impl PortalSource {
                 };
                 rt.block_on(async move {
                     match start_session(&portal_opts).await {
-                        Ok((proxy, session, negotiated)) => {
+                        Ok((held, negotiated)) => {
                             let _ = negotiated_tx.send(Ok(negotiated));
-                            let _ = stop_portal_rx.await;
-                            let _ = session.close().await;
-                            drop(proxy);
+                            let mut stop_portal_rx = stop_portal_rx;
+                            loop {
+                                tokio::select! {
+                                    _ = &mut stop_portal_rx => break,
+                                    Some(input) = input_rx.recv() => {
+                                        if let Held::Combined(proxy, session, stream) = &held {
+                                            if let Err(e) = inject(proxy, session, *stream, input).await {
+                                                tracing::warn!("remote input failed: {e:#}");
+                                                if let Some(st) = &input_status {
+                                                    st(format!("presenter remote: input failed ({e:#})"));
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            match held {
+                                Held::Cast(proxy, session) => {
+                                    let _ = session.close().await;
+                                    drop(proxy);
+                                }
+                                Held::Combined(_, session, _) => {
+                                    let _ = session.close().await;
+                                }
+                            }
                         }
                         Err(e) => {
                             let _ = negotiated_tx.send(Err(e));
@@ -138,6 +203,15 @@ impl PortalSource {
             negotiated.cursor.as_str()
         );
         let (cursor, cursor_note) = (negotiated.cursor, negotiated.cursor_note.clone());
+        let combined = negotiated.combined;
+        let input_note = if combined {
+            Some(
+                "presenter remote: ready (keys and pen/touch pointer, shared with the capture session)"
+                    .to_owned(),
+            )
+        } else {
+            negotiated.input_fallback.clone()
+        };
         let sink = if cursor == CursorCapture::Metadata {
             options.cursor_sink.clone()
         } else {
@@ -176,6 +250,8 @@ impl PortalSource {
             shared,
             cursor,
             cursor_note,
+            input: combined.then_some(input_tx),
+            input_note,
         })
     }
 }
@@ -247,6 +323,14 @@ impl FrameSource for PortalSource {
         self.cursor_note.clone()
     }
 
+    fn remote_input(&self) -> Option<tokio::sync::mpsc::Sender<RemoteInput>> {
+        self.input.clone()
+    }
+
+    fn input_note(&self) -> Option<String> {
+        self.input_note.clone()
+    }
+
     fn negotiated_fps(&self) -> Option<u32> {
         match self.shared.max_fps.load(Ordering::Acquire) {
             0 => None,
@@ -267,19 +351,15 @@ impl Drop for PortalSource {
     }
 }
 
-async fn start_session(
-    opts: &PortalOptions,
-) -> Result<(Screencast, ashpd::desktop::Session<Screencast>, Negotiated)> {
-    let proxy = Screencast::new()
-        .await
-        .context("connecting to ScreenCast portal")?;
-    let session = proxy.create_session(Default::default()).await?;
-    let restore_token = tokio::fs::read_to_string(&opts.restore_token_path)
-        .await
-        .ok()
-        .map(|t| t.trim().to_owned())
-        .filter(|t| !t.is_empty());
+/// What to ask the ScreenCast side for (shared by the plain and the combined session).
+struct CastPlan {
+    sources: SourceType,
+    cursor_mode: CursorMode,
+    cursor_capture: CursorCapture,
+    notes: Option<String>,
+}
 
+async fn plan_cast(proxy: &Screencast, opts: &PortalOptions) -> CastPlan {
     let available_sources = proxy.available_source_types().await.unwrap_or_else(|e| {
         tracing::warn!("portal AvailableSourceTypes unreadable ({e}); assuming monitors only");
         SourceType::MONITOR
@@ -303,21 +383,79 @@ async fn start_session(
             .map(|n| format!(" ({n})"))
             .unwrap_or_default()
     );
-    let cursor = match cursor_capture {
+    let cursor_mode = match cursor_capture {
         CursorCapture::Hidden => CursorMode::HIDDEN,
         CursorCapture::Embedded => CursorMode::EMBEDDED,
         CursorCapture::Metadata => CursorMode::METADATA,
     };
+    CastPlan {
+        sources,
+        cursor_mode,
+        cursor_capture,
+        notes: join_notes(mode_note, cursor_note),
+    }
+}
+
+fn select_options(plan: &CastPlan, token: Option<&str>) -> SelectSourcesOptions {
+    SelectSourcesOptions::default()
+        .set_cursor_mode(plan.cursor_mode)
+        .set_sources(plan.sources)
+        .set_multiple(false)
+        .set_persist_mode(PersistMode::ExplicitlyRevoked)
+        .set_restore_token(token)
+}
+
+async fn read_token(path: &std::path::Path) -> Option<String> {
+    tokio::fs::read_to_string(path)
+        .await
+        .ok()
+        .map(|t| t.trim().to_owned())
+        .filter(|t| !t.is_empty())
+}
+
+async fn write_token(path: &std::path::Path, token: &str) -> Result<()> {
+    if let Some(dir) = path.parent() {
+        tokio::fs::create_dir_all(dir).await?;
+    }
+    tokio::fs::write(path, token).await?;
+    Ok(())
+}
+
+async fn start_session(opts: &PortalOptions) -> Result<(Held, Negotiated)> {
+    let proxy = Screencast::new()
+        .await
+        .context("connecting to ScreenCast portal")?;
+    let plan = plan_cast(&proxy, opts).await;
+    let mut input_fallback = None;
+    if let Some(input) = &opts.input {
+        match start_combined(&proxy, &plan, input).await {
+            Ok((remote, session, stream_info, fd)) => {
+                let stream = Some((stream_info.0, stream_info.1.unwrap_or((0, 0))));
+                let negotiated = Negotiated {
+                    node_id: stream_info.0,
+                    size: stream_info.1,
+                    fd,
+                    cursor: plan.cursor_capture,
+                    cursor_note: plan.notes,
+                    combined: true,
+                    input_fallback: None,
+                };
+                return Ok((Held::Combined(remote, session, stream), negotiated));
+            }
+            Err(e) => {
+                // Capture must never regress: retry on a plain ScreenCast session.
+                tracing::warn!("combined capture + input session unavailable: {e:#}");
+                input_fallback = Some(format!(
+                    "presenter remote: the capture session could not carry input ({e:#}); \
+                     using a separate session (pen/touch then works in Mirror mode only)"
+                ));
+            }
+        }
+    }
+    let session = proxy.create_session(Default::default()).await?;
+    let restore_token = read_token(&opts.restore_token_path).await;
     proxy
-        .select_sources(
-            &session,
-            SelectSourcesOptions::default()
-                .set_cursor_mode(cursor)
-                .set_sources(sources)
-                .set_multiple(false)
-                .set_persist_mode(PersistMode::ExplicitlyRevoked)
-                .set_restore_token(restore_token.as_deref()),
-        )
+        .select_sources(&session, select_options(&plan, restore_token.as_deref()))
         .await?
         .response()?;
 
@@ -328,10 +466,7 @@ async fn start_session(
         .context("screen share was cancelled or denied")?;
 
     if let Some(token) = streams.restore_token() {
-        if let Some(dir) = opts.restore_token_path.parent() {
-            tokio::fs::create_dir_all(dir).await?;
-        }
-        tokio::fs::write(&opts.restore_token_path, token).await?;
+        write_token(&opts.restore_token_path, token).await?;
     }
 
     let stream = streams
@@ -344,10 +479,78 @@ async fn start_session(
         fd: proxy
             .open_pipe_wire_remote(&session, Default::default())
             .await?,
-        cursor: cursor_capture,
-        cursor_note: join_notes(mode_note, cursor_note),
+        cursor: plan.cursor_capture,
+        cursor_note: plan.notes,
+        combined: false,
+        input_fallback,
     };
-    Ok((proxy, session, negotiated))
+    Ok((Held::Cast(proxy, session), negotiated))
+}
+
+type CombinedSession = (
+    RemoteDesktop,
+    Session<RemoteDesktop>,
+    (u32, Option<(i32, i32)>),
+    OwnedFd,
+);
+
+/// One RemoteDesktop session that also selects the ScreenCast sources, so the stream we
+/// capture is the stream pointer motion is addressed to (Mirror and Extend alike).
+async fn start_combined(
+    cast: &Screencast,
+    plan: &CastPlan,
+    input: &InputOptions,
+) -> Result<CombinedSession> {
+    let remote = RemoteDesktop::new()
+        .await
+        .context("the desktop has no RemoteDesktop portal")?;
+    let available = remote.available_device_types().await.unwrap_or_default();
+    if !available.contains(DeviceType::KEYBOARD | DeviceType::POINTER) {
+        bail!("the RemoteDesktop portal offers no keyboard and pointer ({available:?})");
+    }
+    let session = remote.create_session(Default::default()).await?;
+    let token = read_token(&input.restore_token_path).await;
+    remote
+        .select_devices(
+            &session,
+            SelectDevicesOptions::default()
+                .set_devices(DeviceType::KEYBOARD | DeviceType::POINTER)
+                .set_persist_mode(PersistMode::ExplicitlyRevoked)
+                .set_restore_token(token.as_deref()),
+        )
+        .await?
+        .response()?;
+    cast.select_sources(&session, select_options(plan, token.as_deref()))
+        .await?
+        .response()?;
+    let started = remote
+        .start(&session, None, Default::default())
+        .await?
+        .response()
+        .context("screen share and remote access were cancelled or denied")?;
+    if !started
+        .devices()
+        .contains(DeviceType::KEYBOARD | DeviceType::POINTER)
+    {
+        let _ = session.close().await;
+        bail!("keyboard and pointer access were not granted");
+    }
+    let Some(stream) = started.streams().first() else {
+        let _ = session.close().await;
+        bail!("the portal returned no streams");
+    };
+    let info = (stream.pipe_wire_node_id(), stream.size());
+    if info.1.is_none() {
+        let _ = session.close().await;
+        bail!("the portal did not tell the stream size");
+    }
+    if let Some(t) = started.restore_token() {
+        write_token(&input.restore_token_path, t).await?;
+    }
+    let fd = cast
+        .open_pipe_wire_remote(&session, Default::default())
+        .await?;
+    Ok((remote, session, info, fd))
 }
 
 /// Choose what to ask the portal for. Metadata falls back to embedded when
@@ -1096,6 +1299,17 @@ mod tests {
         let (t, note) = pick_source_type(CaptureMode::Extend, SourceType::MONITOR);
         assert_eq!(t, SourceType::MONITOR);
         assert!(note.unwrap().contains("virtual monitor"));
+    }
+
+    #[test]
+    fn input_tokens_are_per_mode_and_distinct_from_capture_tokens() {
+        assert_ne!(
+            input_token_file(CaptureMode::Mirror),
+            input_token_file(CaptureMode::Extend)
+        );
+        for m in CaptureMode::all() {
+            assert_ne!(input_token_file(m), m.restore_token_file());
+        }
     }
 
     #[test]

@@ -180,7 +180,7 @@ impl VideoSink for QuicSink {
 fn open_source(
     args: &PresentArgs,
     config_dir: &Path,
-    ctl: &Mutex<CaptureCtl>,
+    ctl: &Arc<Mutex<CaptureCtl>>,
     sink: &CursorSink,
 ) -> Result<Box<dyn FrameSource>> {
     let (cursor, fps, mode) = {
@@ -201,7 +201,12 @@ fn open_source(
                 Box::new(pattern)
             }
         }
-        SourceKind::Portal => open_portal(args, config_dir, mode, cursor, fps, sink)?,
+        SourceKind::Portal => {
+            let ctl_status = ctl.clone();
+            let status: Arc<dyn Fn(String) + Send + Sync> =
+                Arc::new(move |line| ctl_status.lock_ok().remote_note = Some(line));
+            open_portal(args, config_dir, mode, cursor, fps, sink, &status)?
+        }
     };
     let mut c = ctl.lock_ok();
     c.asked_cursor = cursor;
@@ -267,6 +272,7 @@ fn open_portal(
     cursor: CursorCapture,
     fps: u32,
     sink: &CursorSink,
+    remote_status: &Arc<dyn Fn(String) + Send + Sync>,
 ) -> Result<Box<dyn FrameSource>> {
     use mirrorwire_media::source::portal::{PortalOptions, PortalSource};
     Ok(Box::new(PortalSource::open(PortalOptions {
@@ -275,6 +281,11 @@ fn open_portal(
         cursor_sink: Some(sink.clone()),
         mode,
         fps,
+        input: Some(mirrorwire_media::source::portal::InputOptions {
+            restore_token_path: config_dir
+                .join(mirrorwire_media::source::portal::input_token_file(mode)),
+            status: remote_status.clone(),
+        }),
         // Only VAAPI can import DMA-BUFs. With `auto` the encoder may still
         // turn out to be x264; the pipeline then asks the source to switch
         // to shared memory.
@@ -296,6 +307,7 @@ fn open_portal(
     _cursor: CursorCapture,
     _fps: u32,
     _sink: &CursorSink,
+    _remote_status: &Arc<dyn Fn(String) + Send + Sync>,
 ) -> Result<Box<dyn FrameSource>> {
     bail!("portal capture is only available on Linux builds with the `portal` feature; use --source test")
 }
@@ -355,6 +367,53 @@ fn start_remote(
     None
 }
 
+/// Routes remote input (keys, pen/touch) from the viewer to the current capture session when
+/// that session carries input (combined portal session), otherwise to the separate injector.
+/// The network side holds one stable sender; the capture source can be reopened underneath.
+struct RemoteRoute {
+    tx: mpsc::Sender<mirrorwire_proto::control::RemoteInput>,
+    separate: Option<mpsc::Sender<mirrorwire_proto::control::RemoteInput>>,
+    target: Arc<Mutex<Option<mpsc::Sender<mirrorwire_proto::control::RemoteInput>>>>,
+}
+
+impl RemoteRoute {
+    fn start(
+        separate: Option<mpsc::Sender<mirrorwire_proto::control::RemoteInput>>,
+        runtime: &tokio::runtime::Handle,
+    ) -> Self {
+        let (tx, mut rx) = mpsc::channel(64);
+        let target: Arc<Mutex<Option<mpsc::Sender<_>>>> = Arc::new(Mutex::new(separate.clone()));
+        let t = target.clone();
+        runtime.spawn(async move {
+            while let Some(input) = rx.recv().await {
+                let dest = t.lock_ok().clone();
+                if let Some(dest) = dest {
+                    // Full channel: drop (moves are replaced by newer ones).
+                    let _ = dest.try_send(input);
+                }
+            }
+        });
+        Self {
+            tx,
+            separate,
+            target,
+        }
+    }
+
+    fn sender(&self) -> mpsc::Sender<mirrorwire_proto::control::RemoteInput> {
+        self.tx.clone()
+    }
+
+    /// Point the route at a freshly opened source.
+    fn set_source(&self, source: &dyn FrameSource, ctl: &Mutex<CaptureCtl>) {
+        let own = source.remote_input();
+        *self.target.lock_ok() = own.or_else(|| self.separate.clone());
+        if let Some(note) = source.input_note() {
+            ctl.lock_ok().remote_note = Some(note);
+        }
+    }
+}
+
 /// Shared capture/encode/announce loop used by the CLI and the GUI.
 #[allow(clippy::too_many_arguments)]
 fn present_session(
@@ -395,7 +454,9 @@ fn present_session(
         Some(random_pairing_code()?)
     };
     let keyframe_controls = controls.clone();
-    let remote_keys = start_remote(&config_dir, &ctl);
+    let route = RemoteRoute::start(start_remote(&config_dir, &ctl), runtime);
+    route.set_source(source.as_ref(), &ctl);
+    let remote_keys = Some(route.sender());
     let presenter = Presenter::start(
         &identity,
         PresenterConfig {
@@ -538,6 +599,7 @@ fn present_session(
                     Ok(None) => break Ok(()),
                     Err(e) => break Err(e),
                 }
+                route.set_source(source.as_ref(), &ctl);
                 let fps = apply_negotiated_fps(source.as_ref(), &ctl, &settings);
                 let cursor = ctl.lock_ok().active_cursor;
                 presenter.update_stream_info(|info| {

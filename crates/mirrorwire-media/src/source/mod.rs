@@ -120,6 +120,20 @@ pub trait FrameSource: Send {
         None
     }
 
+    /// Where remote input (keys, pen/touch) goes when the capture session itself carries it
+    /// (the portal's combined RemoteDesktop + ScreenCast session). `None`: the caller starts
+    /// a separate injector.
+    fn remote_input(
+        &self,
+    ) -> Option<tokio::sync::mpsc::Sender<mirrorwire_proto::control::RemoteInput>> {
+        None
+    }
+
+    /// One line about the input side of the session, for the presenter window.
+    fn input_note(&self) -> Option<String> {
+        None
+    }
+
     /// Maximum frame rate agreed with the compositor, once known.
     fn negotiated_fps(&self) -> Option<u32> {
         None

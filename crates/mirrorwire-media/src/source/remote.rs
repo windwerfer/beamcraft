@@ -22,10 +22,16 @@ const BTN_LEFT: i32 = 0x110;
 /// presenter window, AGENTS.md §1.8).
 pub type RemoteStatusSink = Arc<dyn Fn(String) + Send + Sync>;
 
-/// Whether the pen/finger can be mapped onto the picture right now: true in Mirror mode (the
-/// monitor stream is the picture). Extend's virtual monitor is a different stream than the
-/// one a second portal session would offer, so there the pointer is refused with a message.
+/// Whether the pen/finger can be mapped onto the picture right now. This separate injector
+/// (the fallback when capture and input cannot share one session, see `portal.rs`) offers a
+/// monitor stream of its own, so it maps only in Mirror mode; Extend's virtual monitor is a
+/// different stream there and the pointer is refused with a message.
 pub type PointerMapped = Arc<dyn Fn() -> bool + Send + Sync>;
+
+/// Mirror maps onto the separate injector's monitor stream; Extend does not.
+pub fn separate_session_maps_pointer(mode: super::CaptureMode) -> bool {
+    mode == super::CaptureMode::Mirror
+}
 
 /// Start the injector task on the current tokio runtime. Send taps into the returned sender.
 pub fn spawn_remote_injector(
@@ -44,7 +50,7 @@ pub fn spawn_remote_injector(
             if wants_pointer && !pointer_mapped() {
                 if !pointer_refused {
                     status(
-                        "pen/touch input works in Mirror mode only (Extend is not mapped)".into(),
+                        "pen/touch input works in Mirror mode only (the capture session could not be shared with input)".into(),
                     );
                     pointer_refused = true;
                 }
@@ -92,7 +98,7 @@ pub fn spawn_remote_injector(
             let Some(remote) = &session else {
                 continue;
             };
-            if let Err(e) = inject(remote, input).await {
+            if let Err(e) = inject(&remote.proxy, &remote.session, remote.stream, input).await {
                 tracing::warn!("presenter remote input failed: {e:#}");
                 status(format!(
                     "presenter remote: input failed ({e:#}); reconnecting"
@@ -197,28 +203,34 @@ async fn open_session(token_path: &PathBuf, pointer: bool) -> Result<Remote> {
     })
 }
 
-async fn inject(remote: &Remote, input: RemoteInput) -> Result<()> {
+/// Send one input through an open RemoteDesktop session. `stream` is the (node id, size) of
+/// the screen-cast stream pointer motion is addressed to. Shared with the combined
+/// capture + input session in `portal.rs`.
+pub(super) async fn inject(
+    proxy: &RemoteDesktop,
+    session: &Session<RemoteDesktop>,
+    stream: Option<(u32, (i32, i32))>,
+    input: RemoteInput,
+) -> Result<()> {
     match input {
-        RemoteInput::Key(key) => tap(&remote.proxy, &remote.session, key).await,
+        RemoteInput::Key(key) => tap(proxy, session, key).await,
         RemoteInput::Pointer { phase, x, y } => {
-            let Some((node, size)) = remote.stream else {
+            let Some((node, size)) = stream else {
                 return Ok(());
             };
             let Some((px, py)) = pointer_to_stream(x, y, size) else {
                 return Ok(());
             };
-            remote
-                .proxy
-                .notify_pointer_motion_absolute(&remote.session, node, px, py, Default::default())
+            proxy
+                .notify_pointer_motion_absolute(session, node, px, py, Default::default())
                 .await?;
             let state = match phase {
                 PointerPhase::Move => return Ok(()),
                 PointerPhase::Down => KeyState::Pressed,
                 PointerPhase::Up => KeyState::Released,
             };
-            remote
-                .proxy
-                .notify_pointer_button(&remote.session, BTN_LEFT, state, Default::default())
+            proxy
+                .notify_pointer_button(session, BTN_LEFT, state, Default::default())
                 .await?;
             Ok(())
         }
@@ -238,4 +250,28 @@ async fn tap(
         .notify_keyboard_keysym(session, sym, KeyState::Released, Default::default())
         .await?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::source::CaptureMode;
+
+    #[test]
+    fn separate_session_maps_mirror_only() {
+        assert!(separate_session_maps_pointer(CaptureMode::Mirror));
+        assert!(!separate_session_maps_pointer(CaptureMode::Extend));
+    }
+
+    /// Extend: the pointer lands on the virtual monitor's own size, whatever size the
+    /// encoder was capped to (the viewer sends a position within the whole picture).
+    #[test]
+    fn extend_pointer_maps_to_stream_size_not_encode_size() {
+        let virtual_monitor = (2560, 1600);
+        let encoded_cap = (1280, 800); // EncoderConfig::max_size scaled the picture down
+        let (x, y) = pointer_to_stream(65535, 32768, virtual_monitor).unwrap();
+        assert_eq!(x, 2559.0);
+        assert!((y - 799.5).abs() < 0.5);
+        assert!(x > f64::from(encoded_cap.0));
+    }
 }
