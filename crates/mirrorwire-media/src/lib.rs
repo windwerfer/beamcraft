@@ -12,14 +12,19 @@ pub mod film_decode;
 #[cfg(feature = "filmcraft")]
 pub mod filmcraft;
 pub mod frame;
+#[cfg(feature = "ffmpeg")]
 #[allow(unsafe_code)]
 mod hw;
 pub mod pattern;
 pub mod pipeline;
 pub mod source;
 
+/// Initialise FFmpeg (no-op in a build without cargo feature `ffmpeg`).
 pub fn init() -> anyhow::Result<()> {
-    ffmpeg_next::init()?;
-    ffmpeg_next::util::log::set_level(ffmpeg_next::util::log::Level::Error);
+    #[cfg(feature = "ffmpeg")]
+    {
+        ffmpeg_next::init()?;
+        ffmpeg_next::util::log::set_level(ffmpeg_next::util::log::Level::Error);
+    }
     Ok(())
 }

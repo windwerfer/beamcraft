@@ -1,5 +1,9 @@
+#[cfg(feature = "ffmpeg")]
 use crate::hw::{self, HwRef};
-use anyhow::{anyhow, bail, Result};
+#[cfg(feature = "ffmpeg")]
+use anyhow::anyhow;
+use anyhow::{bail, Result};
+#[cfg(feature = "ffmpeg")]
 use ffmpeg_next::{codec, decoder, ffi, format::Pixel, frame, software::scaling, Packet};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -8,8 +12,9 @@ pub enum HwDecode {
     Auto,
 }
 
-/// Low-delay H.264 decoder. Each call takes one complete access unit and returns
+/// Low-delay FFmpeg H.264 decoder. Each call takes one complete access unit and returns
 /// the decoded picture immediately (no frame reordering or frame threading).
+#[cfg(feature = "ffmpeg")]
 pub struct Decoder {
     inner: decoder::Video,
     _hw: Option<HwRef>,
@@ -19,6 +24,7 @@ pub struct Decoder {
     name: String,
 }
 
+#[cfg(feature = "ffmpeg")]
 // SAFETY: the FFmpeg codec context and frames inside `Decoder` are owned by it alone and only
 // used through `&mut self`; FFmpeg contexts have no thread affinity, they only must not be
 // used from two threads at once, and `Decoder` is not `Sync`.
@@ -36,7 +42,7 @@ pub enum SoftwareDecoder {
 impl SoftwareDecoder {
     /// FilmCraft everywhere except macOS, which keeps FFmpeg for now (decision log 2026-11-15).
     pub fn platform_default() -> Self {
-        if cfg!(target_os = "macos") {
+        if cfg!(all(target_os = "macos", feature = "ffmpeg")) {
             Self::Ffmpeg
         } else {
             Self::FilmCraft
@@ -44,8 +50,8 @@ impl SoftwareDecoder {
     }
 }
 
-/// An H.264 decoder that hands out pictures as [`YuvImage`]: the FFmpeg [`Decoder`]
-/// (hardware or software) or FilmCraft's [`FilmDecoder`](crate::film_decode::FilmDecoder).
+/// An H.264 decoder that hands out pictures as [`YuvImage`]: the FFmpeg `Decoder`
+/// (feature `ffmpeg`; hardware or software) or FilmCraft's [`FilmDecoder`](crate::film_decode::FilmDecoder).
 pub trait VideoDecoder: Send {
     /// Decodes one complete access unit; `None` when no picture came out.
     fn decode_yuv(&mut self, au: &[u8]) -> Result<Option<YuvImage>>;
@@ -54,6 +60,7 @@ pub trait VideoDecoder: Send {
     fn is_hardware(&self) -> bool;
 }
 
+#[cfg(feature = "ffmpeg")]
 impl VideoDecoder for Decoder {
     fn decode_yuv(&mut self, au: &[u8]) -> Result<Option<YuvImage>> {
         self.decode(au)?.map(YuvImage::from_frame).transpose()
@@ -78,6 +85,7 @@ impl VideoDecoder for crate::film_decode::FilmDecoder {
     }
 }
 
+#[cfg(feature = "ffmpeg")]
 /// The viewer's decoder: hardware first when `hw` is `Auto`, else (or when it is missing)
 /// the chosen software decoder, with the reason in its name.
 pub fn open_decoder(hw: HwDecode, software: SoftwareDecoder) -> Result<Box<dyn VideoDecoder>> {
@@ -105,6 +113,17 @@ pub fn open_decoder(hw: HwDecode, software: SoftwareDecoder) -> Result<Box<dyn V
     open_software(software, "hardware decode is off")
 }
 
+#[cfg(not(feature = "ffmpeg"))]
+/// The viewer's decoder. Without FFmpeg only the pure-Rust software decoder exists.
+pub fn open_decoder(hw: HwDecode, software: SoftwareDecoder) -> Result<Box<dyn VideoDecoder>> {
+    let why = if hw == HwDecode::Auto {
+        "this build has no FFmpeg, so no hardware decode"
+    } else {
+        "hardware decode is off"
+    };
+    open_software(software, why)
+}
+
 /// The software decoder after the hardware one failed while decoding.
 pub fn software_after_hw_failure(software: SoftwareDecoder) -> Result<Box<dyn VideoDecoder>> {
     open_software(software, software_reason())
@@ -113,6 +132,11 @@ pub fn software_after_hw_failure(software: SoftwareDecoder) -> Result<Box<dyn Vi
 fn open_software(software: SoftwareDecoder, why: &str) -> Result<Box<dyn VideoDecoder>> {
     Ok(match software {
         SoftwareDecoder::FilmCraft => Box::new(crate::film_decode::FilmDecoder::new(why)),
+        #[cfg(not(feature = "ffmpeg"))]
+        SoftwareDecoder::Ffmpeg => {
+            bail!("this build has no FFmpeg decoder; use the FilmCraft decoder")
+        }
+        #[cfg(feature = "ffmpeg")]
         SoftwareDecoder::Ffmpeg => {
             let mut d = Decoder::open(None)?;
             d.name = format!("h264 (software: {why})");
@@ -121,6 +145,7 @@ fn open_software(software: SoftwareDecoder, why: &str) -> Result<Box<dyn VideoDe
     })
 }
 
+#[cfg(feature = "ffmpeg")]
 impl Decoder {
     pub fn new(hw: HwDecode) -> Result<Self> {
         match hw {
@@ -258,6 +283,7 @@ impl Decoder {
 }
 
 /// Why hardware decode is not there, in words for the viewer overlay.
+#[cfg_attr(not(feature = "ffmpeg"), allow(dead_code))]
 fn software_reason() -> &'static str {
     if cfg!(target_os = "macos") {
         // Pre-2012 Macs (e.g. the iMac 2011's Radeon HD 6770M, also under
@@ -269,10 +295,12 @@ fn software_reason() -> &'static str {
     }
 }
 
+#[cfg(feature = "ffmpeg")]
 fn is_hw_format(p: Pixel) -> bool {
     matches!(p, Pixel::VAAPI | Pixel::VIDEOTOOLBOX)
 }
 
+#[cfg(feature = "ffmpeg")]
 /// Prefer a VAAPI/VideoToolbox pixel format when the codec offers one, so
 /// attaching `hw_device_ctx` actually uses the hardware decoder. Without this
 /// callback FFmpeg often stays on YUV420P even when a device was set.
@@ -327,6 +355,7 @@ pub struct YuvImage {
 }
 
 impl YuvImage {
+    #[cfg(feature = "ffmpeg")]
     pub fn from_frame(src: &frame::Video) -> Result<Self> {
         let width = src.width();
         let height = src.height();
@@ -360,6 +389,7 @@ impl YuvImage {
     }
 }
 
+#[cfg(feature = "ffmpeg")]
 fn copy_plane(
     src: &frame::Video,
     plane: usize,
@@ -390,6 +420,7 @@ fn copy_plane(
     Ok((out, width))
 }
 
+#[cfg(feature = "ffmpeg")]
 fn open_hw_device() -> Result<(HwRef, &'static str)> {
     if cfg!(target_os = "macos") {
         Ok((
@@ -404,16 +435,19 @@ fn open_hw_device() -> Result<(HwRef, &'static str)> {
     }
 }
 
+#[cfg(feature = "ffmpeg")]
 /// Converts decoded frames to tightly packed RGBA for display.
 pub struct RgbaConverter {
     ctx: Option<(scaling::Context, Pixel, u32, u32)>,
     out: frame::Video,
 }
 
+#[cfg(feature = "ffmpeg")]
 // SAFETY: the swscale context and frame are owned by the converter and used only through
 // `&mut self`; swscale has no thread affinity and the type is not `Sync`.
 unsafe impl Send for RgbaConverter {}
 
+#[cfg(feature = "ffmpeg")]
 impl Default for RgbaConverter {
     fn default() -> Self {
         Self {
@@ -423,6 +457,7 @@ impl Default for RgbaConverter {
     }
 }
 
+#[cfg(feature = "ffmpeg")]
 impl RgbaConverter {
     /// [`RgbaConverter::convert`] for a [`YuvImage`] (copies its planes into an FFmpeg frame).
     pub fn convert_yuv(&mut self, img: &YuvImage, dst: &mut Vec<u8>) -> Result<(u32, u32)> {
@@ -513,6 +548,42 @@ impl RgbaConverter {
     }
 }
 
+#[cfg(not(feature = "ffmpeg"))]
+/// Converts decoded pictures to tightly packed RGBA with the pure-Rust converter.
+#[derive(Default)]
+pub struct RgbaConverter {
+    _private: (),
+}
+
+#[cfg(not(feature = "ffmpeg"))]
+impl RgbaConverter {
+    pub fn convert_yuv(&mut self, img: &YuvImage, dst: &mut Vec<u8>) -> Result<(u32, u32)> {
+        use crate::convert::{yuv_to_rgba, Chroma};
+        let chroma = match img.layout {
+            YuvLayout::Yuv420 => Chroma::Planar {
+                u: &img.u,
+                u_stride: img.u_stride,
+                v: &img.v,
+                v_stride: img.v_stride,
+            },
+            YuvLayout::Nv12 => Chroma::Interleaved {
+                uv: &img.u,
+                uv_stride: img.u_stride,
+            },
+        };
+        yuv_to_rgba(
+            img.width as usize,
+            img.height as usize,
+            &img.y,
+            img.y_stride,
+            &chroma,
+            dst,
+        )?;
+        Ok((img.width, img.height))
+    }
+}
+
+#[cfg(feature = "ffmpeg")]
 /// Returns the luma plane of a decoded frame as (data, stride, width, height).
 pub fn luma(frame: &frame::Video) -> (&[u8], usize, usize, usize) {
     (
@@ -524,6 +595,7 @@ pub fn luma(frame: &frame::Video) -> (&[u8], usize, usize, usize) {
 }
 
 #[cfg(test)]
+#[cfg(feature = "ffmpeg")]
 mod tests {
     use super::*;
     use crate::encode::{Encoder, EncoderBackend, EncoderConfig};

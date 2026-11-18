@@ -1,16 +1,20 @@
 //! Optional pure-Rust H.264 encoder (FilmCraft `filmcraft-h264enc`, feature
 //! `filmcraft`), for comparison with the FFmpeg backends.
 //!
-//! Input is the same CPU I420 picture the x264 path gets (swscale from the
-//! shared-memory capture), so the two software encoders compare like for like.
+//! Input is a CPU I420 picture made by the pure-Rust converter (`convert.rs`) from the
+//! shared-memory capture; the capture size must equal the encoder size (no scaling).
 //! Settings: Constrained Baseline (CAVLC), `speed` preset, no B-frames, no
 //! lookahead/scenecut, one packet out per frame in. FilmCraft has no
 //! "force IDR" call and no intra refresh, so a keyframe request re-creates the
 //! encoder (well under a millisecond; rate-control history restarts).
 
-use crate::encode::{EncoderConfig, RateControl};
+use crate::convert::{packed_to_i420, I420Planes};
+use crate::encode::{path, EncoderConfig, RateControl};
+use crate::frame::{EncodedFrame, RawFrame};
 use anyhow::{bail, Result};
+use bytes::Bytes;
 use filmcraft_h264enc as fc;
+use mirrorwire_proto::clock::now_us;
 
 pub const NAME: &str = "filmcraft-h264enc";
 
@@ -101,7 +105,7 @@ impl FcEncoder {
     /// Encode one I420 (YUV420P) picture. Returns (Annex-B data, keyframe) access units.
     pub fn encode(
         &mut self,
-        pic: &ffmpeg_next::frame::Video,
+        pic: &fc::YuvFrame<'_>,
         pts: i64,
         force_keyframe: bool,
     ) -> Result<Vec<(Vec<u8>, bool)>> {
@@ -109,20 +113,168 @@ impl FcEncoder {
             // No public force-IDR: a fresh encoder starts with an IDR.
             self.enc = fc::Encoder::new(self.cfg.clone())?;
         }
-        let frame = fc::YuvFrame {
-            y: pic.data(0),
-            u: pic.data(1),
-            v: pic.data(2),
-            y_stride: pic.stride(0),
-            uv_stride: pic.stride(1),
-        };
-        let packets = self.enc.encode(&frame, pts)?;
+        let packets = self.enc.encode(pic, pts)?;
         self.frames += 1;
         Ok(packets.into_iter().map(|p| (p.data, p.keyframe)).collect())
     }
 }
 
+/// FilmCraft as an `Encoder` backend: shared-memory frame -> I420 (pure Rust) -> H.264.
+pub struct FilmEncoder {
+    fc: FcEncoder,
+    config: EncoderConfig,
+    y: Vec<u8>,
+    u: Vec<u8>,
+    v: Vec<u8>,
+    start_us: Option<u64>,
+    last_pts: Option<i64>,
+    have_frame: bool,
+    last_convert_us: u64,
+    last_encode_us: u64,
+}
+
+impl FilmEncoder {
+    pub fn new(config: &EncoderConfig) -> Result<Self> {
+        let fc = FcEncoder::new(config)?;
+        tracing::info!("{}", fc.summary);
+        let (w, h) = (config.width as usize, config.height as usize);
+        let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
+        Ok(Self {
+            fc,
+            config: config.clone(),
+            y: vec![0; w * h],
+            u: vec![0; cw * ch],
+            v: vec![0; cw * ch],
+            start_us: None,
+            last_pts: None,
+            have_frame: false,
+            last_convert_us: 0,
+            last_encode_us: 0,
+        })
+    }
+
+    pub fn name(&self) -> &'static str {
+        NAME
+    }
+
+    pub fn conversion_path(&self) -> &'static str {
+        path::SHM_CPU
+    }
+
+    pub fn rc_summary(&self) -> &str {
+        &self.fc.summary
+    }
+
+    pub fn output_size(&self) -> (u32, u32) {
+        (self.config.width, self.config.height)
+    }
+
+    pub fn config(&self) -> &EncoderConfig {
+        &self.config
+    }
+
+    pub fn last_timings_ms(&self) -> (f64, f64) {
+        (
+            self.last_convert_us as f64 / 1000.0,
+            self.last_encode_us as f64 / 1000.0,
+        )
+    }
+
+    pub fn last_breakdown_ms(&self) -> (f64, f64, f64, f64) {
+        (
+            0.0,
+            self.last_convert_us as f64 / 1000.0,
+            0.0,
+            self.last_encode_us as f64 / 1000.0,
+        )
+    }
+
+    pub fn encode(&mut self, raw: &RawFrame, force_keyframe: bool) -> Result<Vec<EncodedFrame>> {
+        if raw.dmabuf.is_some() {
+            bail!("{NAME} cannot take DMA-BUF frames");
+        }
+        let (w, h) = (self.config.width, self.config.height);
+        if (raw.width, raw.height) != (w, h) {
+            bail!(
+                "{NAME} does not scale: capture is {}x{} but the encoder size is {w}x{h} (omit --size)",
+                raw.width,
+                raw.height
+            );
+        }
+        let t0 = now_us();
+        let mut planes = I420Planes {
+            y: &mut self.y,
+            u: &mut self.u,
+            v: &mut self.v,
+            y_stride: w as usize,
+            uv_stride: (w as usize).div_ceil(2),
+        };
+        packed_to_i420(
+            &raw.data,
+            raw.stride,
+            w as usize,
+            h as usize,
+            raw.format,
+            &mut planes,
+        )?;
+        self.last_convert_us = now_us().saturating_sub(t0);
+        self.have_frame = true;
+        self.submit(raw.seq, raw.capture_us, force_keyframe)
+    }
+
+    pub fn encode_repeat(
+        &mut self,
+        seq: u64,
+        capture_us: u64,
+        force_keyframe: bool,
+    ) -> Result<Vec<EncodedFrame>> {
+        if !self.have_frame {
+            return Ok(Vec::new());
+        }
+        self.last_convert_us = 0;
+        self.submit(seq, capture_us, force_keyframe)
+    }
+
+    fn submit(
+        &mut self,
+        seq: u64,
+        capture_us: u64,
+        force_keyframe: bool,
+    ) -> Result<Vec<EncodedFrame>> {
+        let start = *self.start_us.get_or_insert(capture_us);
+        let mut pts = capture_us.saturating_sub(start) as i64;
+        if let Some(last) = self.last_pts {
+            if pts <= last {
+                pts = last + 1;
+            }
+        }
+        self.last_pts = Some(pts);
+        let t0 = now_us();
+        let frame = fc::YuvFrame {
+            y: &self.y,
+            u: &self.u,
+            v: &self.v,
+            y_stride: self.config.width as usize,
+            uv_stride: (self.config.width as usize).div_ceil(2),
+        };
+        let aus = self.fc.encode(&frame, pts, force_keyframe)?;
+        let out = aus
+            .into_iter()
+            .map(|(data, keyframe)| EncodedFrame {
+                seq,
+                keyframe,
+                data: Bytes::from(data),
+                capture_us,
+                encoded_us: now_us(),
+            })
+            .collect();
+        self.last_encode_us = now_us().saturating_sub(t0);
+        Ok(out)
+    }
+}
+
 #[cfg(test)]
+#[cfg(feature = "ffmpeg")]
 mod tests {
     use crate::decode::{luma, Decoder, HwDecode};
     use crate::encode::{Encoder, EncoderBackend, EncoderConfig};
@@ -269,5 +421,62 @@ mod tests {
                 psnr / n.max(1) as f64
             );
         }
+    }
+}
+
+/// Pure-Rust round trip (no FFmpeg anywhere): convert.rs -> FilmCraft encoder -> FilmCraft decoder.
+#[cfg(test)]
+mod pure_tests {
+    use crate::decode::VideoDecoder;
+    use crate::encode::{Encoder, EncoderBackend, EncoderConfig};
+    use crate::film_decode::FilmDecoder;
+    use crate::frame::{PixelFormat, RawFrame};
+    use crate::pattern::{read_marker, stamp_marker};
+
+    fn frame(seq: u32, w: u32, h: u32) -> RawFrame {
+        let stride = w as usize * 4;
+        let mut data = vec![90u8; stride * h as usize];
+        stamp_marker(&mut data, stride, w as usize, h as usize, seq);
+        RawFrame {
+            seq: seq as u64,
+            width: w,
+            height: h,
+            stride,
+            format: PixelFormat::Bgrx,
+            data,
+            capture_us: 1_000 + seq as u64 * 16_667,
+            dmabuf: None,
+        }
+    }
+
+    #[test]
+    fn roundtrip_without_ffmpeg() {
+        let (w, h) = (960, 544);
+        let mut enc = Encoder::new(EncoderConfig {
+            width: w,
+            height: h,
+            backend: EncoderBackend::Filmcraft,
+            bitrate_kbps: 8_000,
+            ..EncoderConfig::default()
+        })
+        .unwrap();
+        let mut dec = FilmDecoder::new("test");
+        let mut seen = 0;
+        for seq in 0..8u32 {
+            for au in enc.encode(&frame(seq, w, h), false).unwrap() {
+                if let Some(img) = dec.decode_yuv(&au.data).unwrap() {
+                    assert_eq!((img.width, img.height), (w, h));
+                    assert_eq!(
+                        read_marker(&img.y, img.y_stride, w as usize, h as usize),
+                        Some(seq)
+                    );
+                    seen += 1;
+                }
+            }
+        }
+        assert!(seen >= 6, "decoded only {seen} of 8");
+        // A different capture size is a readable error, not a panic.
+        let err = enc.encode(&frame(9, 480, 272), false).unwrap_err();
+        assert!(format!("{err}").contains("does not scale"));
     }
 }

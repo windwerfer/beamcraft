@@ -605,16 +605,21 @@ fn encoder_ref(encoder: &mut Option<Encoder>) -> Result<&mut Encoder> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "ffmpeg")]
     use crate::encode::EncoderBackend;
+    #[cfg(feature = "ffmpeg")]
     use crate::frame::PixelFormat;
+    #[cfg(feature = "ffmpeg")]
     use std::time::Instant;
 
+    #[cfg(feature = "ffmpeg")]
     /// One frame, then silence (like KWin on a static screen), then the end.
     struct OneShot {
         sent: bool,
         until: Instant,
     }
 
+    #[cfg(feature = "ffmpeg")]
     impl FrameSource for OneShot {
         fn next_frame(&mut self) -> Result<Option<RawFrame>> {
             unreachable!("pipeline polls")
@@ -644,7 +649,9 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "ffmpeg")]
     struct Count(usize);
+    #[cfg(feature = "ffmpeg")]
     impl VideoSink for Count {
         fn send(&mut self, _frame: EncodedFrame) -> Result<()> {
             self.0 += 1;
@@ -681,6 +688,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "ffmpeg")]
     fn network_cap_changes_x264_without_a_keyframe() {
         crate::init().unwrap();
         let cfg = EncoderConfig {
@@ -732,6 +740,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "ffmpeg")]
     fn static_source_gets_repeated_frames() {
         crate::init().unwrap();
         let cfg = EncoderConfig {

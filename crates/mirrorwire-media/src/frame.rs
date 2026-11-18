@@ -13,6 +13,7 @@ impl PixelFormat {
         4
     }
 
+    #[cfg(feature = "ffmpeg")]
     pub(crate) fn to_ffmpeg(self) -> ffmpeg_next::format::Pixel {
         use ffmpeg_next::format::Pixel;
         match self {
