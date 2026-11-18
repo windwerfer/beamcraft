@@ -1,13 +1,10 @@
 # HANDOFF
 
 ## Goal
-Session 2026-11-18 (hardware findings): fixed VAAPI LP open and the x264 post-outage freeze (see Done 'Hardware findings').
-
-Latest session: camera QR scan step 1: `pairing::scan_qr_luma` (rqrr, net), unit-tested on rendered codes. Earlier: Extend size dropdown.
-
-Latest: roadmap 0.6 closed as done via reopen (manager decision 15:58), hardware results recorded in testing.md §3.10 (VAAPI LP, reopen ~27 ms, presenter remote confirmed). Docs only, no new unsafe.
+Pen/touch as an absolute pointer on the presenter (owner decision 16:11): protocol 10 `pointer`, RemoteDesktop portal injection, "Pen" toggle on desktop and Android viewers.
 
 ## Done
+- Pen/touch pointer (protocol 10, Breaks: 9 -> 10): `Control::Pointer{phase,x,y}` (u16 normalised to the picture) on the control stream; `PointerGate` (120 moves/s, 40 downs/s, ups never refused); `RemoteInput` channel item; `source/remote.rs` upgrades a key-only portal session to KEYBOARD|POINTER + MONITOR source on the first pointer down (one more dialog), injects absolute motion + BTN_LEFT; Mirror only (Extend shows a message). Desktop: Pen button beside the remote buttons (R); Android: Pen under Disconnect. Pressure/tilt wishlist added to roadmap. Tests: proto wire/mapping, gate, loopback ordering. No new unsafe/crate/permission. Decisions.md 2026-11-18 (pen/touch).
 - Extend size as encode target: `EncoderConfig::max_size` (fit-within, no upscale), set by the presenter window from the resolved Extend size; unit test; decisions.md 2026-11-18. KWin sizing on non-Flatpak NOT done (no verifiable clean route without a KDE desktop; hint + dropdown stay). Not tried on hardware. Loopback p95 is flaky on this box (43-69 ms once, passes on rerun, same without my change).
 - Presenter remote, protocol 9: `Control::RemoteKey{key}` (closed enum next/previous/space/escape) on the control stream, rate-limited 10/s in the presenter (`TapGate`), `ViewerSession::send_remote_key`; unit tests (wire form, hostile values, rate limit, loopback).
 - Linux presenter: `media/src/source/remote.rs` taps keysyms through the RemoteDesktop portal (keyboard only, lazy session, restore token `remote-desktop.token`); status line in the presenter window (`CaptureCtl.remote_note`). No new unsafe, no new crate, no new Flatpak permission.
@@ -24,6 +21,7 @@ Latest: roadmap 0.6 closed as done via reopen (manager decision 15:58), hardware
 - See decisions.md log 2026-11-18 (presenter remote). Rejected: cursor datagram path, sharing the ScreenCast session, raw keycodes.
 
 ## Open questions
+- Pen: never run against a real portal/pen/touch screen. Extend mode not mapped (needs capture and input in ONE RemoteDesktop session, a rework of the working capture path; owner decision whether to do it). Whether KDE accepts a MONITOR source selection on the RemoteDesktop session with the old keyboard-only restore token (expected: one new dialog) is unverified. Manager hardware check: Mirror mode, tap Pen, drag with finger/pen on the tablet.
 - Presenter remote never run against a real portal, KDE/GNOME dialog, Flatpak, or a slideshow app; Android/desktop buttons only compiled, not seen. Owner: UI sketch for the buttons when available.
 - RemoteDesktop portal availability on the owner's KDE (xdg-desktop-portal-kde) unverified; a denial shows in the presenter window.
 - Extend sizing is hint-only (owner option 2): the window shows the viewer's size; not seen on a real KDE desktop.
@@ -39,6 +37,9 @@ cargo xtask ci; cargo ndk -t arm64-v8a --platform 26 clippy --release --locked -
 see `git log -1`
 
 ## Next step
+Pen: hardware check by the manager; then (if wanted) unify capture + input into one RemoteDesktop session for Extend. Otherwise as below.
+
+(Previous next step:)
 Camera QR step 2 (needs a camera box). KWin sizing is parked (see decisions.md); revisit only with a KDE desktop to test on. Otherwise remaining mirroring items (0.4 hysteresis, native resolution, connection diagnostics) if not yet done per roadmap.
 
 (Older next step:)
