@@ -1,18 +1,16 @@
 # HANDOFF
 
 ## Goal
-Optional FFmpeg (D17, roadmap 7a), step 2: cargo feature `ffmpeg`, FFmpeg-free build.
+Windows step 2 (roadmap 7, D16): package the viewer.
 
 ## Done
-- `mirrorwire-media`/`mirrorwire-app` feature `ffmpeg` (default on; `static-ffmpeg` implies it). `ffmpeg-next` optional.
-- `encode/mod.rs` = config + `path` + `DmaBufError` + `Encoder` enum (`Ffmpeg(FfmpegEncoder)` in `encode/ffmpeg.rs`, `Film(FilmEncoder)` in `filmcraft.rs`). `decode.rs`, `hw.rs`, `frame.rs::to_ffmpeg`, `init()` gated.
-- Pure-Rust `convert::yuv_to_rgba` (viewer RGBA without swscale); `convert.rs` RGB->I420 optimised (FilmCraft loopback capture_to_encoded 13 ms vs 16 ms swscale; naive version was 20 ms).
-- `cargo build/clippy/test --no-default-features --features filmcraft` works; added to `cargo xtask ci` and ci.yml. Scripts (loopback, android) now pass `--features ffmpeg`.
-- Gates green locally (xtask ci incl. loopback, Android clippy); CI + Build green on main.
+- `Windows viewer` job in build.yml: viewer build (`gui,ffmpeg`), zip with mirrorwire.exe, BtbN LGPL shared FFmpeg DLLs, FFmpeg + our licences, README; `--version` smoke test; attached to the release job. CI + Build green (artifact produced).
+- Docs: roadmap 7, decisions.md log entry.
+- Gates green locally (xtask ci incl. loopback, Android clippy).
 
 ## Decisions
-- D17 step 2 in decisions.md. FilmCraft encoder always uses convert.rs (no swscale).
-- Breaks: `--encoder filmcraft` no longer scales (capture size must equal `--size`; readable error).
+- FFmpeg-free Windows zip rejected for now (FilmCraft decode speed on Windows unmeasured).
+- Breaks: none.
 
 ## Open questions
 - Owner: SonarCloud switch (SONAR_CI_ANALYSIS) pending.
@@ -20,6 +18,7 @@ Optional FFmpeg (D17, roadmap 7a), step 2: cargo feature `ffmpeg`, FFmpeg-free b
 - 60 ms loopback budget for CI runners: tighten after first CI run.
 - Extend: viewer size in hello (protocol 8)? Flatpak portal-version check for VIRTUAL untested.
 - Not verified at run time: Flatpak ffmpeg-full extension providing libx264; AppImage on Ubuntu FFmpeg 6.1 (never run on hardware). build-ffmpeg.sh has an unused Linux branch (x264).
+- Windows zip: never run on Windows (only --version smoke in CI); no installer/signing.
 - Windows: nothing ran on a real Windows machine; only compile, clippy, tests in CI. Windows presenter, packaging and firewall hint not done. BtbN `latest` asset names rotate.
 - FFmpeg-free build only compiled, clippy'd and unit-tested (FilmCraft round trip); never run with a GUI/hardware.
 - cargo `unused dependency crossbeam-channel/tokio` warnings for mirrorwire-media in the FFmpeg-free build (harmless).
@@ -31,4 +30,4 @@ cargo xtask ci; cargo ndk -t arm64-v8a --platform 26 clippy --release --locked -
 see `git log -1`
 
 ## Next step
-Windows step 2: package the viewer (zip + LGPL FFmpeg DLLs, or an FFmpeg-free `--no-default-features --features gui,filmcraft` viewer zip with no DLLs; check decode speed first). Then remaining roadmap items (0b/0c, etc.) per answers.md order.
+Remaining roadmap items (0b/0c, etc.) per answers.md order.
