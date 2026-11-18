@@ -1,6 +1,8 @@
 # HANDOFF
 
 ## Goal
+Session 2026-11-18 (hardware findings): fixed VAAPI LP open and the x264 post-outage freeze (see Done 'Hardware findings').
+
 Latest session: Extend sizing per owner option 2 (presenter window shows viewer display size + hint). Next: desktop camera QR scan.
 
 Owner order 2026-11-18 11:25: (1) live VAAPI bitrate (blocked, see Open questions), (2) presenter remote.
@@ -11,6 +13,9 @@ Owner order 2026-11-18 11:25: (1) live VAAPI bitrate (blocked, see Open question
 - Desktop viewer: R toggles Previous/Next/Click/Escape buttons. Android: same buttons in the tap overlay.
 - Docs: decisions.md log, protocol.md (`remote_key`, version 9), roadmap, README.
 - Breaks: PROTOCOL_VERSION 8 -> 9.
+
+- Hardware findings: (1) VAAPI retries with `low_power=1`; (2) Reassembler livelock after an outage fixed (decisions.md 2026-11-18 'hardware findings'), unit regression test. Live bitrate on the LP path is untested (the reopen path is used as before).
+- MANAGER RERUN: scripts/android-wifi-run.sh 45 with both `--encoder vaapi` and `--encoder x264` on the T480s + TB336FU; expect VAAPI to open (log 'retrying with low_power=1') and the viewer to resume after the 12.5->5 Mbit/s cut. The livelock cause is inferred from the logs, not reproduced on hardware.
 
 ## Decisions
 - See decisions.md log 2026-11-18 (presenter remote). Rejected: cursor datagram path, sharing the ScreenCast session, raw keycodes.
