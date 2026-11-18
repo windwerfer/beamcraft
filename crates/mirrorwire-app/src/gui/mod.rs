@@ -141,6 +141,9 @@ pub fn run(
                     qr_texture: None,
                     show_stats: true,
                     show_remote: false,
+                    pen_mode: false,
+                    pen_down: false,
+                    pen_last_move: None,
                     fullscreen: false,
                     display_latency_ms: 0.0,
                     screen: if start_in_view {
@@ -220,6 +223,11 @@ struct MirrorApp {
     show_stats: bool,
     /// Presenter-remote buttons over the video (R toggles).
     show_remote: bool,
+    /// Pen/touch/mouse over the picture drives the presenter's pointer (off by default, so a
+    /// normal tap does not click on the presenter).
+    pen_mode: bool,
+    pen_down: bool,
+    pen_last_move: Option<Instant>,
     fullscreen: bool,
     display_latency_ms: f64,
     screen: Screen,

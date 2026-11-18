@@ -58,6 +58,11 @@ struct ViewerApp {
     texture: Option<egui::TextureHandle>,
     picture_size: (u32, u32),
     show_overlay: bool,
+    /// Pen/finger drives the presenter's pointer (off by default: a tap then toggles the
+    /// overlay instead of clicking on the presenter).
+    pen_mode: bool,
+    pen_down: bool,
+    pen_last_move: Option<Instant>,
     last_uri_check: Instant,
     /// Texture of the separately sent cursor, by image id.
     cursor_tex: Option<(u32, egui::TextureHandle)>,
@@ -123,6 +128,9 @@ impl ViewerApp {
             texture: None,
             picture_size: (0, 0),
             show_overlay: true,
+            pen_mode: false,
+            pen_down: false,
+            pen_last_move: None,
             last_uri_check: Instant::now() - Duration::from_secs(1),
             cursor_tex: None,
             gpu,
@@ -347,6 +355,7 @@ impl ViewerApp {
     fn video_ui(&mut self, ui: &mut egui::Ui, status: &session::Status) {
         let rect = ui.max_rect();
         ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
+        let mut picture_rect: Option<egui::Rect> = None;
         if self.texture.is_some() || self.gpu_picture {
             let (w, h) = (
                 self.picture_size.0.max(1) as f32,
@@ -355,6 +364,7 @@ impl ViewerApp {
             let scale = (rect.width() / w).min(rect.height() / h);
             let size = egui::vec2(w * scale, h * scale);
             let img_rect = egui::Rect::from_center_size(rect.center(), size);
+            picture_rect = Some(img_rect);
             match (&self.texture, &self.gpu) {
                 (Some(tex), _) => {
                     ui.painter().image(
@@ -396,10 +406,15 @@ impl ViewerApp {
                 egui::Color32::GRAY,
             );
         }
-        let response = ui.interact(rect, ui.scope_id().with("video"), egui::Sense::click());
-        if response.clicked() {
+        let response = ui.interact(
+            rect,
+            ui.scope_id().with("video"),
+            egui::Sense::click_and_drag(),
+        );
+        if response.clicked() && !self.pen_mode {
             self.show_overlay = !self.show_overlay;
         }
+        self.send_pen(ui.ctx(), &response, picture_rect, status);
         if self.show_overlay {
             let stream = status.stream.as_ref();
             let text = format!(
@@ -463,6 +478,16 @@ impl ViewerApp {
             if ui.put(button, egui::Button::new("Disconnect")).clicked() {
                 self.disconnect();
             }
+            let pen = egui::Rect::from_min_size(
+                rect.right_top() + egui::vec2(-150.0, 94.0),
+                egui::vec2(140.0, 44.0),
+            );
+            if ui
+                .put(pen, egui::Button::new("Pen").selected(self.pen_mode))
+                .clicked()
+            {
+                self.pen_mode = !self.pen_mode;
+            }
             // Presenter remote: one tap = one key on the presenter (protocol 9).
             let keys = mirrorwire_proto::control::RemoteKey::ALL;
             let (bw, bh, gap) = (150.0, 64.0, 8.0);
@@ -485,6 +510,64 @@ impl ViewerApp {
 }
 
 impl ViewerApp {
+    /// Finger/pen as the presenter's pointer (pen mode only): down/up on the reliable control
+    /// stream, moves coalesced to about 60 per second.
+    fn send_pen(
+        &mut self,
+        ctx: &egui::Context,
+        response: &egui::Response,
+        picture: Option<egui::Rect>,
+        status: &session::Status,
+    ) {
+        use mirrorwire_proto::control::{pointer_in_rect, Control, PointerPhase};
+        let Some(tx) = &status.control else { return };
+        let Some(pic) = picture else { return };
+        if !self.pen_mode {
+            if self.pen_down {
+                self.pen_down = false;
+                // Leaving pen mode mid-press: release so the presenter button is not stuck.
+                let _ = tx.send(Control::Pointer {
+                    phase: PointerPhase::Up,
+                    x: 0,
+                    y: 0,
+                });
+            }
+            return;
+        }
+        let Some(pos) = ctx.input(|i| i.pointer.interact_pos().or(i.pointer.latest_pos())) else {
+            return;
+        };
+        let (pressed, down) =
+            ctx.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_down()));
+        let Some((x, y)) = pointer_in_rect(
+            pos.x,
+            pos.y,
+            (pic.left(), pic.top(), pic.width(), pic.height()),
+        ) else {
+            return;
+        };
+        let phase = if pressed && response.contains_pointer() && !self.pen_down {
+            self.pen_down = true;
+            PointerPhase::Down
+        } else if self.pen_down && !down {
+            self.pen_down = false;
+            PointerPhase::Up
+        } else if self.pen_down {
+            let now = Instant::now();
+            if self
+                .pen_last_move
+                .is_some_and(|t| now.duration_since(t) < Duration::from_millis(16))
+            {
+                return;
+            }
+            self.pen_last_move = Some(now);
+            PointerPhase::Move
+        } else {
+            return;
+        };
+        let _ = tx.send(Control::Pointer { phase, x, y });
+    }
+
     /// The presenter's cursor as a textured quad over the video (same
     /// mapping as the desktop viewer). Drawn inside this app's own surface,
     /// so no overlay permission is involved.

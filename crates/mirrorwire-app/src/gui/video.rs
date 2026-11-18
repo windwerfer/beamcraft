@@ -44,6 +44,7 @@ impl MirrorApp {
         ui.painter().rect_filled(rect, 0.0, egui::Color32::BLACK);
         let ppp = ui.ctx().pixels_per_point();
         let mut scale_info = String::new();
+        let mut picture_rect: Option<egui::Rect> = None;
         let (tex_w, tex_h) = if let Some(tex) = &self.texture {
             (tex.size()[0] as f32, tex.size()[1] as f32)
         } else if let Some(yuv) = &self.yuv {
@@ -60,6 +61,7 @@ impl MirrorApp {
                 native_pts * fit
             };
             let draw = egui::Rect::from_center_size(rect.center(), draw_size);
+            picture_rect = Some(draw);
             if let Some(yuv) = &self.yuv {
                 ui.painter().add(
                     YuvPaint::new(yuv.clone(), self.yuv_gpu.clone(), self.pixel_exact)
@@ -152,6 +154,12 @@ impl MirrorApp {
                 .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -16.0))
                 .show(&ctx, |ui| {
                     ui.horizontal(|ui| {
+                        let pen = egui::Button::new(egui::RichText::new("Pen").size(22.0))
+                            .min_size(egui::vec2(110.0, 52.0))
+                            .selected(self.pen_mode);
+                        if ui.add(pen).clicked() {
+                            self.pen_mode = !self.pen_mode;
+                        }
                         for key in mirrorwire_proto::control::RemoteKey::ALL {
                             let button =
                                 egui::Button::new(egui::RichText::new(key.label()).size(22.0))
@@ -168,12 +176,17 @@ impl MirrorApp {
                     });
                 });
         }
-        let response = ui.interact(rect, ui.scope_id().with("video"), egui::Sense::click());
+        let response = ui.interact(
+            rect,
+            ui.scope_id().with("video"),
+            egui::Sense::click_and_drag(),
+        );
+        self.send_pen(&ctx, &response, picture_rect, &status);
         // Never call Response methods inside `ctx.input(..)`: on a click,
         // `double_clicked()` takes the context lock again, and a nested read
         // lock deadlocks as soon as the decode thread is waiting to write
         // (`request_repaint`). That froze the iMac viewer on a click.
-        let double_clicked = response.double_clicked();
+        let double_clicked = response.double_clicked() && !self.pen_mode;
         let (toggle_fs, toggle_stats, toggle_1to1, leave, toggle_remote) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::F) || double_clicked,
@@ -202,6 +215,70 @@ impl MirrorApp {
             self.disconnect(&ctx);
         }
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
+    }
+
+    /// Pen/touch/mouse as the presenter's pointer (pen mode only): down/up on the reliable
+    /// control stream, moves coalesced to about 60 per second.
+    fn send_pen(
+        &mut self,
+        ctx: &egui::Context,
+        response: &egui::Response,
+        picture: Option<egui::Rect>,
+        status: &crate::viewer::ViewerStatus,
+    ) {
+        use mirrorwire_proto::control::{pointer_in_rect, Control, PointerPhase};
+        let Some(tx) = &status.control else { return };
+        let Some(pic) = picture else { return };
+        if !self.pen_mode {
+            if self.pen_down {
+                self.pen_down = false;
+                // Leaving pen mode mid-press: release so the presenter button is not stuck.
+                let _ = tx.send(Control::Pointer {
+                    phase: PointerPhase::Up,
+                    x: 0,
+                    y: 0,
+                });
+            }
+            return;
+        }
+        let pos = ctx.input(|i| i.pointer.interact_pos().or(i.pointer.latest_pos()));
+        let (pressed, released) = ctx.input(|i| {
+            (
+                i.pointer.primary_pressed(),
+                i.pointer.primary_released() || !i.pointer.primary_down(),
+            )
+        });
+        let Some(pos) = pos else { return };
+        if !response.contains_pointer() && !self.pen_down {
+            return;
+        }
+        let Some((x, y)) = pointer_in_rect(
+            pos.x,
+            pos.y,
+            (pic.left(), pic.top(), pic.width(), pic.height()),
+        ) else {
+            return;
+        };
+        let phase = if pressed && response.contains_pointer() && !self.pen_down {
+            self.pen_down = true;
+            PointerPhase::Down
+        } else if self.pen_down && released {
+            self.pen_down = false;
+            PointerPhase::Up
+        } else if self.pen_down {
+            let now = Instant::now();
+            if self
+                .pen_last_move
+                .is_some_and(|t| now.duration_since(t) < std::time::Duration::from_millis(16))
+            {
+                return;
+            }
+            self.pen_last_move = Some(now);
+            PointerPhase::Move
+        } else {
+            return;
+        };
+        let _ = tx.send(Control::Pointer { phase, x, y });
     }
 
     /// The presenter's cursor as a textured quad over the video, mapped

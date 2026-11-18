@@ -1,36 +1,83 @@
-//! Presenter remote: taps keys (Right, Left, Space, Escape) through the xdg-desktop-portal
-//! RemoteDesktop interface. No uinput, no root (decisions D1); the portal asks the user once
-//! (the restore token is kept so the dialog does not return) and works inside the Flatpak
-//! sandbox. The session opens lazily on the first tap, so a presenter that nobody uses as a
-//! remote never shows the dialog.
+//! Presenter remote: taps keys (Right, Left, Space, Escape) and moves a pen/finger pointer
+//! through the xdg-desktop-portal RemoteDesktop interface. No uinput, no root (decisions D1);
+//! the portal asks the user once (the restore token is kept so the dialog does not return) and
+//! works inside the Flatpak sandbox. The session opens lazily on the first input, so a presenter
+//! that nobody uses as a remote never shows the dialog. A key-only session is upgraded (closed
+//! and reopened, one more dialog) when the first pointer event arrives: absolute pointer motion
+//! is addressed to a screen-cast stream, so the pointer session also selects a monitor source.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use ashpd::desktop::remote_desktop::{DeviceType, KeyState, RemoteDesktop, SelectDevicesOptions};
+use ashpd::desktop::screencast::{CursorMode, Screencast, SelectSourcesOptions, SourceType};
 use ashpd::desktop::{PersistMode, Session};
-use mirrorwire_proto::control::RemoteKey;
+use mirrorwire_proto::control::{pointer_to_stream, PointerPhase, RemoteInput, RemoteKey};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::mpsc;
+
+/// Linux evdev code of the left mouse button (what the portal's button call takes).
+const BTN_LEFT: i32 = 0x110;
 
 /// Receives one human-readable line whenever the remote's state changes (shown in the
 /// presenter window, AGENTS.md §1.8).
 pub type RemoteStatusSink = Arc<dyn Fn(String) + Send + Sync>;
 
+/// Whether the pen/finger can be mapped onto the picture right now: true in Mirror mode (the
+/// monitor stream is the picture). Extend's virtual monitor is a different stream than the
+/// one a second portal session would offer, so there the pointer is refused with a message.
+pub type PointerMapped = Arc<dyn Fn() -> bool + Send + Sync>;
+
 /// Start the injector task on the current tokio runtime. Send taps into the returned sender.
 pub fn spawn_remote_injector(
     restore_token_path: PathBuf,
     status: RemoteStatusSink,
-) -> mpsc::Sender<RemoteKey> {
-    let (tx, mut rx) = mpsc::channel::<RemoteKey>(16);
+    pointer_mapped: PointerMapped,
+) -> mpsc::Sender<RemoteInput> {
+    let (tx, mut rx) = mpsc::channel::<RemoteInput>(64);
     status("presenter remote: waiting for the first button press".into());
     tokio::spawn(async move {
-        let mut session: Option<(RemoteDesktop, Session<RemoteDesktop>)> = None;
-        while let Some(key) = rx.recv().await {
+        let mut session: Option<Remote> = None;
+        // Last pointer failure shown, so a hovering pen does not rewrite the line 120x/s.
+        let mut pointer_refused = false;
+        while let Some(input) = rx.recv().await {
+            let wants_pointer = matches!(input, RemoteInput::Pointer { .. });
+            if wants_pointer && !pointer_mapped() {
+                if !pointer_refused {
+                    status(
+                        "pen/touch input works in Mirror mode only (Extend is not mapped)".into(),
+                    );
+                    pointer_refused = true;
+                }
+                continue;
+            }
+            pointer_refused = false;
+            if session
+                .as_ref()
+                .is_some_and(|s| wants_pointer && s.stream.is_none())
+            {
+                // Upgrade a key-only session.
+                if let Some(old) = session.take() {
+                    let _ = old.session.close().await;
+                }
+            }
             if session.is_none() {
-                status("presenter remote: asking the desktop for permission…".into());
-                match open_session(&restore_token_path).await {
+                // Moves while no session exists must not each open a dialog.
+                if matches!(input, RemoteInput::Pointer { phase, .. } if phase != PointerPhase::Down)
+                {
+                    continue;
+                }
+                status(if wants_pointer {
+                    "presenter remote: asking the desktop for pointer permission (choose the screen to control)…".into()
+                } else {
+                    "presenter remote: asking the desktop for permission…".into()
+                });
+                match open_session(&restore_token_path, wants_pointer).await {
                     Ok(s) => {
-                        status("presenter remote: ready (taps Right/Left/Space/Esc)".into());
+                        status(if s.stream.is_some() {
+                            "presenter remote: ready (keys and pen/touch pointer)".into()
+                        } else {
+                            "presenter remote: ready (taps Right/Left/Space/Esc)".into()
+                        });
                         session = Some(s);
                     }
                     Err(e) => {
@@ -42,13 +89,13 @@ pub fn spawn_remote_injector(
                     }
                 }
             }
-            let Some((proxy, sess)) = &session else {
+            let Some(remote) = &session else {
                 continue;
             };
-            if let Err(e) = tap(proxy, sess, key).await {
-                tracing::warn!("presenter remote tap failed: {e:#}");
+            if let Err(e) = inject(remote, input).await {
+                tracing::warn!("presenter remote input failed: {e:#}");
                 status(format!(
-                    "presenter remote: key press failed ({e:#}); reconnecting"
+                    "presenter remote: input failed ({e:#}); reconnecting"
                 ));
                 session = None;
             }
@@ -57,7 +104,15 @@ pub fn spawn_remote_injector(
     tx
 }
 
-async fn open_session(token_path: &PathBuf) -> Result<(RemoteDesktop, Session<RemoteDesktop>)> {
+/// An open RemoteDesktop session. `stream` is the (node id, size) pointer motion is addressed
+/// to; `None` for a key-only session.
+struct Remote {
+    proxy: RemoteDesktop,
+    session: Session<RemoteDesktop>,
+    stream: Option<(u32, (i32, i32))>,
+}
+
+async fn open_session(token_path: &PathBuf, pointer: bool) -> Result<Remote> {
     let proxy = RemoteDesktop::new()
         .await
         .context("the desktop has no RemoteDesktop portal")?;
@@ -65,37 +120,109 @@ async fn open_session(token_path: &PathBuf) -> Result<(RemoteDesktop, Session<Re
     if !available.contains(DeviceType::KEYBOARD) {
         bail!("the RemoteDesktop portal offers no keyboard");
     }
+    if pointer && !available.contains(DeviceType::POINTER) {
+        bail!("the RemoteDesktop portal offers no pointer");
+    }
     let session = proxy.create_session(Default::default()).await?;
     let token = tokio::fs::read_to_string(token_path)
         .await
         .ok()
         .map(|t| t.trim().to_owned())
         .filter(|t| !t.is_empty());
+    let devices = if pointer {
+        DeviceType::KEYBOARD | DeviceType::POINTER
+    } else {
+        DeviceType::KEYBOARD
+    };
     proxy
         .select_devices(
             &session,
             SelectDevicesOptions::default()
-                .set_devices(DeviceType::KEYBOARD)
+                .set_devices(devices)
                 .set_persist_mode(PersistMode::ExplicitlyRevoked)
                 .set_restore_token(token.as_deref()),
         )
         .await?
         .response()?;
+    if pointer {
+        // Absolute motion is addressed to a screen-cast stream of this same session.
+        let cast = Screencast::new()
+            .await
+            .context("connecting to ScreenCast portal")?;
+        cast.select_sources(
+            &session,
+            SelectSourcesOptions::default()
+                .set_cursor_mode(CursorMode::HIDDEN)
+                .set_sources(SourceType::MONITOR)
+                .set_multiple(false)
+                .set_persist_mode(PersistMode::ExplicitlyRevoked)
+                .set_restore_token(token.as_deref()),
+        )
+        .await?
+        .response()?;
+    }
     let started = proxy
         .start(&session, None, Default::default())
         .await?
         .response()
-        .context("keyboard access was cancelled or denied")?;
+        .context("remote access was cancelled or denied")?;
     if !started.devices().contains(DeviceType::KEYBOARD) {
         bail!("keyboard access was not granted");
     }
+    let stream = if pointer {
+        if !started.devices().contains(DeviceType::POINTER) {
+            bail!("pointer access was not granted");
+        }
+        let st = started
+            .streams()
+            .first()
+            .ok_or_else(|| anyhow!("the portal returned no screen to point at"))?;
+        let size = st
+            .size()
+            .ok_or_else(|| anyhow!("the portal did not tell the screen size"))?;
+        Some((st.pipe_wire_node_id(), size))
+    } else {
+        None
+    };
     if let Some(t) = started.restore_token() {
         if let Some(dir) = token_path.parent() {
             tokio::fs::create_dir_all(dir).await?;
         }
         tokio::fs::write(token_path, t).await?;
     }
-    Ok((proxy, session))
+    Ok(Remote {
+        proxy,
+        session,
+        stream,
+    })
+}
+
+async fn inject(remote: &Remote, input: RemoteInput) -> Result<()> {
+    match input {
+        RemoteInput::Key(key) => tap(&remote.proxy, &remote.session, key).await,
+        RemoteInput::Pointer { phase, x, y } => {
+            let Some((node, size)) = remote.stream else {
+                return Ok(());
+            };
+            let Some((px, py)) = pointer_to_stream(x, y, size) else {
+                return Ok(());
+            };
+            remote
+                .proxy
+                .notify_pointer_motion_absolute(&remote.session, node, px, py, Default::default())
+                .await?;
+            let state = match phase {
+                PointerPhase::Move => return Ok(()),
+                PointerPhase::Down => KeyState::Pressed,
+                PointerPhase::Up => KeyState::Released,
+            };
+            remote
+                .proxy
+                .notify_pointer_button(&remote.session, BTN_LEFT, state, Default::default())
+                .await?;
+            Ok(())
+        }
+    }
 }
 
 async fn tap(

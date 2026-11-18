@@ -335,11 +335,15 @@ fn stream_info_from(encoder: &Encoder, fps: u32, cursor: CursorCapture) -> Strea
 fn start_remote(
     config_dir: &std::path::Path,
     ctl: &Arc<Mutex<CaptureCtl>>,
-) -> Option<mpsc::Sender<mirrorwire_proto::control::RemoteKey>> {
+) -> Option<mpsc::Sender<mirrorwire_proto::control::RemoteInput>> {
+    let ctl_mode = ctl.clone();
     let ctl = ctl.clone();
     Some(mirrorwire_media::source::remote::spawn_remote_injector(
         config_dir.join("remote-desktop.token"),
         Arc::new(move |line| ctl.lock_ok().remote_note = Some(line)),
+        Arc::new(move || {
+            ctl_mode.lock_ok().asked_mode == mirrorwire_media::source::CaptureMode::Mirror
+        }),
     ))
 }
 
@@ -347,7 +351,7 @@ fn start_remote(
 fn start_remote(
     _config_dir: &std::path::Path,
     _ctl: &Arc<Mutex<CaptureCtl>>,
-) -> Option<mpsc::Sender<mirrorwire_proto::control::RemoteKey>> {
+) -> Option<mpsc::Sender<mirrorwire_proto::control::RemoteInput>> {
     None
 }
 
