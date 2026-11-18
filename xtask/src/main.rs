@@ -94,6 +94,37 @@ fn ci(with_loopback: bool) -> Result<(), String> {
         ],
     )?;
     run("test", "cargo", &["test", "--workspace"])?;
+    // FFmpeg-free build (decisions D17): FilmCraft only.
+    run(
+        "clippy (no ffmpeg)",
+        "cargo",
+        &[
+            "clippy",
+            "-p",
+            "mirrorwire-media",
+            "-p",
+            "mirrorwire-app",
+            "--all-targets",
+            "--no-default-features",
+            "--features",
+            "mirrorwire-app/gui,mirrorwire-app/filmcraft",
+            "--",
+            "-D",
+            "warnings",
+        ],
+    )?;
+    run(
+        "test (no ffmpeg)",
+        "cargo",
+        &[
+            "test",
+            "-p",
+            "mirrorwire-media",
+            "--no-default-features",
+            "--features",
+            "filmcraft",
+        ],
+    )?;
     if with_loopback {
         loopback("10")?;
     }

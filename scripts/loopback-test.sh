@@ -8,7 +8,7 @@
 #   scripts/loopback-test.sh 30 --encoder x264 -- --simulate-bandwidth 8 --simulate-loss 2
 set -euo pipefail
 cd "$(dirname "$0")/.."
-FEAT=(); [[ -n "${MIRRORWIRE_FEATURES:-}" ]] && FEAT=(--features "$MIRRORWIRE_FEATURES")
+FEAT=(--features "ffmpeg${MIRRORWIRE_FEATURES:+,$MIRRORWIRE_FEATURES}")
 BIN=${MIRRORWIRE_BIN:-}
 if [[ -z "$BIN" ]]; then
   cargo build --release -q -p mirrorwire-app --no-default-features "${FEAT[@]}"

@@ -25,7 +25,7 @@ binary() {
     dir=$(mktemp -d)
     git worktree add -q --detach "$dir" "$rev" >&2
     (cd "$dir" && CARGO_TARGET_DIR="$target" cargo build --release -q \
-      -p mirrorwire-app --no-default-features) >&2
+      -p mirrorwire-app --no-default-features --features ffmpeg) >&2
     git worktree remove --force "$dir" >&2
   fi
   echo "$target/release/mirrorwire"

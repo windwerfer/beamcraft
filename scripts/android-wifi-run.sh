@@ -18,7 +18,7 @@ PKG=io.github.windwerfer.mirrorwire
 ADB=(adb ${ADB_SERIAL:+-s "$ADB_SERIAL"})
 BIN=${MIRRORWIRE_BIN:-}
 if [[ -z "$BIN" ]]; then
-  cargo build --release -q -p mirrorwire-app --no-default-features
+  cargo build --release -q -p mirrorwire-app --no-default-features --features ffmpeg
   BIN=target/release/mirrorwire
 fi
 if [[ -z "${ADVERTISE_IP:-}" ]]; then
