@@ -3,7 +3,7 @@
 ## Goal
 Session 2026-11-18 (hardware findings): fixed VAAPI LP open and the x264 post-outage freeze (see Done 'Hardware findings').
 
-Latest session: Extend size dropdown (Auto = viewer display + common sizes) driving the presenter hint; session-only, hint-only. Next: desktop camera QR scan.
+Latest session: camera QR scan step 1: `pairing::scan_qr_luma` (rqrr, net), unit-tested on rendered codes. Earlier: Extend size dropdown.
 
 Owner order 2026-11-18 11:25: (1) live VAAPI bitrate (blocked, see Open questions), (2) presenter remote.
 
@@ -39,4 +39,5 @@ cargo xtask ci; cargo ndk -t arm64-v8a --platform 26 clippy --release --locked -
 see `git log -1`
 
 ## Next step
+Camera QR scan step 2 (needs a camera box): portal Camera + PipeWire video-input source in media, 'Scan' button in the desktop viewer feeding `scan_qr_luma` with the luma plane (YUY2/NV12/MJPEG decode). Not testable here. Hardware check deferred. (Old note follows.)
 Roadmap 2 turned out already done (marked in roadmap.md). Remaining: desktop camera QR scan (no camera on the box: unit tests on sample images only). Input features beyond the presenter remote are not yet wanted.

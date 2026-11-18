@@ -94,6 +94,26 @@ pub fn qr_matrix(data: &str) -> Result<(usize, Vec<bool>)> {
     Ok((width, modules))
 }
 
+/// Largest camera frame (pixels) the QR scanner accepts; bigger input is rejected unread.
+pub const QR_SCAN_MAX_PIXELS: usize = 16 * 1024 * 1024;
+
+/// Looks for a `mirrorwire://` QR code in an 8-bit grayscale image (row-major, `width` bytes
+/// per row, no padding), e.g. a camera frame's luma plane. Returns the parsed link of the first
+/// QR code that holds one; other QR codes, damaged codes and bad sizes give `None`.
+pub fn scan_qr_luma(width: usize, height: usize, luma: &[u8]) -> Option<ConnectInfo> {
+    let pixels = width.checked_mul(height)?;
+    if width == 0 || height == 0 || pixels > QR_SCAN_MAX_PIXELS || luma.len() < pixels {
+        return None;
+    }
+    let mut img = rqrr::PreparedImage::prepare_from_greyscale(width, height, |x, y| {
+        luma.get(y * width + x).copied().unwrap_or(0)
+    });
+    img.detect_grids()
+        .into_iter()
+        .filter_map(|grid| grid.decode().ok())
+        .find_map(|(_, content)| ConnectInfo::parse(&content).ok())
+}
+
 pub fn random_pairing_code() -> Result<String> {
     let mut buf = [0u8; 4];
     getrandom::fill(&mut buf).map_err(|e| anyhow!("random: {e}"))?;
@@ -168,6 +188,58 @@ pub fn primary_ipv4() -> Option<IpAddr> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Renders `data` as a QR code into a grayscale image, `scale` pixels per module, with a
+    /// 4-module quiet zone.
+    fn render_luma(data: &str, scale: usize) -> (usize, usize, Vec<u8>) {
+        let (n, modules) = qr_matrix(data).unwrap();
+        let side = (n + 8) * scale;
+        let mut img = vec![255u8; side * side];
+        for (i, dark) in modules.iter().enumerate() {
+            if !dark {
+                continue;
+            }
+            let (mx, my) = (i % n + 4, i / n + 4);
+            for y in 0..scale {
+                for x in 0..scale {
+                    img[(my * scale + y) * side + mx * scale + x] = 0;
+                }
+            }
+        }
+        (side, side, img)
+    }
+
+    fn sample() -> ConnectInfo {
+        ConnectInfo {
+            addr: "192.168.1.20:47800".parse().unwrap(),
+            addrs: vec![],
+            fingerprint: "ab".repeat(32),
+            pairing_code: Some("123456".into()),
+            name: Some("Laptop".into()),
+        }
+    }
+
+    #[test]
+    fn scan_finds_the_presenter_qr() {
+        let info = sample();
+        let (w, h, img) = render_luma(&info.to_uri(), 4);
+        assert_eq!(scan_qr_luma(w, h, &img), Some(info));
+    }
+
+    #[test]
+    fn scan_ignores_other_qr_codes_and_noise() {
+        let (w, h, img) = render_luma("https://example.org/", 4);
+        assert_eq!(scan_qr_luma(w, h, &img), None);
+        assert_eq!(scan_qr_luma(64, 64, &[128u8; 64 * 64]), None);
+    }
+
+    #[test]
+    fn scan_rejects_bad_sizes_without_panicking() {
+        assert_eq!(scan_qr_luma(0, 10, &[]), None);
+        assert_eq!(scan_qr_luma(10, 10, &[0u8; 50]), None);
+        assert_eq!(scan_qr_luma(usize::MAX, 2, &[0u8; 4]), None);
+        assert_eq!(scan_qr_luma(1 << 20, 1 << 20, &[]), None);
+    }
 
     #[test]
     fn uri_roundtrip() {

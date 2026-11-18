@@ -17,7 +17,7 @@ target), **planned**, **idea**. Update this file when an item moves.
 | Flatpak, AppImage, DMGs in CI | built; Flatpak and x86_64 DMG run on target |
 | Android viewer APK (arm64-v8a, MediaCodec) | built (2026-11-13); first device test 2026-11-14: connects, cursor fine, picture froze after the first frame. Fixed 2026-11-14 (decode-queue flush spiral, late pictures, hardware decoder choice, pipeline HUD), tested on the x86_64 emulator only; device retest pending |
 | Browser (WebAssembly) viewer | design sketch in Planned and Future, not started |
-| Camera QR scan in the desktop viewer | not started (Android: the phone's camera app opens the `mirrorwire://` link) |
+| Camera QR scan in the desktop viewer | decoder built (`pairing::scan_qr_luma`, unit-tested on rendered codes); camera source (portal Camera + PipeWire) and the Scan button not started; Android: the phone's camera app opens the `mirrorwire://` link |
 | Cursor sent as coordinates (portal METADATA cursor, pointer datagrams, viewer-drawn) | built (2026-11-13), loopback-tested with a synthetic cursor; untested with KWin on the T480s |
 | 60 fps / max frame-rate setting, negotiated rate shown | built (2026-11-13); KWin's reported max untested |
 | Click-freeze in the viewer (egui nested input lock) | fixed (2026-11-13), untested on the iMac |
@@ -326,7 +326,7 @@ target), **planned**, **idea**. Update this file when an item moves.
   (glow already has the shader). The presenter side (DMA-BUF → VAAPI) is built.
 - **DMA-BUF modifiers from VAAPI:** today a fixed list (Intel Y/X-tiled, linear, implicit) is
   offered; query the driver's importable modifiers instead (AMD needs this).
-- **Camera QR scanning** in the viewer (the URI is already in the QR).
+- **Camera QR scanning** in the viewer (the URI is already in the QR). Decoder done 2026-11-18; the portal Camera + PipeWire source and the Scan button remain (needs a camera).
 - **Virtual monitor (extend) mode** via the portal's virtual source type.
 - **GitHub Releases** for stable download links (release job exists for `v*` tags, never run;
   the owner decides when to tag).

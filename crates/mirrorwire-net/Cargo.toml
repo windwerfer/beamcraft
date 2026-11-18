@@ -27,6 +27,7 @@ sha2 = "0.10"
 hex = "0.4"
 mdns-sd = "0.21"
 qrcode = { version = "0.14", default-features = false }
+rqrr = { version = "0.11", default-features = false }
 if-addrs = "0.15"
 hostname = "0.4"
 dirs = "7"
