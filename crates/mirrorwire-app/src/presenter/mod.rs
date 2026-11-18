@@ -320,6 +320,28 @@ fn stream_info_from(encoder: &Encoder, fps: u32, cursor: CursorCapture) -> Strea
     }
 }
 
+/// The presenter remote: taps from the viewer become key presses through the RemoteDesktop
+/// portal (Linux with the portal feature); elsewhere the taps are dropped.
+#[cfg(all(target_os = "linux", feature = "portal"))]
+fn start_remote(
+    config_dir: &std::path::Path,
+    ctl: &Arc<Mutex<CaptureCtl>>,
+) -> Option<mpsc::Sender<mirrorwire_proto::control::RemoteKey>> {
+    let ctl = ctl.clone();
+    Some(mirrorwire_media::source::remote::spawn_remote_injector(
+        config_dir.join("remote-desktop.token"),
+        Arc::new(move |line| ctl.lock_ok().remote_note = Some(line)),
+    ))
+}
+
+#[cfg(not(all(target_os = "linux", feature = "portal")))]
+fn start_remote(
+    _config_dir: &std::path::Path,
+    _ctl: &Arc<Mutex<CaptureCtl>>,
+) -> Option<mpsc::Sender<mirrorwire_proto::control::RemoteKey>> {
+    None
+}
+
 /// Shared capture/encode/announce loop used by the CLI and the GUI.
 #[allow(clippy::too_many_arguments)]
 fn present_session(
@@ -360,6 +382,7 @@ fn present_session(
         Some(random_pairing_code()?)
     };
     let keyframe_controls = controls.clone();
+    let remote_keys = start_remote(&config_dir, &ctl);
     let presenter = Presenter::start(
         &identity,
         PresenterConfig {
@@ -373,6 +396,7 @@ fn present_session(
             attempts: attempts.clone(),
             cursor_events: Some(cursor_rx),
             fec: fec.clone(),
+            remote_keys,
         },
         Arc::new(move || keyframe_controls.request_keyframe()),
     )?;

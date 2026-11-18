@@ -158,6 +158,9 @@ impl MirrorApp {
                             if let Some(note) = &cap.cursor_note {
                                 ui.colored_label(egui::Color32::from_rgb(230, 160, 40), note);
                             }
+                            if let Some(note) = &cap.remote_note {
+                                ui.weak(note);
+                            }
                             ui.weak(format!(
                                 "Frame rate: asked up to {} fps  ·  compositor allows {}  ·  encoder runs at {} fps",
                                 cap.fps_requested,

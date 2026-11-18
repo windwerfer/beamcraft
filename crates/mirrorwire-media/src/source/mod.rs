@@ -80,6 +80,8 @@ pub type CursorSink = Arc<dyn Fn(CursorEvent) + Send + Sync>;
 #[cfg(all(target_os = "linux", feature = "portal"))]
 #[allow(unsafe_code)]
 pub mod portal;
+#[cfg(all(target_os = "linux", feature = "portal"))]
+pub mod remote;
 pub mod testpattern;
 
 /// A pull-based source of raw frames. `next_frame` blocks until a frame is

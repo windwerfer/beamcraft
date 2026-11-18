@@ -138,6 +138,7 @@ pub fn run(
                     texture: None,
                     qr_texture: None,
                     show_stats: true,
+                    show_remote: false,
                     fullscreen: false,
                     display_latency_ms: 0.0,
                     screen: if start_in_view {
@@ -215,6 +216,8 @@ struct MirrorApp {
     texture: Option<egui::TextureHandle>,
     qr_texture: Option<egui::TextureHandle>,
     show_stats: bool,
+    /// Presenter-remote buttons over the video (R toggles).
+    show_remote: bool,
     fullscreen: bool,
     display_latency_ms: f64,
     screen: Screen,

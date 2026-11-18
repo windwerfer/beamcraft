@@ -67,6 +67,8 @@ pub fn viewer_ui(connected: bool, first_frame: bool, has_picture: bool) -> Viewe
 
 #[derive(Clone, Default)]
 pub struct ViewerStatus {
+    /// Control stream sender, for presenter-remote taps; set once connected.
+    pub control: Option<tokio::sync::mpsc::UnboundedSender<mirrorwire_proto::control::Control>>,
     pub connected: bool,
     pub error: Option<String>,
     pub stream: Option<StreamInfo>,
@@ -235,6 +237,7 @@ async fn session(
         s.native_height = session.stream_info.height;
         s.cursor_mode = Some(session.cursor_mode());
         s.cursor = Some(session.cursor.clone());
+        s.control = Some(session.control_sender());
     }
     tracing::info!("cursor from presenter: {}", session.cursor_mode().as_str());
     let mut stream_updates = session.stream_updates.clone();

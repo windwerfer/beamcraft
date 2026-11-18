@@ -20,6 +20,8 @@ pub struct CaptureCtl {
     /// What the current source delivers.
     pub(super) active_cursor: CursorCapture,
     pub(super) cursor_note: Option<String>,
+    /// State of the presenter remote (keyboard permission), for the window.
+    pub(super) remote_note: Option<String>,
     pub(super) negotiated_fps: Option<u32>,
     pub(super) source_desc: String,
     /// FEC setting and link feedback, shared with the transport.
@@ -38,6 +40,7 @@ impl CaptureCtl {
             asked_fps: 0,
             active_cursor: CursorCapture::Embedded,
             cursor_note: None,
+            remote_note: None,
             negotiated_fps: None,
             source_desc: String::new(),
         }
@@ -65,6 +68,7 @@ impl CaptureCtl {
             prefs: self.prefs,
             cursor_mode: self.active_cursor.mode(),
             cursor_note: self.cursor_note.clone(),
+            remote_note: self.remote_note.clone(),
             fps_requested: self.asked_fps,
             fps_negotiated: self.negotiated_fps,
             fec: self.fec.snapshot(),
@@ -80,6 +84,7 @@ pub struct CaptureStatus {
     /// What the viewer actually gets.
     pub cursor_mode: CursorMode,
     pub cursor_note: Option<String>,
+    pub remote_note: Option<String>,
     pub fps_requested: u32,
     pub fps_negotiated: Option<u32>,
     /// FEC setting, applied overhead and what the viewer reports.

@@ -120,7 +120,7 @@ impl MirrorApp {
         if self.show_stats {
             let stream = status.stream.as_ref();
             let text = format!(
-                "{}x{}  source {:.1} fps  {:.2} Mbit/s  {} ({})  {}\n{}  decode {:.2} ms  {}  capture->texture {:.1} ms\nwindow: {}\n{}\n{}\n{}\n{}\nS: stats  1: 1:1 pixels  F / double-click: fullscreen  Esc: disconnect",
+                "{}x{}  source {:.1} fps  {:.2} Mbit/s  {} ({})  {}\n{}  decode {:.2} ms  {}  capture->texture {:.1} ms\nwindow: {}\n{}\n{}\n{}\n{}\nS: stats  R: presenter remote  1: 1:1 pixels  F / double-click: fullscreen  Esc: disconnect",
                 status.native_width.max(stream.map(|s| s.width).unwrap_or(0)),
                 status.native_height.max(stream.map(|s| s.height).unwrap_or(0)),
                 status.source_fps,
@@ -147,20 +147,45 @@ impl MirrorApp {
             );
         }
 
+        if self.show_remote {
+            egui::Area::new(egui::Id::unique("remote_buttons"))
+                .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -16.0))
+                .show(&ctx, |ui| {
+                    ui.horizontal(|ui| {
+                        for key in mirrorwire_proto::control::RemoteKey::ALL {
+                            let button =
+                                egui::Button::new(egui::RichText::new(key.label()).size(22.0))
+                                    .min_size(egui::vec2(110.0, 52.0));
+                            if ui.add(button).clicked() {
+                                if let Some(tx) = &status.control {
+                                    let _ =
+                                        tx.send(mirrorwire_proto::control::Control::RemoteKey {
+                                            key,
+                                        });
+                                }
+                            }
+                        }
+                    });
+                });
+        }
         let response = ui.interact(rect, ui.scope_id().with("video"), egui::Sense::click());
         // Never call Response methods inside `ctx.input(..)`: on a click,
         // `double_clicked()` takes the context lock again, and a nested read
         // lock deadlocks as soon as the decode thread is waiting to write
         // (`request_repaint`). That froze the iMac viewer on a click.
         let double_clicked = response.double_clicked();
-        let (toggle_fs, toggle_stats, toggle_1to1, leave) = ctx.input(|i| {
+        let (toggle_fs, toggle_stats, toggle_1to1, leave, toggle_remote) = ctx.input(|i| {
             (
                 i.key_pressed(egui::Key::F) || double_clicked,
                 i.key_pressed(egui::Key::S),
                 i.key_pressed(egui::Key::Num1),
                 i.key_pressed(egui::Key::Escape),
+                i.key_pressed(egui::Key::R),
             )
         });
+        if toggle_remote {
+            self.show_remote = !self.show_remote;
+        }
         if toggle_stats {
             self.show_stats = !self.show_stats;
         }
