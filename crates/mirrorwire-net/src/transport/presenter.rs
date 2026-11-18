@@ -9,7 +9,7 @@ use crate::tls;
 use anyhow::{bail, Context, Result};
 use bytes::Bytes;
 use mirrorwire_proto::clock::now_us;
-use mirrorwire_proto::control::{hello_protocol, Control, StreamInfo};
+use mirrorwire_proto::control::{hello_protocol, Control, DisplayInfo, StreamInfo};
 use mirrorwire_proto::cursor::{CursorEvent, CursorImage, PointerUpdate};
 use mirrorwire_proto::fec::FecMode;
 use mirrorwire_proto::fragment::{fragment, FrameTiming, PacketHeader};
@@ -100,6 +100,8 @@ pub struct Presenter {
     pub frames: mpsc::Sender<OutgoingFrame>,
     pub local_addr: SocketAddr,
     pub viewer_connected: watch::Receiver<bool>,
+    /// Screen of the viewer that connected last (from its `hello`), for sizing an Extend monitor.
+    pub viewer_display: watch::Receiver<Option<DisplayInfo>>,
     stream_info: Arc<watch::Sender<StreamInfo>>,
     pub(super) fec: Arc<LinkControl>,
     endpoint: Endpoint,
@@ -122,6 +124,7 @@ impl Presenter {
         let (current_tx, current_rx) = watch::channel::<Option<ActiveViewer>>(None);
         let (connected_tx, viewer_connected) = watch::channel(false);
         let current_tx = Arc::new(current_tx);
+        let (display_tx, viewer_display) = watch::channel(None);
         let mut info = cfg.stream_info;
         info.fec = cfg.fec.snapshot().mode.as_string();
         let stream_info = Arc::new(watch::channel(info).0);
@@ -144,6 +147,7 @@ impl Presenter {
             paired: Mutex::new(PairedViewers::load(&cfg.config_dir)),
             current: current_tx,
             connected: connected_tx,
+            display: display_tx,
             on_keyframe_request,
             attempts: cfg.attempts,
             fec: cfg.fec.clone(),
@@ -165,6 +169,7 @@ impl Presenter {
             frames,
             local_addr,
             viewer_connected,
+            viewer_display,
             stream_info,
             fec: cfg.fec,
             endpoint,
@@ -198,6 +203,7 @@ struct SessionShared {
     paired: Mutex<PairedViewers>,
     current: Arc<watch::Sender<Option<ActiveViewer>>>,
     connected: watch::Sender<bool>,
+    display: watch::Sender<Option<DisplayInfo>>,
     on_keyframe_request: Callback,
     attempts: Arc<Mutex<Vec<IncomingAttempt>>>,
     fec: Arc<LinkControl>,
@@ -262,7 +268,10 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
         }
     }
     let Control::Hello {
-        name, pairing_code, ..
+        name,
+        pairing_code,
+        display,
+        ..
     } = Control::decode_body(&body)?
     else {
         bail!("expected hello from {remote}");
@@ -308,6 +317,8 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
         bail!("rejected unpaired viewer {name} at {remote}");
     }
 
+    // Garbage sizes are dropped, not trusted: Extend mode then keeps its default size.
+    shared.display.send_replace(display.sanitized());
     let mut info_rx = shared.stream_info.subscribe();
     let stream_info = info_rx.borrow_and_update().clone();
     write_msg(&mut send, &Control::StreamInfo(stream_info)).await?;

@@ -9,8 +9,8 @@ use mirrorwire_net::identity::Identity;
 use mirrorwire_net::pairing::ConnectInfo;
 use mirrorwire_net::transport::{ms, ViewerSession};
 use mirrorwire_proto::clock::{now_us, ClockSync};
-use mirrorwire_proto::control::CursorMode;
 use mirrorwire_proto::control::StreamInfo;
+use mirrorwire_proto::control::{CursorMode, DisplayInfo};
 use mirrorwire_proto::cursor::ViewerCursor;
 use mirrorwire_proto::fec::{BandwidthSim, LinkHud, LinkStats, LinkWindow, LossSim};
 use mirrorwire_proto::fragment::{AssembledFrame, Reassembler};
@@ -118,6 +118,8 @@ pub struct ViewerOptions {
     pub simulate_bandwidth_kbps: u32,
     pub rgba: bool,
     pub name: String,
+    /// This screen, sent in `hello` so Extend mode can match it (protocol 8).
+    pub display: DisplayInfo,
 }
 
 pub struct ViewerHandle {
@@ -206,9 +208,15 @@ async fn session(
         let s = status.lock_ok();
         s.trace.clone()
     };
-    let session =
-        ViewerSession::connect_traced(&identity, &target, &opts.name, &trace, HANDSHAKE_TIMEOUT)
-            .await?;
+    let session = ViewerSession::connect_traced(
+        &identity,
+        &target,
+        &opts.name,
+        opts.display,
+        &trace,
+        HANDSHAKE_TIMEOUT,
+    )
+    .await?;
     tracing::info!(
         "connected to {} ({}x{}@{} {} via {})",
         target.addr,
@@ -663,6 +671,7 @@ pub fn run_headless(args: ViewArgs, config_dir: &Path) -> Result<()> {
                 .name
                 .clone()
                 .unwrap_or_else(|| format!("{} (headless)", crate::default_name())),
+            display: DisplayInfo::from_points(1920.0, 1080.0, 1.0),
         },
         None,
     );

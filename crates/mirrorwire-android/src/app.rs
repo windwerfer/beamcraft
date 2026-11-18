@@ -7,6 +7,7 @@ use eframe::egui;
 use mirrorwire_net::discovery::Browser;
 use mirrorwire_net::identity::{short_fingerprint, Identity};
 use mirrorwire_net::pairing::ConnectInfo;
+use mirrorwire_proto::control::DisplayInfo;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -164,6 +165,10 @@ impl ViewerApp {
             identity,
             target,
             "Android".into(),
+            {
+                let r = ctx.content_rect();
+                DisplayInfo::from_points(r.width(), r.height(), ctx.pixels_per_point())
+            },
             decoders,
             self.gpu.is_some(),
             self.force_software,

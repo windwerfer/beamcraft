@@ -263,6 +263,14 @@ impl MirrorApp {
                 simulate_bandwidth_kbps: 0,
                 rgba: self.renderer != ResolvedRenderer::Glow,
                 name: self.name.clone(),
+                display: {
+                    let r = ctx.content_rect();
+                    mirrorwire_proto::control::DisplayInfo::from_points(
+                        r.width(),
+                        r.height(),
+                        ctx.pixels_per_point(),
+                    )
+                },
             },
             Some(Arc::new(move || repaint.request_repaint())),
         ));

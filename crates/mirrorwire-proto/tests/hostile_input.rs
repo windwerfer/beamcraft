@@ -188,6 +188,11 @@ fn control_parsers_survive_hostile_bytes() {
             protocol: 3,
             name: "x".into(),
             pairing_code: Some("123456".into()),
+            display: mirrorwire_proto::control::DisplayInfo {
+                width: 1,
+                height: 1,
+                scale_milli: 1000,
+            },
         },
         Control::Ping { t_viewer_us: 1 },
         Control::Bye,

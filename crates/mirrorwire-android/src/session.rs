@@ -12,7 +12,7 @@ use mirrorwire_net::identity::Identity;
 use mirrorwire_net::pairing::ConnectInfo;
 use mirrorwire_net::transport::ViewerSession;
 use mirrorwire_proto::clock::now_us;
-use mirrorwire_proto::control::{Control, StreamInfo};
+use mirrorwire_proto::control::{Control, DisplayInfo, StreamInfo};
 use mirrorwire_proto::cursor::ViewerCursor;
 use mirrorwire_proto::fec::{LinkHud, LinkWindow};
 use mirrorwire_proto::fragment::{AssembledFrame, Reassembler};
@@ -128,6 +128,7 @@ pub fn spawn(
     identity: Arc<Identity>,
     target: ConnectInfo,
     name: String,
+    display: DisplayInfo,
     decoders: Vec<CodecEntry>,
     gpu: bool,
     force_software: bool,
@@ -155,6 +156,7 @@ pub fn spawn(
             identity,
             target,
             name,
+            display,
             decoders,
             gpu,
             force_software,
@@ -189,6 +191,7 @@ async fn run(
     identity: Arc<Identity>,
     target: ConnectInfo,
     name: String,
+    display: DisplayInfo,
     decoders: Vec<CodecEntry>,
     gpu: bool,
     force_software: bool,
@@ -203,8 +206,15 @@ async fn run(
         .unwrap_or_else(|e| e.into_inner())
         .trace
         .clone();
-    let session =
-        ViewerSession::connect_traced(&identity, &target, &name, &trace, HANDSHAKE_TIMEOUT).await?;
+    let session = ViewerSession::connect_traced(
+        &identity,
+        &target,
+        &name,
+        display,
+        &trace,
+        HANDSHAKE_TIMEOUT,
+    )
+    .await?;
     let info = session.stream_info.clone();
     tracing::info!(
         "connected: {}x{}@{} via {}",

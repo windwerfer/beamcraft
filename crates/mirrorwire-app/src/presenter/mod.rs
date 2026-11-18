@@ -970,6 +970,7 @@ mod tests {
                 simulate_bandwidth_kbps: 0,
                 rgba: true,
                 name: "e2e viewer".into(),
+                display: mirrorwire_proto::control::DisplayInfo::from_points(1920.0, 1080.0, 1.0),
             },
             None,
         );

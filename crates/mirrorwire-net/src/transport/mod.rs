@@ -83,7 +83,7 @@ mod tests {
     use crate::identity::Identity;
     use crate::pairing::ConnectInfo;
     use bytes::Bytes;
-    use mirrorwire_proto::control::{CursorMode, QueueDelay, StreamInfo};
+    use mirrorwire_proto::control::{CursorMode, DisplayInfo, QueueDelay, StreamInfo};
     use mirrorwire_proto::cursor::{CursorEvent, CursorImage, PointerUpdate};
     use mirrorwire_proto::fec::{FecMode, LinkStats};
     use std::net::SocketAddr;
@@ -377,6 +377,32 @@ mod tests {
         }
     }
 
+    fn test_display() -> DisplayInfo {
+        DisplayInfo {
+            width: 2560,
+            height: 1440,
+            scale_milli: 2000,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_presenter_learns_the_viewer_display_from_hello() {
+        let dir = std::env::temp_dir().join(format!("mirrorwire-disp-{}", std::process::id()));
+        let (presenter, id) = test_presenter(&dir, FecMode::Off);
+        assert_eq!(*presenter.viewer_display.borrow(), None);
+        let _viewer = ViewerSession::connect_traced(
+            &Identity::generate().unwrap(),
+            &target_of(&presenter, &id),
+            "t",
+            test_display(),
+            &ConnectTrace::new(),
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        assert_eq!(*presenter.viewer_display.borrow(), Some(test_display()));
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn a_viewer_of_another_protocol_gets_a_readable_rejection() {
         let dir = std::env::temp_dir().join(format!("mirrorwire-proto-{}", std::process::id()));
@@ -386,6 +412,7 @@ mod tests {
                 &Identity::generate().unwrap(),
                 &target_of(&presenter, &id),
                 "old",
+                test_display(),
                 presenter.local_addr,
                 &ConnectTrace::new(),
                 Duration::from_secs(5),

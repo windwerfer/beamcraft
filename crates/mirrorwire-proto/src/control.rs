@@ -3,6 +3,42 @@ use serde::{Deserialize, Serialize};
 
 pub const MAX_CONTROL_MESSAGE: usize = 64 * 1024;
 
+/// The viewer's display, sent in `hello` (protocol 8).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DisplayInfo {
+    /// Physical pixels.
+    pub width: u32,
+    pub height: u32,
+    /// Device scale factor in 1/1000 (2000 = 2x).
+    pub scale_milli: u32,
+}
+
+impl DisplayInfo {
+    pub const MAX_SIDE: u32 = 16_384;
+
+    /// Clamp a size from the outside into a sane one; `None` if it is empty
+    /// or absurd (hostile or broken viewers must not size a monitor).
+    pub fn sanitized(self) -> Option<Self> {
+        let ok = |v: u32| (1..=Self::MAX_SIDE).contains(&v);
+        (ok(self.width) && ok(self.height) && (250..=8000).contains(&self.scale_milli))
+            .then_some(self)
+    }
+
+    /// From a size in points and the points-to-pixels factor (egui).
+    pub fn from_points(width: f32, height: f32, pixels_per_point: f32) -> Self {
+        let px = |v: f32| {
+            (v * pixels_per_point)
+                .round()
+                .clamp(1.0, Self::MAX_SIDE as f32) as u32
+        };
+        Self {
+            width: px(width),
+            height: px(height),
+            scale_milli: (pixels_per_point * 1000.0).round().clamp(250.0, 8000.0) as u32,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Control {
@@ -12,6 +48,8 @@ pub enum Control {
         protocol: u32,
         name: String,
         pairing_code: Option<String>,
+        /// The viewer's screen (what Extend mode sizes a virtual monitor to).
+        display: DisplayInfo,
     },
     Rejected {
         reason: String,
@@ -226,11 +264,36 @@ mod tests {
             protocol: crate::PROTOCOL_VERSION,
             name: "imac".into(),
             pairing_code: None,
+            display: DisplayInfo {
+                width: 1920,
+                height: 1080,
+                scale_milli: 1000,
+            },
         };
         assert_eq!(
             hello_protocol(&hello.encode()[4..]),
             Some(crate::PROTOCOL_VERSION)
         );
+    }
+
+    #[test]
+    fn display_info_is_bounded() {
+        let d = |w, h, s| DisplayInfo {
+            width: w,
+            height: h,
+            scale_milli: s,
+        };
+        assert!(d(1920, 1080, 1000).sanitized().is_some());
+        assert!(d(0, 1080, 1000).sanitized().is_none());
+        assert!(d(1920, 99_999, 1000).sanitized().is_none());
+        assert!(d(1920, 1080, 0).sanitized().is_none());
+        assert_eq!(
+            DisplayInfo::from_points(1280.0, 720.0, 1.5),
+            d(1920, 1080, 1500)
+        );
+        assert!(DisplayInfo::from_points(0.0, f32::NAN, 0.0)
+            .sanitized()
+            .is_none());
     }
 
     #[test]

@@ -10,7 +10,7 @@ use crate::pairing::ConnectInfo;
 use crate::tls;
 use anyhow::{anyhow, bail, Context, Result};
 use mirrorwire_proto::clock::{now_us, ClockSync};
-use mirrorwire_proto::control::{Control, CursorMode, QueueDelay, StreamInfo};
+use mirrorwire_proto::control::{Control, CursorMode, DisplayInfo, QueueDelay, StreamInfo};
 use mirrorwire_proto::cursor::{
     is_pointer_datagram, CursorImage, PointerUpdate, ViewerCursor, MAX_IMAGE_STREAM,
 };
@@ -46,6 +46,11 @@ impl ViewerSession {
             identity,
             target,
             viewer_name,
+            DisplayInfo {
+                width: 1920,
+                height: 1080,
+                scale_milli: 1000,
+            },
             &ConnectTrace::new(),
             HANDSHAKE_TIMEOUT,
         )
@@ -56,6 +61,7 @@ impl ViewerSession {
         identity: &Identity,
         target: &ConnectInfo,
         viewer_name: &str,
+        display: DisplayInfo,
         trace: &ConnectTrace,
         handshake_timeout: Duration,
     ) -> Result<Self> {
@@ -88,6 +94,7 @@ impl ViewerSession {
                 identity,
                 target,
                 viewer_name,
+                display,
                 *addr,
                 trace,
                 handshake_timeout,
@@ -184,10 +191,12 @@ impl ViewerSession {
 
 /// One connection attempt. `protocol` is what the `hello` claims (always [`PROTOCOL_VERSION`]
 /// outside tests, which use another one to check the presenter's rejection).
+#[allow(clippy::too_many_arguments)]
 pub(super) async fn connect_one(
     identity: &Identity,
     target: &ConnectInfo,
     viewer_name: &str,
+    display: DisplayInfo,
     addr: SocketAddr,
     trace: &ConnectTrace,
     handshake_timeout: Duration,
@@ -270,6 +279,7 @@ pub(super) async fn connect_one(
             protocol,
             name: viewer_name.to_owned(),
             pairing_code: target.pairing_code.clone(),
+            display,
         },
     )
     .await?;
@@ -484,6 +494,11 @@ mod tests {
             &identity,
             &target,
             "tester",
+            DisplayInfo {
+                width: 1920,
+                height: 1080,
+                scale_milli: 1000,
+            },
             &ConnectTrace::new(),
             Duration::from_secs(2),
         )

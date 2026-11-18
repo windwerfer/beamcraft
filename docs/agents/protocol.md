@@ -31,7 +31,7 @@ followed by a JSON body (`serde`, `tag = "type"`, `snake_case`). Bodies over
 
 | `type` | Direction | Fields |
 |---|---|---|
-| `hello` | viewer → presenter | `protocol` (u32, must equal `PROTOCOL_VERSION`, currently **7**; read first, §4), `name`, `pairing_code` (string or null) |
+| `hello` | viewer → presenter | `protocol` (u32, must equal `PROTOCOL_VERSION`, currently **8**; read first, §4), `name`, `pairing_code` (string or null), `display` (`{width, height, scale_milli}`: the viewer's screen in physical pixels and its scale factor ×1000, protocol 8; the presenter keeps it only if both sides are 1..=16384 and the scale is 0.25–8, and Extend mode sizes its virtual monitor from it) |
 | `rejected` | presenter → viewer | `reason` (shown to the user) |
 | `stream_info` | presenter → viewer | `width`, `height`, `fps`, `codec`, `encoder`, `bitrate_kbps`, `intra_refresh`, `cursor` (`separate` = §3a, `embedded` = in the video, `hidden`), `fec` (the presenter's FEC setting `off`/`auto`/`20%`, for display). Sent after `hello`, and **again** whenever it changes |
 | `request_keyframe` | viewer → presenter | `reason`. The presenter forces at most one keyframe per 2 × RTT (250 ms–1 s) per viewer and ignores requests in between. The viewer asks at once, then backs off 250 ms, 500 ms, 1 s, 1 s … until a keyframe arrives (`KeyframeBackoff`), so a lost keyframe is still replaced without a request storm; frames that arrive while it waits are still counted in `link_report`. The encoder drops a request that arrives when the previous frame sent was already an IDR (`Controls::take_keyframe_request`: no forced IDR directly after an IDR) |
