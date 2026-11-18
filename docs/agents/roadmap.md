@@ -401,6 +401,8 @@ connection (do not switch to TCP).
 | Mode | Notes | Rough size |
 |---|---|---|
 | Presenter remote (**built 2026-11-18**, untested on hardware: protocol 9 `remote_key`, RemoteDesktop portal, buttons on desktop and Android viewers) | Next, previous, and click as arrow / space keys. PowerPoint, LibreOffice Impress, and PDF viewers already understand these. | ~300–500 LOC |
+| Pen/touch as absolute pointer (**built 2026-11-18**, untested on hardware: protocol 10 `pointer`, RemoteDesktop pointer + MONITOR stream, "Pen" toggle on desktop and Android viewers; Mirror mode only, Extend needs capture and input in one RemoteDesktop session) | Pen or finger down = left button, drag = drag. No pressure/tilt. | ~400 LOC |
+| Pen pressure and tilt (**wishlist, do not start**) | Needs uinput (conflicts with D1) or a future RemoteDesktop/libei tablet-tool capability. The owner keeps it off for now. | — |
 | Laser pointer | Finger position drawn as a coloured dot in a transparent overlay on the presenter; colours selectable. The KDE Wayland overlay is the hard part. | ~300–600 LOC |
 | Drawing overlay | The same overlay, plus strokes and colours, with an optional fade-out like old Linux screen-annotation / "flame" effects. | ~800–1500 LOC |
 | Touchpad | One finger moves the cursor, a tap clicks, two fingers scroll or right-click. | ~500–800 LOC |
