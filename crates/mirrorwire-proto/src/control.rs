@@ -95,7 +95,50 @@ pub enum Control {
         stage: BottleneckStage,
         rating: BottleneckRating,
     },
+    /// Viewer -> presenter: the user pressed a presenter-remote button (protocol 9). The
+    /// presenter taps the matching key through the RemoteDesktop portal. One message is one tap.
+    RemoteKey {
+        key: RemoteKey,
+    },
     Bye,
+}
+
+/// A presenter-remote button. Fixed set on purpose: the viewer never sends raw key codes, so a
+/// paired-but-hostile viewer can only flip slides, not type.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum RemoteKey {
+    /// Next slide (Right arrow).
+    Next,
+    /// Previous slide (Left arrow).
+    Previous,
+    /// The "click" button (Space).
+    Space,
+    /// Leave the slideshow (Escape).
+    Escape,
+}
+
+impl RemoteKey {
+    pub const ALL: [RemoteKey; 4] = [Self::Previous, Self::Next, Self::Space, Self::Escape];
+
+    /// X11 keysym of the key (layout independent; what the portal's keysym call takes).
+    pub fn keysym(self) -> i32 {
+        match self {
+            Self::Next => 0xff53,
+            Self::Previous => 0xff51,
+            Self::Space => 0x20,
+            Self::Escape => 0xff1b,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Next => "Next",
+            Self::Previous => "Previous",
+            Self::Space => "Click",
+            Self::Escape => "Escape",
+        }
+    }
 }
 
 /// Which stage limits the stream, as judged by the viewer.
@@ -274,6 +317,25 @@ mod tests {
             hello_protocol(&hello.encode()[4..]),
             Some(crate::PROTOCOL_VERSION)
         );
+    }
+
+    #[test]
+    fn remote_key_wire_and_bounds() {
+        let msg = Control::RemoteKey {
+            key: RemoteKey::Next,
+        };
+        let wire = msg.encode();
+        assert_eq!(
+            std::str::from_utf8(&wire[4..]).unwrap(),
+            r#"{"type":"remote_key","key":"next"}"#
+        );
+        assert_eq!(Control::decode_body(&wire[4..]).unwrap(), msg);
+        // Raw key codes and unknown names are errors, never keys.
+        assert!(Control::decode_body(br#"{"type":"remote_key","key":"ctrl_alt_del"}"#).is_err());
+        assert!(Control::decode_body(br#"{"type":"remote_key","key":65}"#).is_err());
+        let syms: std::collections::HashSet<i32> =
+            RemoteKey::ALL.iter().map(|k| k.keysym()).collect();
+        assert_eq!(syms.len(), RemoteKey::ALL.len());
     }
 
     #[test]

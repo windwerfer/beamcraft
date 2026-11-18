@@ -9,7 +9,7 @@ use crate::tls;
 use anyhow::{bail, Context, Result};
 use bytes::Bytes;
 use mirrorwire_proto::clock::now_us;
-use mirrorwire_proto::control::{hello_protocol, Control, DisplayInfo, StreamInfo};
+use mirrorwire_proto::control::{hello_protocol, Control, DisplayInfo, RemoteKey, StreamInfo};
 use mirrorwire_proto::cursor::{CursorEvent, CursorImage, PointerUpdate};
 use mirrorwire_proto::fec::FecMode;
 use mirrorwire_proto::fragment::{fragment, FrameTiming, PacketHeader};
@@ -86,6 +86,9 @@ pub struct PresenterConfig {
     pub cursor_events: Option<mpsc::Receiver<CursorEvent>>,
     /// FEC setting and link feedback (see [`LinkControl`]).
     pub fec: Arc<LinkControl>,
+    /// Presenter-remote taps from the viewer (`remote_key`), rate limited here. `None` = the
+    /// presenter cannot inject keys; taps are dropped.
+    pub remote_keys: Option<mpsc::Sender<RemoteKey>>,
 }
 
 type Callback = Arc<dyn Fn() + Send + Sync>;
@@ -151,6 +154,7 @@ impl Presenter {
             on_keyframe_request,
             attempts: cfg.attempts,
             fec: cfg.fec.clone(),
+            remote_keys: cfg.remote_keys,
             resend,
         });
         let ep = endpoint.clone();
@@ -207,6 +211,7 @@ struct SessionShared {
     on_keyframe_request: Callback,
     attempts: Arc<Mutex<Vec<IncomingAttempt>>>,
     fec: Arc<LinkControl>,
+    remote_keys: Option<mpsc::Sender<RemoteKey>>,
     /// Recently sent video packets, for NACK resends.
     resend: Arc<Mutex<ResendWindow>>,
 }
@@ -375,6 +380,7 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
     // one, its first request is answered at once (a pre-armed gate cost
     // ~0.5 s of black at startup in the loopback).
     let mut keyframe_gate = KeyframeGate::default();
+    let mut remote_gate = TapGate::default();
     let result = async {
         loop {
             let msg = match read_msg(&mut recv).await {
@@ -416,6 +422,13 @@ async fn handle_viewer(incoming: quinn::Incoming, shared: Arc<SessionShared>) ->
                     shared.fec.on_report(loss_permille, recovered, unrecoverable, queue, rx_kbps, window_ms);
                 }
                 Control::Bottleneck { stage, rating } => shared.fec.on_viewer_verdict(stage, rating),
+                Control::RemoteKey { key } => {
+                    if let Some(tx) = &shared.remote_keys {
+                        if remote_gate.allow(Instant::now()) {
+                            let _ = tx.try_send(key);
+                        }
+                    }
+                }
                 Control::Bye => return Ok::<_, anyhow::Error>(()),
                 other => tracing::debug!("ignoring {other:?}"),
             }
@@ -801,5 +814,43 @@ mod tests {
             !should_drop_for_backlog(true, 500_000, 0),
             "keyframes always go out"
         );
+    }
+}
+
+/// At most [`TapGate::PER_SECOND`] remote taps per second per viewer: a stuck or hostile viewer
+/// must not flood the presenter's keyboard.
+#[derive(Default)]
+struct TapGate {
+    window_start: Option<Instant>,
+    count: u32,
+}
+
+impl TapGate {
+    const PER_SECOND: u32 = 10;
+
+    fn allow(&mut self, now: Instant) -> bool {
+        match self.window_start {
+            Some(t) if now.duration_since(t) < Duration::from_secs(1) => {}
+            _ => {
+                self.window_start = Some(now);
+                self.count = 0;
+            }
+        }
+        self.count += 1;
+        self.count <= Self::PER_SECOND
+    }
+}
+
+#[cfg(test)]
+mod tap_gate_tests {
+    use super::*;
+
+    #[test]
+    fn limits_taps_per_second() {
+        let mut g = TapGate::default();
+        let t0 = Instant::now();
+        let allowed = (0..50).filter(|_| g.allow(t0)).count();
+        assert_eq!(allowed, TapGate::PER_SECOND as usize);
+        assert!(g.allow(t0 + Duration::from_millis(1001)));
     }
 }

@@ -179,6 +179,11 @@ impl ViewerSession {
         });
     }
 
+    /// Tap a presenter-remote button (`remote_key`, protocol 9).
+    pub fn send_remote_key(&self, key: mirrorwire_proto::control::RemoteKey) {
+        let _ = self.control.send(Control::RemoteKey { key });
+    }
+
     pub fn control_sender(&self) -> mpsc::UnboundedSender<Control> {
         self.control.clone()
     }

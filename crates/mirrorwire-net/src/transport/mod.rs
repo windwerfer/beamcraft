@@ -117,6 +117,7 @@ mod tests {
                 config_dir: dir.clone(),
                 attempts: Default::default(),
                 cursor_events: Some(cursor_rx),
+                remote_keys: None,
                 fec: LinkControl::new(FecMode::Auto),
             },
             Arc::new(|| {}),
@@ -338,6 +339,14 @@ mod tests {
     }
 
     fn test_presenter(dir: &std::path::Path, fec: FecMode) -> (Presenter, Identity) {
+        test_presenter_with(dir, fec, None)
+    }
+
+    fn test_presenter_with(
+        dir: &std::path::Path,
+        fec: FecMode,
+        remote_keys: Option<mpsc::Sender<mirrorwire_proto::control::RemoteKey>>,
+    ) -> (Presenter, Identity) {
         std::fs::create_dir_all(dir).unwrap();
         let id = Identity::generate().unwrap();
         let p = Presenter::start(
@@ -359,6 +368,7 @@ mod tests {
                 config_dir: dir.to_path_buf(),
                 attempts: Default::default(),
                 cursor_events: None,
+                remote_keys,
                 fec: LinkControl::new(fec),
             },
             Arc::new(|| {}),
@@ -383,6 +393,38 @@ mod tests {
             height: 1440,
             scale_milli: 2000,
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn remote_taps_reach_the_presenter_and_are_rate_limited() {
+        use mirrorwire_proto::control::RemoteKey;
+        let dir = std::env::temp_dir().join(format!("mirrorwire-remote-{}", std::process::id()));
+        let (tx, mut rx) = mpsc::channel(64);
+        let (presenter, id) = test_presenter_with(&dir, FecMode::Off, Some(tx));
+        let viewer = ViewerSession::connect_traced(
+            &Identity::generate().unwrap(),
+            &target_of(&presenter, &id),
+            "t",
+            test_display(),
+            &ConnectTrace::new(),
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap();
+        for _ in 0..40 {
+            viewer.send_remote_key(RemoteKey::Next);
+        }
+        let first = tokio::time::timeout(Duration::from_secs(5), rx.recv())
+            .await
+            .unwrap();
+        assert_eq!(first, Some(RemoteKey::Next));
+        // Let the rest arrive, then count: a flood is cut to the per-second limit.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        let mut n = 1;
+        while rx.try_recv().is_ok() {
+            n += 1;
+        }
+        assert!((1..=10).contains(&n), "{n} taps got through");
     }
 
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
