@@ -362,8 +362,8 @@ impl VideoRenderer {
     /// viewer uses the CPU path (YUV → RGBA) instead.
     pub fn new(gl: &glow::Context) -> Result<SharedRenderer> {
         let egl = Egl::load(gl)?;
-        // SAFETY (glow calls): glow's methods are unsafe because they talk to
-        // the current GL context, which eframe made current for this call.
+        // SAFETY: glow's methods are unsafe because they talk to the current GL
+        // context, which eframe made current for this call.
         unsafe {
             let external = link(gl, FRAGMENT_EXTERNAL)?;
             let yuv = link(gl, FRAGMENT_YUV)?;

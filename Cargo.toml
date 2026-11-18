@@ -19,6 +19,7 @@ unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
 indexing_slicing = "deny"
+undocumented_unsafe_blocks = "deny"
 
 [workspace.dependencies]
 anyhow = "1"

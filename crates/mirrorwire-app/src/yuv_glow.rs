@@ -33,6 +33,7 @@ impl YuvPaint {
                 let gl = painter.gl();
                 let mut slot = self.renderer.lock_ok();
                 if slot.is_none() {
+                    // SAFETY: eframe makes its GL context current for the paint callback.
                     match unsafe { YuvRenderer::new(gl) } {
                         Ok(r) => *slot = Some(r),
                         Err(e) => {
@@ -42,6 +43,7 @@ impl YuvPaint {
                     }
                 }
                 if let Some(r) = slot.as_mut() {
+                    // SAFETY: same current GL context; `r` was built on it.
                     unsafe { r.draw(gl, &self.image, self.nearest) };
                 }
             })),
