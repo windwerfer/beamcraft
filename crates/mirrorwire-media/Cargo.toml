@@ -37,5 +37,5 @@ filmcraft-h264enc = { git = "https://github.com/storytold/filmcraft", rev = "cb9
 tokio = { workspace = true, features = ["fs"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-ashpd = { version = "0.14", optional = true, default-features = false, features = ["tokio", "screencast", "remote_desktop"] }
+ashpd = { version = "0.14", optional = true, default-features = false, features = ["tokio", "screencast", "remote_desktop", "camera"] }
 pipewire = { version = "0.10", optional = true }

@@ -25,6 +25,7 @@ use std::time::Instant;
 /// (`pipeline::maybe_replace_encoder`, `quality_mode`). Only a change of the user's own
 /// setting applies. FEC and pacing still follow the link.
 mod present;
+mod scan;
 mod video;
 mod widgets;
 use widgets::*;
@@ -133,6 +134,7 @@ pub fn run(
                     software_decoder,
                     name,
                     uri_input: String::new(),
+                    scan: None,
                     code_input: String::new(),
                     error: None,
                     watching: None,
@@ -214,6 +216,8 @@ struct MirrorApp {
     software_decoder: mirrorwire_media::decode::SoftwareDecoder,
     name: String,
     uri_input: String,
+    /// Running camera QR scan (the Scan button), if any.
+    scan: Option<scan::Scan>,
     code_input: String,
     error: Option<String>,
     watching: Option<ViewerHandle>,
@@ -260,6 +264,7 @@ impl MirrorApp {
     fn connect(&mut self, ctx: &egui::Context, target: ConnectInfo) {
         let repaint = ctx.clone();
         self.error = None;
+        self.scan = None;
         self.texture = None;
         self.yuv = None;
         self.cursor_tex = None;
@@ -459,7 +464,33 @@ impl MirrorApp {
                     Err(e) => self.error = Some(format!("{e:#}")),
                 }
             }
+            if scan::AVAILABLE {
+                if self.scan.is_some() {
+                    if ui.button("Stop scanning").clicked() {
+                        self.scan = None;
+                    }
+                } else if ui.button("Scan QR with camera").clicked() {
+                    self.error = None;
+                    self.scan = Some(scan::Scan::start());
+                }
+            }
         });
+        if let Some(scan) = self.scan.as_mut() {
+            match scan.poll() {
+                scan::Poll::Running(status) => {
+                    ui.label(format!("Scanning: {status}"));
+                    ui.label("Hold the presenter's QR code in front of the camera.");
+                }
+                scan::Poll::Found(info) => {
+                    self.scan = None;
+                    chosen = Some(info);
+                }
+                scan::Poll::Failed(e) => {
+                    self.scan = None;
+                    self.error = Some(e);
+                }
+            }
+        }
         ui.checkbox(
             &mut self.hwdec,
             "Hardware decoding (VideoToolbox / VAAPI, software fallback)",

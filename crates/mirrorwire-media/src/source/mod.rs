@@ -77,6 +77,7 @@ impl CaptureMode {
 /// Receives cursor changes from the capture thread. Must not block.
 pub type CursorSink = Arc<dyn Fn(CursorEvent) + Send + Sync>;
 
+pub mod camera;
 #[cfg(all(target_os = "linux", feature = "portal"))]
 #[allow(unsafe_code)]
 pub mod portal;
