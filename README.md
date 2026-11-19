@@ -341,7 +341,7 @@ when the portal only sent 6.8 fps, because PTS advanced by 1/60 s per frame.
 | VAAPI decode | compiles, unused on the iMac (software H.264 there) |
 | VideoToolbox encode/decode, macOS build | software H.264 decode works on the 2011 iMac |
 | Flatpak, AppImage, macOS .app / DMG builds | built in CI; Flatpak presenter and Intel DMG viewer start on the real machines |
-| camera QR scanning | not started |
+| camera QR scanning | Linux desktop viewer: "Scan QR with camera" button (portal + PipeWire); not yet run on a real camera |
 | Android viewer (APK) | built: arm64-v8a, Android 8+, MediaCodec decode (hardware first). First phone test froze after one picture; fixed, emulator-tested, device retest pending |
 | Android presenter | later (MediaProjection) |
 | Browser viewer (WebAssembly) | planned (WebTransport + WebCodecs); details in [docs/agents/roadmap.md](docs/agents/roadmap.md) |
