@@ -7,7 +7,7 @@ use std::path::Path;
 
 /// Presenter preferences that survive a restart.
 ///
-/// Unknown fields are ignored so older builds can read a newer file.
+/// Unknown fields are ignored; a missing field takes its default.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Settings {
     /// UDP port the presenter binds and advertises. `None` means the default

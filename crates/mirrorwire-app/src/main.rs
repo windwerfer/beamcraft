@@ -58,7 +58,6 @@ pub enum RendererChoice {
     /// Try wgpu first and fall back to OpenGL if it fails.
     Auto,
     /// OpenGL via eframe's glow backend. Default on macOS x86_64.
-    #[value(alias = "glow", alias = "opengl")]
     Gl,
     /// wgpu (Metal on macOS, Vulkan or GL on Linux).
     Wgpu,
@@ -245,7 +244,7 @@ pub fn resolve_renderer(cli: Option<RendererChoice>) -> RendererChoice {
     }
     match std::env::var("MIRRORWIRE_RENDERER") {
         Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
-            "gl" | "glow" | "opengl" => RendererChoice::Gl,
+            "gl" => RendererChoice::Gl,
             "wgpu" => RendererChoice::Wgpu,
             "auto" => RendererChoice::Auto,
             other => {
@@ -375,7 +374,7 @@ mod tests {
             resolve_renderer(Some(RendererChoice::Wgpu)),
             RendererChoice::Wgpu
         );
-        let cli = parse(&["--renderer", "glow"]).unwrap();
+        let cli = parse(&["--renderer", "gl"]).unwrap();
         assert_eq!(cli.renderer, Some(RendererChoice::Gl));
         assert!(
             cli.command.is_none(),

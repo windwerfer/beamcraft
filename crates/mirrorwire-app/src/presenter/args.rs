@@ -52,7 +52,6 @@ pub struct PresentArgs {
     /// Forward error correction for video packets: auto (default; parity
     /// adapts to the loss the viewer reports), off, or a fixed percentage of
     /// parity packets such as 20. Also MIRRORWIRE_FEC or the saved setting.
-    /// Older viewers always get plain packets.
     #[arg(long, value_parser = crate::capture_prefs::parse_fec_arg, value_name = "auto|off|PERCENT")]
     pub fec: Option<FecMode>,
     /// Adaptive bitrate (default on): the bitrate setting is the maximum;

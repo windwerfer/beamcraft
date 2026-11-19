@@ -12,15 +12,17 @@ Low-latency screen mirroring over a LAN (Wi-Fi, Ethernet, USB networking). One R
 show). The main job: put a Fedora KDE laptop's screen on an old iMac with near-HDMI latency,
 sharp text, and no special privileges.
 
-**Design priority: clarity and the better design over compatibility.** MirrorWire is in
-development. When compatibility with older builds costs code, drop the compatibility: no
-fallbacks for old peers, no capability flags or optional-for-compatibility fields, no "older
-viewer" branches. Choose the clearest code and the best design (best practice, better
-performance), change the format, bump `PROTOCOL_VERSION`, delete the old path. Presenter and
-viewer run the same release. You don't need to ask before a break, but **list every break for
-the owner** in the commit message and in your report ("Breaks: …"). Still fixed: the §1.5
-identifiers, and data on disk (pairings, identity, settings) is never a reason to crash; if its
-format changes, say what the user loses. See [decisions.md](docs/agents/decisions.md) D6.
+**Design priority: clarity and the better design over compatibility.** Until version 1.x (or
+until the owner says otherwise) **no backwards compatibility is written**: no migrations, no
+old-version support, no deprecated aliases or flags, no fallbacks for old peers, no
+capability flags or optional-for-compatibility fields. Clean and lean; breaking changes are
+fine: change the format, bump `PROTOCOL_VERSION`, delete the old path, note it in
+`CHANGELOG.md`. Presenter and viewer run the same release; a peer with another version is
+rejected with an "update both devices" message. Runtime fallbacks that have nothing to do with
+older MirrorWire versions (VAAPI to x264, combined portal session to plain ScreenCast) stay.
+Still fixed: the §1.5 identifiers, and data on disk (pairings, identity, settings) is never a
+reason to crash; if it can't be read, start fresh and say so. See
+[decisions.md](docs/agents/decisions.md) D6.
 
 **Non-goals:** remote desktop control (no input injection), internet/relay streaming, audio
 (not yet planned), a WebAssembly *presenter* (a browser viewer is planned), AirPlay or Miracast *sources*, anything that needs root,

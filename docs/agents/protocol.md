@@ -248,14 +248,13 @@ The ALPN stays `mirrorwire/1` (D5); an ALPN mismatch would fail inside TLS with 
 message.
 
 In the same commit: update this file, the README if users see it, add a test in
-`mirrorwire-proto` / `mirrorwire-net` that pins the new layout (encode → bytes → decode), and list
-the break for the owner in the commit message.
+`mirrorwire-proto` / `mirrorwire-net` that pins the new layout (encode → bytes → decode), and note
+the change in `CHANGELOG.md`.
 
 ## 5. Discovery and pairing
 
 - **mDNS:** service `_mirrorwire._udp.local.`, instance name = presenter name (hostname by
-  default), TXT `fp` (fingerprint), `v` (the presenter's `PROTOCOL_VERSION` in decimal; since
-  protocol 3, before that always `1`), `res` (`WxH`). The viewer's list (desktop, Android and
+  default), TXT `fp` (fingerprint), `v` (the presenter's `PROTOCOL_VERSION` in decimal), `res` (`WxH`). The viewer's list (desktop, Android and
   `mirrorwire discover`) still shows a presenter whose `v` differs or is missing, marked "older/
   newer MirrorWire …: update the presenter/this viewer"; connecting to it gets the `hello`
   rejection (§4).
