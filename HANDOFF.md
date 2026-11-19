@@ -1,15 +1,14 @@
 # HANDOFF
 
 ## Goal
-Owner order 20:13, item 1: pen/touch in Extend via ONE RemoteDesktop session for capture + input.
+Owner order 20:13, item 2: camera QR scan step 2 (desktop viewer).
 
 ## Done (this session)
-- `portal.rs::start_combined`: RemoteDesktop CreateSession + SelectDevices KEYBOARD|POINTER + ScreenCast SelectSources on the same session, one Start, OpenPipeWireRemote; injection on the portal thread (`remote.rs::inject` shared). Fallback to plain ScreenCast + the old separate Mirror-only injector, with the reason shown in the presenter window. Per-mode input tokens `portal_restore_token[_extend]_input`. `RemoteRoute` (presenter/mod.rs) keeps one stable input sender across source reopens. `FrameSource::remote_input/input_note`.
-- Tests: token names, Extend pointer maps on stream size not encode cap, separate-session mapping. Gates: cargo xtask ci + Android clippy green. No new unsafe/crate/permission. Breaks: none on the wire.
-- NOT done: item 2 (camera QR step 2, portal Camera + PipeWire source, Scan button) is next.
+- `media/src/source/camera.rs`: `extract_luma` (pure, unit-tested) + `CameraScanner<T>` (Linux, feature `portal`): Camera portal -> PipeWire stream (role Camera, no node id) -> throttled newest luma -> worker thread running `pairing::scan_qr_luma`. ashpd feature `camera` added (no new crate). `app/src/gui/scan.rs` + "Scan QR with camera" button next to Connect (hidden without portal). Raw formats only; MJPEG-only cameras show "cannot read" in the window.
+- Gates: cargo xtask ci + Android clippy green. No new unsafe/crate/Flatpak permission. Breaks: none. Decision logged in decisions.md; roadmap/README updated.
 
-## Manager must check on T480s (KDE Plasma Wayland) + TB336FU
-1. Mirror capture still starts; count portal dialogs (expect one, covering screen + keyboard/pointer; none on second start with token). 2. Pen in Mirror. 3. Pen in Extend (VIRTUAL monitor). 4. Remote keys (Next/Previous) in both modes. 5. If the combined dialog is denied/unsupported: window shows "could not carry input ..." and Mirror still captures; pen then Mirror only.
+## Manager must check (camera hardware, Linux desktop viewer)
+Click "Scan QR with camera" with a camera attached: portal dialog appears, status shows format/size, holding the presenter's QR connects. Also: does AUTOCONNECT with no node id pick the camera over the portal remote? Does a YUY2/NV12 camera work; what happens with an MJPEG-only one (status text)?
 
 ## Earlier work (summary)
 Pen/touch protocol 10, presenter remote protocol 9, Extend size cap, hardware findings fixes; see decisions.md.
@@ -34,7 +33,7 @@ cargo xtask ci; cargo ndk -t arm64-v8a --platform 26 clippy --release --locked -
 see `git log -1`
 
 ## Next step
-Camera QR scan step 2 (owner order 20:13 item 2), then NOTHING_LEFT if nothing hardware-free remains.
+Nothing hardware-free is left; the loop waits for hardware checks (combined session, pen, camera scan). Reply NOTHING_LEFT.
 
 (Superseded:)
 Loop waits for owner hardware checks (pen/touch, Extend dropdown, encode-size cap, KWin sizing). No hardware-free item is left except those parked/undecided.
