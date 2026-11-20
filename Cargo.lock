@@ -2135,6 +2135,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "miracast-nm"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+ "tracing",
+ "zbus",
+]
+
+[[package]]
+name = "miracast-rtp"
+version = "0.1.0"
+
+[[package]]
+name = "miracast-rtsp"
+version = "0.1.0"
+
+[[package]]
 name = "mirrorwire-android"
 version = "0.1.0"
 dependencies = [

@@ -213,6 +213,20 @@ Decisions made for the spike (all reversible, spike-local):
    (root-only policy); shipping GStreamer/FFmpeg demuxers (size, we need only TS+H.264);
    copying code from GPL projects (clean-room rule).
 
+### Crate skeleton (step 3, done)
+
+- `miracast-nm`: `P2pProvider` (object-safe, boxed futures), `MockP2pProvider`, `NmApi` +
+  `NmP2pProvider` (maps the trait onto NM calls, tested with the recording `MockNm`),
+  `zbus_backend::ZbusNm` (Linux only; real calls for device list, StartFind/StopFind, peers,
+  AddAndActivateConnection, DeactivateConnection; `connection_settings` is a pure function
+  with tests), `wfd` (device-info IE encode/parse, hostile-input safe), `Sink` (advertise,
+  wait for group, stop) and `SinkConfig` (name, RTSP port 7236, RTP port 19000).
+- `miracast-rtsp`: `State`, `Action`, `SinkSession` types only (step 4 fills them).
+- `miracast-rtp`: `RtpConfig`, `VideoAccessUnit`, `AudioFrame`, `MediaSink` only (step 5).
+- All three are in `xtask` LAYERS as standalone crates (no mirrorwire-* dependencies), no
+  `unsafe`. Rejected for the trait: `async fn` in traits (not object-safe, clippy
+  `async_fn_in_trait`), the `async-trait` crate (a new dependency for no gain).
+
 ## 8. Test plan
 
 1. **Unit (no hardware):** RTSP traces for M1-M7, M13, M16, TEARDOWN written from the spec
@@ -270,4 +284,8 @@ sudo -n true 2>/dev/null && echo "root-less check only; the spike itself never u
 - Is `wfd-ies` on the `wifi-p2p` setting enough to be listed, or does the IE need to be set on
   the P2P device itself? (Hardware; NM docs say per-connection.)
 - Audio mandatory or not for the TB336FU. (Hardware.)
-- Licence/size check for `zbus` before adding it (step 3).
+- zbus: already a workspace dependency (mirrorwire-net, MIT, same feature set
+  `tokio`/`proxy`/`tracing`), so no new licence or size cost. Done in step 3.
+- R2 (step 3): the zbus backend's `set_wfd_ies`, group address read (Ip4Config after
+  activation) and signal subscription are `Unsupported` stubs; how NM takes sink-side WFD IEs
+  must be checked on hardware (see the open question above).

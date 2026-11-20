@@ -8,17 +8,20 @@ Miracast sink spike (Android tablet TB336FU = source, Fedora KDE laptop = sink),
 
 - Step 2: miracast.md section 8a: mac80211_hwsim/virtual radios NOT usable without root here (no module tree, no Wi-Fi stack; userns works but cannot create radios). Skipped; tests use mocks + loopback.
 
+- Step 3: crates `miracast-nm` (P2pProvider trait, MockP2pProvider, NmApi/NmP2pProvider + MockNm, zbus backend `ZbusNm`, wfd IE encode/parse, Sink API), `miracast-rtsp` and `miracast-rtp` (type skeletons). In xtask LAYERS. 17 tests, clippy -D warnings and `cargo xtask ci --no-loopback` green. No unsafe, no new dependency (zbus already in the workspace). Details: miracast.md "Crate skeleton".
+
 ## Decisions
 See miracast.md section 7 (sink first, sans-IO parsers, no HDCP/UIBC, audio demuxed not played, rejected: root helpers, direct wpa_supplicant D-Bus, GStreamer/FFmpeg demux, GPL code).
 
 ## Open questions
+- zbus backend stubs (Unsupported): publishing WFD IEs via NM (R2), reading group addresses after activation, PeerAdded/GroupFormed signals. Need hardware to settle (R1/R2).
 - The research box is a VM without Wi-Fi/iw/NM: nothing about the Intel 8265 was measured; the doc lists what to run on the T480s (section 9). Facts marked [verify] in miracast.md (WFD IE bits, wfd_* masks, NM incoming GO negotiation = risk R1) come from memory of the specs and are unconfirmed.
 
 ## Verify
-`git log miracast-spike`; read docs/agents/miracast.md. No code yet.
+`git log miracast-spike`; `cargo test -p miracast-nm -p miracast-rtsp -p miracast-rtp`; `cargo clippy -p miracast-nm -p miracast-rtsp -p miracast-rtp --all-targets -- -D warnings`; `cargo xtask layers`.
 
 ## Next step
-Step 3: crate skeleton (miracast-nm, miracast-rtsp, miracast-rtp, P2pProvider trait, mock provider, zbus NM stub, sink API).
+Step 4: `miracast-rtsp` sink-side M1-M7 state machine (fill `SinkSession`, `State`, `Action`), `wfd_*` parameter parsing, keepalive, teardown, tests from spec-derived traces.
 
 ## Commit
 see `git log -1` on miracast-spike
