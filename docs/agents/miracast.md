@@ -340,3 +340,26 @@ sudo -n true 2>/dev/null && echo "root-less check only; the spike itself never u
 - Not done: feeding MirrorWire's decoder from an example binary (left to step 6, which needs a
   source anyway); AAC/LPCM parsing beyond PES; PCR-based clock recovery (decode ASAP, as a
   low-latency sink should).
+
+### Loopback end-to-end (step 6, done)
+
+Crate `miracast-loopback` (test support, `publish = false`, no deps beyond the two spike crates,
+no unsafe; test code may panic, the crate allows unwrap/indexing locally).
+
+- `run_sink` / `run_sink_logged`: drives `SinkSession` + `Receiver` over real sockets (TCP
+  accept, UDP RTP). `Action::Send` -> TCP write, `StartMedia` -> start draining UDP,
+  `need_keyframe` -> `SinkSession::request_idr()` (M13). Datagrams are left in the socket buffer
+  until PLAY is acknowledged (a source may send right after the M7 reply: found by the test,
+  not a spec rule). `run_sink_logged` calls back with the RTSP trace in both directions.
+- `TestSource`: RTSP client side M1-M7 (answers the sink's M2, picks 1080p30 CBP in M4 with the
+  RTP port the sink announced in M3, answers M6 SETUP/M7 PLAY), builds TS/RTP frames with
+  `ts::synth` (PSI + H.264 AU + audio PES, every 5th frame IDR), sends them on localhost.
+- Tests (`tests/e2e.rs`): all access units arrive byte-identical, no loss/bad datagrams;
+  one dropped RTP packet -> `need_keyframe` -> M13 `wfd_idr_request` on the wire -> decoding
+  resumes at the next IDR; garbage datagrams are counted, not fatal. 3 passes in a row, 0.3 s.
+- Binary `miracast-sink-demo` for the hardware test: listens on TCP 7236 / UDP 19000, prints the
+  RTSP trace and per-second media stats, writes the H.264 Annex B stream to a file.
+- NOT done: feeding the access units to MirrorWire's decoder (mirrorwire-media) in an example.
+  The spike crates stay free of mirrorwire-* dependencies; use `ffplay stream.h264` instead.
+  The sink/NM glue (P2P group -> listen on 7236) is also not wired: group setup is manual in
+  the hardware checklist until R1/R2 are settled.
