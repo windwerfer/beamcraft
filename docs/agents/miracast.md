@@ -1,0 +1,252 @@
+# Miracast sink spike (branch `miracast-spike`)
+
+Status: **research only (step 1 of 6)**. Nothing here is implemented or hardware-tested.
+Everything below is written from the specs and general knowledge, clean-room (no MiracleCast,
+gnome-network-displays or other GPL code was read). Items marked **[verify]** are unconfirmed
+facts that the later steps or the owner's hardware run must check. The research box (a VM
+container) has no Wi-Fi radio, no `iw`, no NetworkManager, so nothing about the T480s was
+measured here; commands to measure it are in section 9.
+
+Specs to work from: Wi-Fi Display Technical Specification (Wi-Fi Alliance, v1.1; message and
+parameter grammar), Wi-Fi Peer-to-Peer (P2P) Technical Specification (GO negotiation, IEs),
+RFC 2326 (RTSP 1.0), RFC 3550 (RTP), RFC 2250 (MPEG-TS over RTP), ISO/IEC 13818-1 (MPEG-TS),
+ITU-T H.264, NetworkManager D-Bus API reference (`org.freedesktop.NetworkManager.*`).
+
+Goal: **sink** role first. An Android tablet (TB336FU, "Enable wireless display" in Cast
+settings) is the source; the Fedora KDE laptop is the sink and shows the stream (later through
+MirrorWire's decoder and viewer path). Rootless: NetworkManager D-Bus + Polkit only.
+
+## 1. Fedora packages and permissions
+
+| Need | Package | Notes |
+|---|---|---|
+| NM with Wi-Fi P2P | `NetworkManager`, `NetworkManager-wifi` | P2P device support exists since NM 1.16 (`NMDeviceWifiP2P`, `NMWifiP2PPeer`, connection type `wifi-p2p`). Current Fedora ships far newer. **[verify]** `rpm -q NetworkManager` |
+| P2P in the supplicant | `wpa_supplicant` | Must be built with `CONFIG_P2P` (+ `CONFIG_WIFI_DISPLAY` for WFD IEs). **[verify]** that Fedora's build has both: `wpa_cli` is not needed; check that NM exposes a `p2p-dev-wlp…` device in `nmcli device`. |
+| Driver/firmware | `kernel`, `linux-firmware` | Intel 8265: `iwlwifi` + `iwlmvm`, firmware `iwlwifi-8265-*.ucode`. |
+| RTSP/RTP/TS | none | Written in Rust in the new crates; no GStreamer or FFmpeg demuxer needed for the spike (FFmpeg only as a test-stream generator). |
+| D-Bus client | crate `zbus` (MIT) | Pure Rust, check licence and size at step 3. |
+
+**Polkit.** All calls go through NetworkManager's own actions, no custom rule file should be
+needed for an active local session **[verify with `pkaction --verbose`]**:
+`org.freedesktop.NetworkManager.network-control` (activate/deactivate connections, default
+`yes` for active sessions), `…settings.modify.system` or `…settings.modify.own` (adding a
+connection profile; use an in-memory/volatile profile to avoid storing anything),
+`…wifi.scan` (start P2P find). If a prompt appears on a given setup, document a minimal rule in
+`/etc/polkit-1/rules.d/` as an option for the user, never as a requirement we install.
+Direct access to `fi.w1.wpa_supplicant1` is **rejected**: its D-Bus policy is root-only and it
+would fight NM for the interface.
+
+**Firewall (firewalld, Fedora KDE default zone `FedoraWorkstation`).** The sink needs inbound
+TCP **7236** (RTSP, the sink listens) and inbound UDP on the RTP port the sink announces
+(default **19000**; RTCP port+1 if used). `FedoraWorkstation` already allows 1025-65535 TCP/UDP
+so this works on a stock install. A P2P group interface that lands in a stricter zone needs
+those two ports; if the sink is the GO and NM runs DHCP for it, UDP 67 must be reachable too
+(NM's `shared` method uses the `nm-shared` zone, which allows DHCP/DNS). The MirrorWire
+Flatpak already has `--system-talk-name=org.fedoraproject.FirewallD1`, but **a Miracast spike
+must not add any Flatpak permission** (NM D-Bus access from a sandbox would need a new
+`--system-talk-name=org.freedesktop.NetworkManager`, an owner decision). Spike scope: native
+binary / example only.
+
+## 2. Network structure
+
+1. **P2P discovery.** Both sides run P2P find (social channels 1/6/11 on 2.4 GHz). The sink
+   publishes a **WFD IE** in its P2P probe responses/beacons; the source sees "a WFD sink named
+   X". NM: `Device.WifiP2P.StartFind` → signals `PeerAdded/PeerRemoved`, peers appear as
+   `NMWifiP2PPeer` objects (name, address, `WfdIEs`, strength).
+2. **Group formation.** Either P2P GO Negotiation (both sides send GO intent 0-15, the higher
+   wins, tie-break bit) or, for an already-existing group, invitation. Provisioning is WPS
+   (PBC is normal for Miracast; PIN for some devices). NM: `ActivateConnection` with a
+   `wifi-p2p` profile naming the `peer` MAC and `wps-method`; NM brings up a `p2p-wlp…-N`
+   group interface. **Open risk R1:** NM drives *outgoing* connects well; whether it accepts an
+   *incoming* GO-negotiation request from the tablet when the user taps our sink in the Cast
+   list is **[verify on hardware]**. Fallback: the sink finds the source and connects itself
+   (works when the tablet is sitting in its wireless-display screen and is discoverable).
+3. **Who is GO.** The spec allows both. Android sources historically set a high GO intent and
+   become GO themselves **[verify on the TB336FU]**; the sink then is a P2P client and gets its
+   address by DHCP from the source (commonly `192.168.49.0/24`, GO `192.168.49.1`). If the sink
+   is GO, NM (`ipv4.method=shared`) serves DHCP. The design must handle both: the sink learns
+   the source IP from the group interface (GO address, or the DHCP lease/ARP), never hardcodes
+   it.
+4. **IP + sessions.** After group formation the source opens a TCP connection to the sink's
+   RTSP port **7236** (advertised in the WFD IE "session management control port"). The sink
+   listens before the group comes up (bind on `0.0.0.0` or the group interface).
+5. **Media.** RTP/UDP, source → sink: the source sends to the sink's `wfd_client_rtp_ports`
+   (default 19000), MPEG-TS payload (RTP payload type 33, 90 kHz clock, 7 TS packets =
+   1316 bytes per datagram). TCP interleaved transport is optional in the spec; Android uses UDP.
+6. **Teardown.** RTSP TEARDOWN (M8), or the group is removed; the sink returns to P2P find.
+
+### WFD information element (what the sink publishes)
+
+A vendor-specific P2P attribute (Wi-Fi Alliance OUI `50:6F:9A`, type `0x0A`) carrying WFD
+subelements, each `id(1) len(2) payload`. The sink needs **subelement 0, WFD Device
+Information**, length 6: device info bitmap (2 bytes), session management control port
+(2 bytes, 7236), maximum throughput (2 bytes, Mbit/s). Bitmap fields, from the spec
+**[verify the exact bit positions against the spec text in step 3]**: bits 1:0 device type
+(0 source, 1 primary sink, 2 secondary sink, 3 dual role), bits 3:2 session availability, a
+service-discovery-support bit, a preferred-connectivity bit (P2P vs TDLS), content-protection
+and time-sync support bits, and the audio-only/audio-unsupported bits for sinks. Our value:
+primary sink, session available, no HDCP, no time sync, P2P connectivity. Other subelements
+(coupled sink info, associated BSSID, extended capability) are optional and left out.
+NM carries these bytes in the `wfd-ies` property of the `wifi-p2p` setting (and exposes the
+peer's on `NMWifiP2PPeer.WfdIEs`). Missing WFD IEs mean the source will not list us at all, so
+this is the first thing to check on hardware.
+
+## 3. RTSP message flow (sink view)
+
+RTSP 1.0 (RFC 2326), source = RTSP client for requests M1/M3/M4/M5/…, sink = client for
+M2 and M6/M7. TCP port 7236, `CSeq` per direction. Required feature tag
+`org.wfa.wfd1.0`.
+
+| Msg | Direction | Request | Sink does |
+|---|---|---|---|
+| M1 | source → sink | `OPTIONS * RTSP/1.0`, `Require: org.wfa.wfd1.0` | Reply 200 with `Public: org.wfa.wfd1.0, GET_PARAMETER, SET_PARAMETER` |
+| M2 | sink → source | `OPTIONS * RTSP/1.0`, `Require: org.wfa.wfd1.0` | Send; expect 200 with the source's `Public:` list |
+| M3 | source → sink | `GET_PARAMETER rtsp://localhost/wfd1.0`, body lists parameter names | Reply with the capability values (below) |
+| M4 | source → sink | `SET_PARAMETER`, body = chosen `wfd_video_formats`, `wfd_audio_codecs`, `wfd_client_rtp_ports`, `wfd_presentation_URL` (`rtsp://<src-ip>/wfd1.0/streamid=0 none`), optionally `wfd_uibc_*`, `wfd_content_protection` | Validate the selection is a subset of what we offered, reply 200 (or 4xx and abort) |
+| M5 | source → sink | `SET_PARAMETER`, `wfd_trigger_method: SETUP` | Reply 200, then send M6 |
+| M6 | sink → source | `SETUP rtsp://<src-ip>/wfd1.0/streamid=0`, `Transport: RTP/AVP/UDP;unicast;client_port=19000` | Parse 200: `Session: <id>;timeout=<s>`, `Transport … server_port=…` |
+| M7 | sink → source | `PLAY rtsp://<src-ip>/wfd1.0/streamid=0`, `Session: <id>` | On 200, start RTP receive; source starts sending |
+| M8 | either | `TEARDOWN` | Stop media, close, go back to find |
+| M9/M10 | sink → source | `PAUSE`/`PLAY` | optional |
+| M11/M12 | | standby / `wfd_standby` | optional, reply 200 |
+| M13 | sink → source | `SET_PARAMETER wfd_idr_request` | Request a keyframe after loss |
+| M16 | source → sink | empty `GET_PARAMETER` | Keepalive; reply 200 within the session timeout (often 30 s; the source sends it about every timeout/2) |
+
+The sink must answer M3 with, at least (`wfd_*` values are text, CRLF separated):
+
+- `wfd_video_formats`: `native cea_mask vesa_mask hh_mask latency min_slice_size slice_enc_params
+  frame_rate_control max_hres max_vres` then per-format `profile level …`. Profile bitmask
+  `01` = Constrained Baseline (CBP), `02` = Constrained High (CHP); level bitmask
+  `01` 3.1, `02` 3.2, `04` 4.1, `08` 4.2. CEA bit positions **[verify against the spec table]**:
+  0 640x480p60, 1 720x480p60, 2 720x480i60, 3 720x576p50, 4 720x576i50, 5 1280x720p30,
+  6 1280x720p60, 7 1920x1080p30, 8 1920x1080p60, 9 1920x1080i60, 10 1280x720p25,
+  11 1280x720p50, 12 1920x1080p25, 13 1920x1080p50, 14 1920x1080i50, 15 1280x720p24,
+  16 1920x1080p24. VESA and handheld (HH) masks list further sizes. 640x480p60 CBP 3.1 is the
+  mandatory baseline every sink must accept.
+- `wfd_audio_codecs`: e.g. `LPCM 00000003 00, AAC 00000001 00` (mode bitmasks per codec; LPCM
+  44.1/48 kHz 16 bit 2 ch is the mandatory format, AAC-LC 2 ch optional; `none` if the sink
+  declines audio, which sources accept) **[verify masks]**.
+- `wfd_client_rtp_ports`: `RTP/AVP/UDP;unicast 19000 0 mode=play`.
+- `wfd_content_protection: none` (no HDCP, ever; see decisions D8/security stance).
+- `wfd_display_edid: none`, `wfd_coupled_sink: none`, `wfd_uibc_capability: none`,
+  `wfd_standby_resume_capability: none`, `wfd_connector_type: 05` (or per spec) as needed.
+  Unknown/unsupported parameters are answered `none` or with `GET_PARAMETER` status 415-style
+  per spec; the state machine must tolerate parameters it does not know and never panic on
+  hostile text (AGENTS.md §1.9).
+
+## 4. Media format
+
+- **Video:** H.264/AVC in **MPEG-2 TS**, stream type `0x1B`, PES stream id `0xE0`. Profiles
+  CBP (mandatory) and optionally CHP; levels 3.1 to 4.2. Annex B byte stream inside PES; SPS/PPS
+  repeated at IDR frames. Frame rates 24-60; resolution from the table above (1080p30/p60 on
+  4.1/4.2). Sources do not use B-frames in low-latency mode, but the decoder must tolerate them.
+- **Audio:** LPCM (private stream 1, PES stream id `0xBD` with a 4-byte LPCM header, 48/44.1 kHz,
+  16 bit, 2 ch) and AAC-LC (stream type `0x0F`, ADTS/LATM). The spike decodes/plays none in
+  steps 4-5 beyond demuxing PES; audio is a non-goal for MirrorWire (AGENTS.md), so the
+  sink may advertise `none` and ignore audio. Default decision: **advertise LPCM only if the
+  tablet refuses a stream without audio**, else `none`.
+- **TS layer:** 188-byte packets, PAT/PMT repeated about every 100 ms (the sink must not assume
+  one PAT per stream), PCR on the video PID, continuity-counter checking per PID, 33-bit PTS/DTS
+  at 90 kHz with wraparound.
+- **RTP layer:** header per RFC 3550, PT 33, SSRC fixed per session, sequence gaps → loss; the
+  jitter buffer is tiny (target ~20-50 ms, reorder window a few packets) because latency matters
+  more than perfection; on loss in a video PID send M13 (IDR request) instead of waiting.
+
+## 5. What Android sources expect
+
+From the AOSP wireless-display design (behaviour to confirm on the TB336FU, **[verify]** each):
+
+- The sink must show in the tablet's "Wireless display" list, which needs a valid WFD IE
+  (primary sink, available) in P2P probe responses and **a stable device name**.
+- After the user taps it, the *source* chooses the topology and usually tries to be GO; the sink
+  must accept the P2P invitation/GO-negotiation (risk R1 above) and join without user input on
+  the laptop side (PBC auto-accept).
+- The source waits for the sink's IP, then connects TCP to 7236 within a few seconds. If nothing
+  listens, the session fails with a generic "can't connect". So **start listening on 7236 before
+  forming the group**.
+- It runs M1-M7 strictly in order, answers M2 at once, picks one video format out of ours, and
+  keeps M16 keepalives; a missed keepalive or a malformed reply makes it tear down after the
+  session timeout. Replies must carry the right `CSeq` and `Content-Length`.
+- Some vendor builds (Lenovo's "Wireless display" is a Mediatek-based AOSP feature) expect
+  `wfd_content_protection` absent or `none`, a mandatory-subset `wfd_video_formats`, and may
+  request 1080p30 from CBP level 3.1/4.1. They tolerate `wfd_audio_codecs: none` only
+  sometimes **[verify]**; keep an LPCM fallback ready.
+- IDR on demand (`wfd_idr_request`) is honoured by AOSP sources; the first frame after PLAY is
+  an IDR with SPS/PPS.
+- Screen rotation changes resolution mid-stream: expect new SPS and different frame size
+  without a new RTSP exchange (M4 may be sent again with new `wfd_video_formats`).
+
+## 6. Intel 8265 on the ThinkPad T480s
+
+Intel Dual Band Wireless-AC 8265 ("Windstorm Peak"/Stone Peak), driver `iwlwifi` + `iwlmvm`.
+That driver family advertises the **P2P-client, P2P-GO and P2P-device** interface types, so
+NM can create the `p2p-dev-*` device. Expected, **[verify with `iw list` on the T480s]**:
+interface combinations allow one managed station plus one P2P-client/GO plus the P2P-device,
+but only on **a single channel at a time** (or time-shared with a throughput hit); so the group
+is best on the channel the laptop's Wi-Fi is already on, or the laptop's normal Wi-Fi drops/
+stutters while the group is up. 5 GHz P2P may be restricted by regulatory flags (no-IR/DFS
+channels cannot host a GO). Firmware (`iwlwifi-8265-*.ucode`) comes from `linux-firmware`.
+Not measured here. Commands: section 9.
+
+## 7. Architecture for the spike
+
+Crates (new, workspace members, no change to existing crates):
+
+- `crates/miracast-nm`: `P2pProvider` trait (find, peers, connect/accept, group info with
+  interface + local/peer IP, WFD IE set) + `MockP2pProvider` + NM D-Bus backend (zbus), calls
+  tested against a mock bus/object.
+- `crates/miracast-rtsp`: sink-side M1-M7 state machine, text parsers for the `wfd_*`
+  parameters, keepalive and teardown timers; pure sans-IO state machine (feed bytes, get
+  actions) so it tests from message traces.
+- `crates/miracast-rtp`: RTP receive, TS demux, H.264 access-unit assembly, audio PES, loss/
+  jitter handling; output = access units for a sink trait (MirrorWire's `VideoSink` later).
+
+Layering: core crates depend on nothing platform-specific; only the NM backend knows D-Bus.
+No `unsafe` is expected anywhere. Wire parsers follow AGENTS.md §1.9 (bounded lengths, no panics).
+Decisions made for the spike (all reversible, spike-local):
+
+1. Sink first; Source later. Sink listens on 7236 before the group is formed.
+2. Sans-IO RTSP/TS parsers, so tests need no sockets and fuzzing is possible later.
+3. No HDCP, no content protection, no UIBC.
+4. Audio is demuxed but not played (non-goal); advertise it only if hardware demands it.
+5. Rejected: root helpers or stopping NM (MiracleCast style); direct `wpa_supplicant` D-Bus
+   (root-only policy); shipping GStreamer/FFmpeg demuxers (size, we need only TS+H.264);
+   copying code from GPL projects (clean-room rule).
+
+## 8. Test plan
+
+1. **Unit (no hardware):** RTSP traces for M1-M7, M13, M16, TEARDOWN written from the spec
+   grammar; malformed and oversized messages; `wfd_video_formats` / audio parameter
+   round-trips; TS packets with continuity errors, PAT/PMT repeats, PTS wrap; RTP reorder/loss.
+2. **Loopback (no Wi-Fi):** a small test *source* speaking M1-M7 and sending TS over RTP to
+   `127.0.0.1`; media from `ffmpeg -f lavfi -i testsrc2 -c:v libx264 -profile:v baseline
+   -bsf:v h264_mp4toannexb -f mpegts` pushed through RTP framing; decode through the existing
+   decoder path in an example binary.
+3. **Virtual radios:** step 2 checks whether `mac80211_hwsim` is usable without root.
+4. **Hardware (owner):** T480s + TB336FU: (a) the tablet lists the sink; (b) group forms and
+   which side is GO; (c) RTSP M1-M7 completes; (d) video appears; (e) loss/IDR behaviour;
+   (f) idle teardown. Checklist with exact commands goes into HANDOFF.md at step 6; logs to
+   return: the RTSP trace (both directions, timestamps), `nmcli -f all device show`
+   output for the p2p devices, `journalctl -u NetworkManager --since`, and a `tcpdump`
+   summary if allowed.
+
+## 9. Commands to measure on the T480s (for the owner or step 6)
+
+```sh
+rpm -q NetworkManager NetworkManager-wifi wpa_supplicant linux-firmware
+nmcli device                       # expect wlp…, and p2p-dev-wlp… 
+iw list | grep -A12 'Supported interface modes'     # P2P-client / P2P-GO / P2P-device
+iw list | grep -B2 -A10 'valid interface combinations'
+pkaction --verbose --action-id org.freedesktop.NetworkManager.network-control
+sudo -n true 2>/dev/null && echo "root-less check only; the spike itself never uses sudo"
+```
+
+## 10. Open questions
+
+- R1: does NM accept an incoming GO negotiation (tablet taps the sink), or must the sink
+  initiate? Decides the discovery UX. (Hardware.)
+- Exact WFD IE bit layout and `wfd_*` masks: confirm against the spec text (step 3/4).
+- Is `wfd-ies` on the `wifi-p2p` setting enough to be listed, or does the IE need to be set on
+  the P2P device itself? (Hardware; NM docs say per-connection.)
+- Audio mandatory or not for the TB336FU. (Hardware.)
+- Licence/size check for `zbus` before adding it (step 3).
