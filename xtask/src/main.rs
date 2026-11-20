@@ -14,6 +14,7 @@ const LAYERS: &[(&str, &[&str])] = &[
     ("miracast-nm", &[]),
     ("miracast-rtsp", &[]),
     ("miracast-rtp", &[]),
+    ("miracast-loopback", &[]),
     ("mirrorwire-proto", &[]),
     ("mirrorwire-film", &[]),
     ("mirrorwire-media", &["mirrorwire-proto", "mirrorwire-film"]),
