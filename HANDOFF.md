@@ -6,6 +6,8 @@ Miracast sink spike (Android tablet TB336FU = source, Fedora KDE laptop = sink),
 ## Done
 - Step 1: `docs/agents/miracast.md` (packages, Polkit, firewall, P2P network structure, WFD IE, M1-M7 flow, media formats, Android expectations, Intel 8265 notes, spike architecture, test plan, commands to measure the T480s).
 
+- Step 2: miracast.md section 8a: mac80211_hwsim/virtual radios NOT usable without root here (no module tree, no Wi-Fi stack; userns works but cannot create radios). Skipped; tests use mocks + loopback.
+
 ## Decisions
 See miracast.md section 7 (sink first, sans-IO parsers, no HDCP/UIBC, audio demuxed not played, rejected: root helpers, direct wpa_supplicant D-Bus, GStreamer/FFmpeg demux, GPL code).
 
@@ -16,7 +18,7 @@ See miracast.md section 7 (sink first, sans-IO parsers, no HDCP/UIBC, audio demu
 `git log miracast-spike`; read docs/agents/miracast.md. No code yet.
 
 ## Next step
-Step 2: check mac80211_hwsim / virtual Wi-Fi without root on this machine, document in miracast.md.
+Step 3: crate skeleton (miracast-nm, miracast-rtsp, miracast-rtp, P2pProvider trait, mock provider, zbus NM stub, sink API).
 
 ## Commit
 see `git log -1` on miracast-spike

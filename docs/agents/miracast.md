@@ -222,13 +222,34 @@ Decisions made for the spike (all reversible, spike-local):
    `127.0.0.1`; media from `ffmpeg -f lavfi -i testsrc2 -c:v libx264 -profile:v baseline
    -bsf:v h264_mp4toannexb -f mpegts` pushed through RTP framing; decode through the existing
    decoder path in an example binary.
-3. **Virtual radios:** step 2 checks whether `mac80211_hwsim` is usable without root.
+3. **Virtual radios:** not usable without root, see section 8a; skipped.
 4. **Hardware (owner):** T480s + TB336FU: (a) the tablet lists the sink; (b) group forms and
    which side is GO; (c) RTSP M1-M7 completes; (d) video appears; (e) loss/IDR behaviour;
    (f) idle teardown. Checklist with exact commands goes into HANDOFF.md at step 6; logs to
    return: the RTSP trace (both directions, timestamps), `nmcli -f all device show`
    output for the p2p devices, `journalctl -u NetworkManager --since`, and a `tcpdump`
    summary if allowed.
+
+## 8a. Virtual radios without root (step 2 result, 2026-11-20)
+
+Checked on the research box (Linux 6.12.113+, uid 1000, no sudo, VM without Wi-Fi):
+
+- No `mac80211_hwsim`: the kernel has no loadable-module tree (`/lib/modules` missing, no
+  `modprobe`/`modinfo`), no `/sys/class/ieee80211`, no `/proc/net/wireless`, no `iw`, `nmcli` or
+  `wpa_supplicant`. `/proc/config.gz` has `CONFIG_MODULES=y` and `CONFIG_USER_NS=y` but no `CFG80211`, `MAC80211` or `MAC80211_HWSIM` at all, so the kernel cannot do Wi-Fi even with root.
+- Unprivileged user namespaces work (`unshare -Urn` succeeds and gives a private network
+  namespace), but a namespace cannot load kernel modules or create radios: `hwsim` radios are
+  created by the module in the init namespace (needs `CAP_SYS_MODULE`/root) and only *moved*
+  into namespaces afterwards with `iw phy ... set netns`.
+- No `/dev/rfkill`, `/dev/vhci`, `/dev/uhid`.
+
+**Result: virtual Wi-Fi radios are not usable here without root.** Not planned: P2P tests
+on virtual radios on this box. Where it could work later (owner's T480s or CI with root):
+`sudo modprobe mac80211_hwsim radios=2`, then one phy per netns (`iw phy phyN set netns
+name NS`) with a `wpa_supplicant` P2P instance each. That tests wpa_supplicant, not our code,
+and NetworkManager cannot easily be run per netns without a private system bus; it is
+therefore a low-value, optional test. The spike relies on mocks (`P2pProvider`), loopback
+RTSP/RTP tests (step 6) and the real hardware run instead.
 
 ## 9. Commands to measure on the T480s (for the owner or step 6)
 
