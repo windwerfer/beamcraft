@@ -1,6 +1,9 @@
 # HANDOFF
 
 ## Goal
+v0.1.0 released: https://github.com/windwerfer/mirrorwire/releases/tag/v0.1.0 (dmg, apk, AppImage, flatpak, windows zip, CHANGELOG notes). Tag run's release job failed (no *.zip: Windows artifact arrives as a folder); release was created by hand from run 44753111691 artifacts, build.yml now zips the folder (untested until the next tag). Parked Miracast roadmap entry added.
+
+## Earlier goal
 Owner order 2026-11-19 12:29: no backwards compatibility until 1.x; v0.1.0 release prep.
 
 ## Done

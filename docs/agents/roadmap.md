@@ -331,7 +331,26 @@ target), **planned**, **idea**. Update this file when an item moves.
 - **GitHub Releases** for stable download links (release job exists for `v*` tags, never run;
   the owner decides when to tag).
 - Flathub (vendored cargo sources), notarized Mac builds (needs a paid Apple account).
-- Miracast sink as a second `VideoSink`.
+- Miracast sink as a second `VideoSink`. See also the parked "Miracast support" entry below.
+- **Miracast support (Wi-Fi Display, optional MS-MICE)** — status: idea/parked, owner decides.
+  Goal: an Android tablet/phone mirrors to the Linux laptop via Miracast (tablet = source,
+  laptop = sink), optionally the reverse, as a clean reusable Rust crate.
+  - Rootless via NetworkManager D-Bus WifiP2P (no MiracleCast-style root or stopping NM);
+    Polkit `allow_active` for the logged-in user. The owner's ThinkPad (Intel 8265) supports P2P.
+  - Crate split: `miracast-nm` (NM P2P scan, peers, group formation, WFD IEs), `miracast-rtsp`
+    (M1-M7 state machine), `miracast-rtp` (RTP/MPEG-TS, H.264 + audio); a `P2pProvider` trait
+    keeps the core platform-agnostic. Sink API first, then Source.
+  - Effort comparable to the existing protocol work; mostly doable with traces and mocks,
+    hardware only for P2P timing and edge cases.
+  - Platforms: Linux primary; Windows via the Wi-Fi Direct API (~1.5-2x work); macOS has no
+    practical public Wi-Fi Direct API and AirPlay is not viable.
+  - MS-MICE later: P2P discovery, then streaming over LAN (TCP 7250); limited Android
+    support, mostly Windows.
+  - Next steps if adopted: sink crate API, NM P2P backend with mocks, RTSP M1-M7 from specs and
+    traces (clean-room: MiracleCast and gnome-network-displays are GPL, copy nothing), RTP
+    receive path, hardware validation with the owner.
+  - Open check: whether the TB336FU still offers a Miracast source ("Cast"/"Wireless
+    display"); stock Android dropped it, only some vendors ship it.
 - **Android viewer polish:** zero-copy MediaCodec → `SurfaceTexture`/`AHardwareBuffer` → GL
   texture instead of the CPU YUV→RGBA copy; soft keyboard for the link field (today: QR via
   the camera app, or the keypad + mDNS list); a stable release keystore so updates install
