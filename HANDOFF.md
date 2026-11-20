@@ -12,6 +12,8 @@ Miracast sink spike (Android tablet TB336FU = source, Fedora KDE laptop = sink),
 
 - Step 4: `miracast-rtsp` sink M1-M7 state machine (`message`, `params`, `SinkSession`), 21 tests, clippy -D warnings and `cargo xtask ci --no-loopback` green. No unsafe, no dependencies. Details: miracast.md "RTSP sink (step 4)".
 
+- Step 5: `miracast-rtp` RTP parse + reorder, TS demux (PAT/PMT/PES/CC), `Receiver`, `MediaSink` loss -> `need_keyframe`, `ts::synth` stream builders, 16 tests incl. a real ffmpeg mpegts stream; clippy -D warnings green, no unsafe, no deps. Details: miracast.md "RTP/TS receive (step 5)". Decoder-feeding example binary NOT done (moved to step 6).
+
 ## Decisions
 See miracast.md section 7 (sink first, sans-IO parsers, no HDCP/UIBC, audio demuxed not played, rejected: root helpers, direct wpa_supplicant D-Bus, GStreamer/FFmpeg demux, GPL code).
 
@@ -23,7 +25,7 @@ See miracast.md section 7 (sink first, sans-IO parsers, no HDCP/UIBC, audio demu
 `git log miracast-spike`; `cargo test -p miracast-nm -p miracast-rtsp -p miracast-rtp`; `cargo clippy -p miracast-nm -p miracast-rtsp -p miracast-rtp --all-targets -- -D warnings`; `cargo xtask layers`.
 
 ## Next step
-Step 5: `miracast-rtp`: RTP receive (RFC 3550, PT 33), MPEG-TS demux to H.264 access units (+ audio PES), jitter/loss handling (loss -> `SinkSession::request_idr`), tests with a synthetic stream (ffmpeg if present, else a hand-built TS), example binary into the existing decoder path if feasible.
+Step 6: loopback end-to-end: a minimal test source (RTSP client side M1-M7 against `SinkSession` over TCP on localhost + `ts::synth`/ffmpeg TS over RTP UDP to the sink's port, `Receiver` -> `MediaSink`, `need_keyframe` -> `request_idr`), optionally decode the access units with the existing MirrorWire decoder in an example binary; then write the HARDWARE TEST CHECKLIST here (T480s commands, what to tap on the TB336FU, logs to send back) and reply NOTHING_LEFT.
 
 ## Commit
 see `git log -1` on miracast-spike

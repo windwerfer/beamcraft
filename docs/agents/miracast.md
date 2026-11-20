@@ -222,7 +222,7 @@ Decisions made for the spike (all reversible, spike-local):
   with tests), `wfd` (device-info IE encode/parse, hostile-input safe), `Sink` (advertise,
   wait for group, stop) and `SinkConfig` (name, RTSP port 7236, RTP port 19000).
 - `miracast-rtsp`: filled in step 4, see "RTSP sink (step 4)" below.
-- `miracast-rtp`: `RtpConfig`, `VideoAccessUnit`, `AudioFrame`, `MediaSink` only (step 5).
+- `miracast-rtp`: filled in step 5, see "RTP/TS receive (step 5)" below.
 - All three are in `xtask` LAYERS as standalone crates (no mirrorwire-* dependencies), no
   `unsafe`. Rejected for the trait: `async fn` in traits (not object-safe, clippy
   `async_fn_in_trait`), the `async-trait` crate (a new dependency for no gain).
@@ -313,3 +313,30 @@ sudo -n true 2>/dev/null && echo "root-less check only; the spike itself never u
 - R2 (step 3): the zbus backend's `set_wfd_ies`, group address read (Ip4Config after
   activation) and signal subscription are `Unsupported` stubs; how NM takes sink-side WFD IEs
   must be checked on hardware (see the open question above).
+
+### RTP/TS receive (step 5, done)
+
+`miracast-rtp` is sans-IO: the caller owns the UDP socket and calls `Receiver::push(datagram,
+&mut impl MediaSink)`. No dependencies, no unsafe, workspace `indexing_slicing = deny` holds.
+
+- `rtp`: RFC 3550 header parse (CSRC, extension, padding skipped; errors, never panics) and a
+  `Reorder` buffer (depth 8 packets, wrap-safe seq compare, duplicates/late packets dropped and
+  counted; when full it skips the gap and reports `lost`).
+- `ts`: 188-byte packet demux. PAT -> first non-zero program's PMT -> streams by type (0x1B video;
+  0x0F/0x11/0x81/0x83/0x06 audio). PES reassembly per PID, PTS (33 bit, 90 kHz), a PES with
+  length 0 (video) flushes on the next start, a bounded one flushes when complete. Per-PID
+  continuity check (duplicate tolerated, discontinuity flag honoured). PSI CRC32 is not verified
+  (single-packet sections only; hostile data is bounded anyway). `MAX_PES` 8 MiB.
+- Loss policy: an RTP gap or video CC error drops the partial PES, discards video until the next
+  IDR (NAL type 5) and calls `MediaSink::need_keyframe()` once per episode; the caller maps that
+  to `SinkSession::request_idr()` (M13). `TsStats` and `Receiver::{bad_datagrams,lost_packets}`
+  are meant for the GUI diagnostics (AGENTS.md 1.8).
+- Audio PES is delivered as `AudioFrame`, not decoded or played (non-goal).
+- `ts::synth` (public, indexing allowed, test-data only) builds PAT/PMT/PES/TS/RTP; step 6 reuses
+  it as the loopback source.
+- Tests (16): header edge cases, reorder/wrap/dup/gap, clean stream, reordered stream, RTP loss,
+  CC gap, garbage datagrams, hostile PES header, and a real `ffmpeg -f mpegts` (libx264) stream
+  (skipped when ffmpeg or libx264 is missing; it ran on this box).
+- Not done: feeding MirrorWire's decoder from an example binary (left to step 6, which needs a
+  source anyway); AAC/LPCM parsing beyond PES; PCR-based clock recovery (decode ASAP, as a
+  low-latency sink should).
