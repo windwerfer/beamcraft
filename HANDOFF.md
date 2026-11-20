@@ -10,6 +10,8 @@ Miracast sink spike (Android tablet TB336FU = source, Fedora KDE laptop = sink),
 
 - Step 3: crates `miracast-nm` (P2pProvider trait, MockP2pProvider, NmApi/NmP2pProvider + MockNm, zbus backend `ZbusNm`, wfd IE encode/parse, Sink API), `miracast-rtsp` and `miracast-rtp` (type skeletons). In xtask LAYERS. 17 tests, clippy -D warnings and `cargo xtask ci --no-loopback` green. No unsafe, no new dependency (zbus already in the workspace). Details: miracast.md "Crate skeleton".
 
+- Step 4: `miracast-rtsp` sink M1-M7 state machine (`message`, `params`, `SinkSession`), 21 tests, clippy -D warnings and `cargo xtask ci --no-loopback` green. No unsafe, no dependencies. Details: miracast.md "RTSP sink (step 4)".
+
 ## Decisions
 See miracast.md section 7 (sink first, sans-IO parsers, no HDCP/UIBC, audio demuxed not played, rejected: root helpers, direct wpa_supplicant D-Bus, GStreamer/FFmpeg demux, GPL code).
 
@@ -21,7 +23,7 @@ See miracast.md section 7 (sink first, sans-IO parsers, no HDCP/UIBC, audio demu
 `git log miracast-spike`; `cargo test -p miracast-nm -p miracast-rtsp -p miracast-rtp`; `cargo clippy -p miracast-nm -p miracast-rtsp -p miracast-rtp --all-targets -- -D warnings`; `cargo xtask layers`.
 
 ## Next step
-Step 4: `miracast-rtsp` sink-side M1-M7 state machine (fill `SinkSession`, `State`, `Action`), `wfd_*` parameter parsing, keepalive, teardown, tests from spec-derived traces.
+Step 5: `miracast-rtp`: RTP receive (RFC 3550, PT 33), MPEG-TS demux to H.264 access units (+ audio PES), jitter/loss handling (loss -> `SinkSession::request_idr`), tests with a synthetic stream (ffmpeg if present, else a hand-built TS), example binary into the existing decoder path if feasible.
 
 ## Commit
 see `git log -1` on miracast-spike

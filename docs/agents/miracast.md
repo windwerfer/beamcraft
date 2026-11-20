@@ -221,11 +221,35 @@ Decisions made for the spike (all reversible, spike-local):
   AddAndActivateConnection, DeactivateConnection; `connection_settings` is a pure function
   with tests), `wfd` (device-info IE encode/parse, hostile-input safe), `Sink` (advertise,
   wait for group, stop) and `SinkConfig` (name, RTSP port 7236, RTP port 19000).
-- `miracast-rtsp`: `State`, `Action`, `SinkSession` types only (step 4 fills them).
+- `miracast-rtsp`: filled in step 4, see "RTSP sink (step 4)" below.
 - `miracast-rtp`: `RtpConfig`, `VideoAccessUnit`, `AudioFrame`, `MediaSink` only (step 5).
 - All three are in `xtask` LAYERS as standalone crates (no mirrorwire-* dependencies), no
   `unsafe`. Rejected for the trait: `async fn` in traits (not object-safe, clippy
   `async_fn_in_trait`), the `async-trait` crate (a new dependency for no gain).
+
+### RTSP sink (step 4, done)
+
+- `message`: RFC 2326 framing (`parse_message` returns `Ok(None)` until a whole message is
+  buffered, bounded: head 8 KiB, body 32 KiB, 64 headers), `Request`/`Response` builders that
+  add `Content-Length`. Bare-LF line ends are accepted; header names are case-insensitive.
+- `params`: `wfd_video_formats` (spec field order: native, preferred-display-mode, then per
+  H.264 entry profile, level, CEA/VESA/HH masks, latency, min-slice, slice-enc, frame-rate
+  control, max h/v res; entries comma separated), `wfd_audio_codecs`,
+  `wfd_client_rtp_ports`, `wfd_presentation_URL`, subset checks (`VideoFormats::accepts`) and
+  the CEA table. Bit positions remain `[verify]`.
+- `SinkSession` (sans-IO): `handle_input(bytes, now)`, `poll(now)` (keepalive timeout from the
+  `Session: id;timeout=N` of the M6 reply, default 60 s), `request_idr()` (M13),
+  `teardown()` (M8). Actions: `Send`, `Negotiated` (M4 accepted, also on mid-stream
+  renegotiation), `StartMedia`, `StopMedia`, `Close{reason}`.
+- Behaviour choices: M2 is sent right after answering M1; the M2 reply is tolerated in any
+  order relative to M3. M3 answers known parameters (unsupported ones with `none`) and leaves
+  unknown names out. M4 outside the offered set gets 406 and closes. A different RTP port in
+  M4 is refused (we already listen on ours). Requests before M1 get 455; unknown methods 405;
+  an unknown `Require:` feature tag 551. The default offer is CBP+CHP level 4.1, CEA mask
+  0x1E1 (480p60, 720p30/60, 1080p30/60), no audio.
+- 21 unit tests: full M1-M7 trace, byte-at-a-time input, keepalive/IDR/teardown, timeout,
+  rejection paths, hostile input. No unsafe, no dependencies, workspace `indexing_slicing`
+  lint satisfied.
 
 ## 8. Test plan
 
