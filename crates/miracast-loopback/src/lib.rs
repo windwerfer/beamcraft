@@ -31,6 +31,8 @@ pub struct SinkReport {
     pub negotiated: Option<Negotiated>,
     pub close_reason: Option<String>,
     pub idr_requests_sent: u32,
+    /// Loss episodes whose IDR request was rate-limited away.
+    pub idr_suppressed: u64,
     pub lost_packets: u64,
     pub bad_datagrams: u64,
     /// RTSP reached PLAY but no datagram arrived in time (likely the firewall).
@@ -192,8 +194,11 @@ pub fn run_sink_logged(
         }
         if want_idr {
             want_idr = false;
-            report.idr_requests_sent += 1;
-            pending.extend(session.request_idr());
+            let req = session.request_idr(Instant::now());
+            if !req.is_empty() {
+                report.idr_requests_sent += 1;
+            }
+            pending.extend(req);
         }
         for a in pending.drain(..) {
             match a {
@@ -225,6 +230,7 @@ pub fn run_sink_logged(
             break;
         }
     }
+    report.idr_suppressed = session.idr_suppressed;
     report.lost_packets = rx.lost_packets;
     report.bad_datagrams = rx.bad_datagrams;
     report

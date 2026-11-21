@@ -105,7 +105,10 @@ fn loss_triggers_idr_request_and_recovery() {
     let (report, rec) = sink.join().unwrap();
     assert!(report.lost_packets >= 1, "{report:?}");
     assert!(rec.idr_wanted >= 1);
-    assert_eq!(report.idr_requests_sent, rec.idr_wanted);
+    assert_eq!(
+        u64::from(report.idr_requests_sent) + report.idr_suppressed,
+        u64::from(rec.idr_wanted)
+    );
     // Frames before the loss arrive intact; decoding resumes at the next IDR (frame 10, 15).
     assert_eq!(rec.video[0].data, sent[0]);
     assert!(rec.video.iter().any(|u| u.keyframe && u.data == sent[10]));

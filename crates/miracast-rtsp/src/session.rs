@@ -11,6 +11,10 @@ const PUBLIC: &str = "org.wfa.wfd1.0, GET_PARAMETER, SET_PARAMETER";
 /// RTSP default session timeout when the source names none (RFC 2326).
 const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 const MAX_PENDING: usize = 16;
+/// At most one IDR request (M13) per this interval: a loss burst gives many `need_keyframe`
+/// episodes, and the source needs only one request per keyframe (hardware run 4: requests
+/// 3 s apart, a second one while the link was already gone).
+pub const MIN_IDR_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Where the sink is in the M1-M7 sequence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -121,6 +125,9 @@ pub struct SinkSession {
     timeout: Duration,
     last_rx: Option<Instant>,
     media_started: bool,
+    last_idr: Option<Instant>,
+    /// IDR requests not sent because of [`MIN_IDR_INTERVAL`].
+    pub idr_suppressed: u64,
 }
 
 impl Default for SinkSession {
@@ -146,6 +153,8 @@ impl SinkSession {
             timeout: DEFAULT_TIMEOUT,
             last_rx: None,
             media_started: false,
+            last_idr: None,
+            idr_suppressed: 0,
         }
     }
 
@@ -201,10 +210,20 @@ impl SinkSession {
     }
 
     /// Ask the source for a keyframe (M13) after loss.
-    pub fn request_idr(&mut self) -> Vec<Action> {
+    /// M13 `wfd_idr_request`, rate-limited to one per [`MIN_IDR_INTERVAL`]; an empty result
+    /// means the request was suppressed (counted in `idr_suppressed`) or not playing.
+    pub fn request_idr(&mut self, now: Instant) -> Vec<Action> {
         if self.state != State::Playing {
             return Vec::new();
         }
+        if self
+            .last_idr
+            .is_some_and(|t| now.saturating_duration_since(t) < MIN_IDR_INTERVAL)
+        {
+            self.idr_suppressed += 1;
+            return Vec::new();
+        }
+        self.last_idr = Some(now);
         let req = self.request("SET_PARAMETER", Pending::Idr, |r| {
             r.with_params_body("wfd_idr_request\r\n".into())
         });
@@ -680,7 +699,7 @@ mod tests {
         assert_eq!(resp(&sent(&a)[0]).status, 200);
         assert_eq!(resp(&sent(&a)[0]).headers.cseq(), Some(9));
 
-        let a = s.request_idr();
+        let a = s.request_idr(t);
         let m = sent(&a);
         assert_eq!(request(&m[0]).body, "wfd_idr_request\r\n");
 
@@ -692,6 +711,23 @@ mod tests {
         assert!(matches!(a[2], Action::Close { .. }));
         assert_eq!(s.state(), State::Closed);
         assert!(s.handle_input(M1.as_bytes(), t).is_empty());
+    }
+
+    #[test]
+    fn idr_requests_are_rate_limited() {
+        let t = Instant::now();
+        let mut s = playing(t);
+        let ms = |n| t + Duration::from_millis(n);
+        assert_eq!(sent(&s.request_idr(ms(0))).len(), 1);
+        assert!(s.request_idr(ms(10)).is_empty());
+        assert!(s.request_idr(ms(999)).is_empty());
+        assert_eq!(s.idr_suppressed, 2);
+        let m = sent(&s.request_idr(ms(1000)));
+        assert_eq!(request(&m[0]).body, "wfd_idr_request\r\n");
+        // Not playing: nothing, and not counted as suppressed.
+        let mut idle = SinkSession::default();
+        assert!(idle.request_idr(t).is_empty());
+        assert_eq!(idle.idr_suppressed, 0);
     }
 
     #[test]
