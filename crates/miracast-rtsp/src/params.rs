@@ -37,7 +37,9 @@ pub fn parse_params(body: &str) -> Vec<(&str, &str)> {
 pub struct H264Codec {
     /// Bit 0 CBP, bit 1 CHP.
     pub profile: u8,
-    /// Bit 0 3.1, 1 3.2, 2 4.1, 3 4.2 (spec: levels 3.1 upwards) [verify].
+    /// Bit 0 3.1, 1 3.2, 2 4.1, 3 4.2 (spec: levels 3.1 upwards) [verify]. In an offer this is
+    /// the highest level supported; a source may pick any lower one (seen on hardware: the
+    /// TB336FU picked 3.2 against our 4.1 offer).
     pub level: u8,
     pub cea: u32,
     pub vesa: u32,
@@ -141,7 +143,8 @@ impl VideoFormats {
                     && c.level != 0
                     && self.codecs.iter().any(|o| {
                         c.profile & !o.profile == 0
-                            && c.level & !o.level == 0
+                            // The offered level is a maximum: lower levels fit.
+                            && c.level <= o.level
                             && c.cea & !o.cea == 0
                             && c.vesa & !o.vesa == 0
                             && c.hh & !o.hh == 0
@@ -346,6 +349,13 @@ mod tests {
         // level 4.2 not offered.
         assert!(!ours.accepts(&pick(
             "00 00 01 08 00000080 00000000 00000000 00 0000 0000 00 none none"
+        )));
+        // A lower level than offered fits (hardware: TB336FU picked CHP 3.2 against 4.1).
+        assert!(ours.accepts(&pick(
+            "00 00 02 02 00000080 00000000 00000000 00 0000 0000 00 none none"
+        )));
+        assert!(ours.accepts(&pick(
+            "00 00 01 01 00000080 00000000 00000000 00 0000 0000 00 none none"
         )));
         // VESA not offered.
         assert!(!ours.accepts(&pick(

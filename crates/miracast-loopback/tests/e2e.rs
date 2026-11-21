@@ -50,6 +50,10 @@ fn negotiates_and_streams_every_access_unit() {
     let mut src = TestSource::connect(addr);
     let caps = src.negotiate();
     assert!(caps.contains("wfd_video_formats"), "M3 answer: {caps}");
+    assert!(
+        caps.contains("wfd_audio_codecs: LPCM 00000002 00"),
+        "M3 answer: {caps}"
+    );
 
     let mut sent = Vec::new();
     for _ in 0..20 {

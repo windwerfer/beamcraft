@@ -16,6 +16,7 @@ use std::time::{Duration, Instant};
 use miracast_rtp::ts::synth::{packetize, pes, psi_packets, rtp_packets, PID_AUDIO, PID_VIDEO};
 use miracast_rtp::{MediaSink, Receiver};
 use miracast_rtsp::message::{parse_message, Message, Request, Response};
+use miracast_rtsp::params::AudioCodec;
 use miracast_rtsp::{Action, Negotiated, SinkConfig, SinkSession, State};
 
 const FEATURE: &str = "org.wfa.wfd1.0";
@@ -29,6 +30,22 @@ pub struct SinkReport {
     pub idr_requests_sent: u32,
     pub lost_packets: u64,
     pub bad_datagrams: u64,
+}
+
+/// The sink's offer: the default video formats plus LPCM audio (48 kHz, 16 bit, stereo:
+/// `LPCM 00000002 00`). Audio is offered but never played: the TB336FU (MtkWifiDisplaySource)
+/// refuses `wfd_audio_codecs: none` with "Sink and source share no commonly supported audio
+/// formats" (hardware run 2026-11-21).
+pub fn sink_config(rtp_port: u16) -> SinkConfig {
+    SinkConfig {
+        rtp_port,
+        audio: Some(vec![AudioCodec {
+            name: "LPCM".into(),
+            modes: 0x2,
+            latency: 0,
+        }]),
+        ..SinkConfig::default()
+    }
 }
 
 /// Drives a [`SinkSession`] and a [`Receiver`] over real sockets until the session closes
@@ -50,11 +67,7 @@ pub fn run_sink_logged(
     deadline: Duration,
     log: &mut dyn FnMut(String),
 ) -> SinkReport {
-    let cfg = SinkConfig {
-        rtp_port: udp.local_addr().unwrap().port(),
-        ..SinkConfig::default()
-    };
-    let mut session = SinkSession::new(cfg);
+    let mut session = SinkSession::new(sink_config(udp.local_addr().unwrap().port()));
     let mut rx = Receiver::new();
     let mut report = SinkReport::default();
     let start = Instant::now();
@@ -349,5 +362,22 @@ impl TestSource {
     pub fn teardown(&mut self) {
         let c = self.send_request("TEARDOWN", "rtsp://127.0.0.1/wfd1.0/streamid=0", "");
         let _ = self.expect_response(c);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use miracast_rtsp::params::{audio_accepts, encode_audio_codecs, parse_audio_codecs};
+
+    #[test]
+    fn sink_offers_lpcm_48k_stereo() {
+        let cfg = sink_config(19000);
+        assert_eq!(cfg.rtp_port, 19000);
+        assert_eq!(encode_audio_codecs(&cfg.audio), "LPCM 00000002 00");
+        // The TB336FU's M4 pick (run 3) must be accepted, and so must "no audio".
+        let pick = parse_audio_codecs("LPCM 00000002 00").unwrap();
+        assert!(audio_accepts(&cfg.audio, &pick));
+        assert!(audio_accepts(&cfg.audio, &None));
     }
 }
