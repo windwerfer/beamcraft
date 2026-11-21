@@ -6,9 +6,11 @@
 //!
 //! With `--nm` it does the Wi-Fi Direct part itself through NetworkManager (no root): find a
 //! source, join its group with our WFD IEs (the user taps this device in the source's Cast
-//! list), connect to the group owner's RTSP port, and leave the group at the end.
+//! list), connect to the group owner's RTSP port, and leave the group at the end. In `--nm`
+//! mode a session whose media stops for 8 s ends as "link lost"; `--reconnect N` then joins
+//! again (the source asks the user again). The STA frequency is logged around each session.
 //!
-//! Usage: `miracast-sink-demo [--nm [--peer NAME] [--find-secs 60] [--attempts 3]]
+//! Usage: `miracast-sink-demo [--nm [--peer NAME] [--find-secs 60] [--attempts 3] [--reconnect 0]]
 //!         [--source 192.168.49.1:7236] [--rtp-port 19000] [--out stream.h264] [--secs 600]`
 #![forbid(unsafe_code)]
 #![allow(clippy::print_stderr)]
@@ -97,86 +99,122 @@ fn log_line(start: Instant, l: &str) {
     eprintln!("[{:6.1}s] {l}", start.elapsed().as_secs_f32());
 }
 
-/// `--nm`: find the source over Wi-Fi Direct and join its group (R1/R2 flow). Returns the
-/// sink (to leave the group afterwards), the source's RTSP address and the group interface.
 #[cfg(target_os = "linux")]
-fn join_with_nm(
-    rt: &tokio::runtime::Runtime,
-    start: Instant,
-) -> Result<(NmSink, SocketAddr, String), String> {
+type NmSink = miracast_nm::Sink<miracast_nm::NmP2pProvider<miracast_nm::zbus_backend::ZbusNm>>;
+
+/// Logs the STA frequency (the radio the group shares) for the trace.
+#[cfg(target_os = "linux")]
+fn log_sta(rt: &tokio::runtime::Runtime, sink: &NmSink, start: Instant, when: &str) {
+    match rt.block_on(sink.provider().api().sta_frequencies()) {
+        Ok(v) if v.is_empty() => log_line(start, &format!("{when}: no Wi-Fi station connected")),
+        Ok(v) => {
+            for (iface, mhz) in v {
+                log_line(
+                    start,
+                    &format!(
+                        "{when}: STA {iface} on {} (the group's channel is chosen by the \
+                         source and not exposed by NetworkManager)",
+                        miracast_nm::freq::describe(mhz)
+                    ),
+                );
+            }
+        }
+        Err(e) => log_line(start, &format!("{when}: STA frequency unknown: {e}")),
+    }
+}
+
+/// `--nm`: join, stream, leave; again after a lost link, up to `--reconnect` times.
+#[cfg(target_os = "linux")]
+fn run_nm(out: &mut Out, rtp: &str, secs: u64, start: Instant) {
     use miracast_loopback::nm_flow::{join_source, FlowOptions};
     use miracast_nm::zbus_backend::ZbusNm;
     use miracast_nm::{NmP2pProvider, Sink, SinkConfig};
 
-    let opts = FlowOptions {
-        peer_name: std::env::args()
-            .any(|a| a == "--peer")
-            .then(|| arg("--peer", "")),
+    let flow = FlowOptions {
+        peer_name: has_flag("--peer").then(|| arg("--peer", "")),
         find_timeout: Duration::from_secs(arg("--find-secs", "60").parse().unwrap_or(60)),
         attempts: arg("--attempts", "3").parse().unwrap_or(3),
         ..FlowOptions::default()
     };
-    rt.block_on(async {
-        let api = ZbusNm::connect_system().await.map_err(|e| e.to_string())?;
-        let sink = Sink::new(NmP2pProvider::new(api), SinkConfig::default());
-        let mut log = |l: String| log_line(start, &l);
-        match join_source(&sink, &opts, &mut log).await {
-            Ok(j) => Ok((sink, j.rtsp, j.group.interface)),
-            Err(e) => Err(e.to_string()),
-        }
-    })
-}
-
-#[cfg(target_os = "linux")]
-type NmSink = miracast_nm::Sink<miracast_nm::NmP2pProvider<miracast_nm::zbus_backend::ZbusNm>>;
-
-fn main() {
-    let nm = has_flag("--nm");
-    let source = arg("--source", "192.168.49.1:7236");
-    let rtp = arg("--rtp-port", "19000");
-    let out = arg("--out", "stream.h264");
-    let secs: u64 = arg("--secs", "600").parse().unwrap_or(600);
-    let source: SocketAddr = match source.parse() {
-        Ok(a) => a,
-        Err(e) => return eprintln!("--source {source}: not an IP:port ({e})"),
-    };
-    let udp = match UdpSocket::bind(format!("0.0.0.0:{rtp}")) {
-        Ok(u) => u,
-        Err(e) => return eprintln!("cannot bind UDP {rtp}: {e}"),
-    };
-    let file = match File::create(&out) {
-        Ok(f) => f,
-        Err(e) => return eprintln!("cannot create {out}: {e}"),
-    };
-    let now = Instant::now();
-    let mut opts = RunOptions::new(Duration::from_secs(secs));
-    let mut source = source;
-
-    #[cfg(target_os = "linux")]
+    let reconnects: u32 = arg("--reconnect", "0").parse().unwrap_or(0);
     let rt = match tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
     {
         Ok(rt) => rt,
-        Err(e) => return eprintln!("cannot start the async runtime: {e}"),
+        Err(e) => return log_line(start, &format!("cannot start the async runtime: {e}")),
     };
-    #[cfg(target_os = "linux")]
-    let mut joined: Option<NmSink> = None;
-    if nm {
-        #[cfg(target_os = "linux")]
-        match join_with_nm(&rt, now) {
-            Ok((sink, rtsp, iface)) => {
-                source = rtsp;
-                opts.interface = Some(iface);
-                joined = Some(sink);
-            }
-            Err(e) => return log_line(now, &format!("--nm failed: {e}")),
+    let sink = match rt.block_on(ZbusNm::connect_system()) {
+        Ok(api) => Sink::new(NmP2pProvider::new(api), SinkConfig::default()),
+        Err(e) => return log_line(start, &format!("--nm failed: {e}")),
+    };
+    let deadline = start + Duration::from_secs(secs);
+    for session in 0..=reconnects {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
         }
-        #[cfg(not(target_os = "linux"))]
-        return eprintln!("--nm needs NetworkManager (Linux)");
+        log_line(start, &format!("session {}: joining", session + 1));
+        log_sta(&rt, &sink, start, "before join");
+        let joined = rt.block_on(join_source(&sink, &flow, &mut |l| log_line(start, &l)));
+        let j = match joined {
+            Ok(j) => j,
+            Err(e) => {
+                log_line(start, &format!("--nm failed: {e}"));
+                break;
+            }
+        };
+        let udp = match UdpSocket::bind(format!("0.0.0.0:{rtp}")) {
+            Ok(u) => u,
+            Err(e) => {
+                log_line(start, &format!("cannot bind UDP {rtp}: {e}"));
+                let _ = rt.block_on(sink.stop());
+                break;
+            }
+        };
+        let opts = RunOptions {
+            interface: Some(j.group.interface.clone()),
+            close_on_silence: Some(Duration::from_secs(8)),
+            stats_every: Some(Duration::from_secs(5)),
+            ..RunOptions::new(deadline.saturating_duration_since(Instant::now()))
+        };
+        log_line(start, &format!("connecting to the source at {}", j.rtsp));
+        let report = run_sink_logged(j.rtsp, udp, out, &opts, &mut |l| log_line(start, &l));
+        log_sta(&rt, &sink, start, "after session");
+        log_line(
+            start,
+            &format!(
+                "session {} ended after {} s of media: {:?}; link lost {}",
+                session + 1,
+                report.media_secs,
+                report.close_reason,
+                report.link_lost
+            ),
+        );
+        eprintln!("done: {report:?}");
+        match rt.block_on(sink.stop()) {
+            Ok(()) => log_line(start, "Wi-Fi Direct group left"),
+            Err(e) => log_line(
+                start,
+                &format!("leaving the Wi-Fi Direct group failed: {e}"),
+            ),
+        }
+        if !report.wants_reconnect() {
+            break;
+        }
     }
+}
 
-    let mut sink = Out {
+fn main() {
+    let rtp = arg("--rtp-port", "19000");
+    let out_path = arg("--out", "stream.h264");
+    let secs: u64 = arg("--secs", "600").parse().unwrap_or(600);
+    let file = match File::create(&out_path) {
+        Ok(f) => f,
+        Err(e) => return eprintln!("cannot create {out_path}: {e}"),
+    };
+    let now = Instant::now();
+    let mut out = Out {
         file,
         start: now,
         video: 0,
@@ -186,15 +224,27 @@ fn main() {
         last_report: now,
         sps: None,
     };
-    eprintln!("connecting to the source at {source}, RTP on UDP {rtp}, writing {out}");
-    let report = run_sink_logged(source, udp, &mut sink, &opts, &mut |l| log_line(now, &l));
-    eprintln!("done: {report:?}");
-
-    #[cfg(target_os = "linux")]
-    if let Some(s) = joined {
-        match rt.block_on(s.stop()) {
-            Ok(()) => log_line(now, "Wi-Fi Direct group left"),
-            Err(e) => log_line(now, &format!("leaving the Wi-Fi Direct group failed: {e}")),
-        }
+    if has_flag("--nm") {
+        #[cfg(target_os = "linux")]
+        run_nm(&mut out, &rtp, secs, now);
+        #[cfg(not(target_os = "linux"))]
+        eprintln!("--nm needs NetworkManager (Linux)");
+        return;
     }
+    let source = arg("--source", "192.168.49.1:7236");
+    let source: SocketAddr = match source.parse() {
+        Ok(a) => a,
+        Err(e) => return eprintln!("--source {source}: not an IP:port ({e})"),
+    };
+    let udp = match UdpSocket::bind(format!("0.0.0.0:{rtp}")) {
+        Ok(u) => u,
+        Err(e) => return eprintln!("cannot bind UDP {rtp}: {e}"),
+    };
+    let opts = RunOptions {
+        stats_every: Some(Duration::from_secs(5)),
+        ..RunOptions::new(Duration::from_secs(secs))
+    };
+    eprintln!("connecting to the source at {source}, RTP on UDP {rtp}, writing {out_path}");
+    let report = run_sink_logged(source, udp, &mut out, &opts, &mut |l| log_line(now, &l));
+    eprintln!("done: {report:?}");
 }

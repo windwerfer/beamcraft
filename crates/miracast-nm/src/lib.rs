@@ -7,6 +7,7 @@
 //! on the system bus (no root, no stopping NetworkManager).
 
 mod error;
+pub mod freq;
 mod mock;
 mod nm;
 mod provider;

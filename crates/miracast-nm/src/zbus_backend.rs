@@ -22,6 +22,10 @@ const ACTIVE_IFACE: &str = "org.freedesktop.NetworkManager.Connection.Active";
 const IP4_IFACE: &str = "org.freedesktop.NetworkManager.IP4Config";
 /// Bound on what we read from NM (AGENTS.md 1.9; NM is trusted, but cheap to bound).
 const MAX_ADDRESSES: usize = 16;
+const WIRELESS_IFACE: &str = "org.freedesktop.NetworkManager.Device.Wireless";
+const AP_IFACE: &str = "org.freedesktop.NetworkManager.AccessPoint";
+/// `NM_DEVICE_TYPE_WIFI`.
+const DEVICE_TYPE_WIFI: u32 = 2;
 /// `NM_DEVICE_TYPE_WIFI_P2P`.
 const DEVICE_TYPE_WIFI_P2P: u32 = 30;
 
@@ -127,6 +131,37 @@ impl ZbusNm {
             .build()
             .await
             .map_err(map_err)
+    }
+
+    /// Frequency (MHz) of each Wi-Fi station's current access point, e.g.
+    /// `[("wlp58s0", 2462)]`. The P2P group shares that radio; NM does not expose the group's
+    /// own frequency (miracast.md section 12), so this is logged next to each session.
+    pub async fn sta_frequencies(&self) -> Result<Vec<(String, u32)>, P2pError> {
+        let nm = self.proxy(NM_PATH, NM_IFACE).await?;
+        let all: Vec<OwnedObjectPath> = nm.call("GetAllDevices", &()).await.map_err(map_err)?;
+        let mut out = Vec::new();
+        for path in all {
+            let dev = self.proxy(path.as_str(), DEVICE_IFACE).await?;
+            let ty: u32 = dev.get_property("DeviceType").await.map_err(map_err)?;
+            if ty != DEVICE_TYPE_WIFI {
+                continue;
+            }
+            let iface: String = dev.get_property("Interface").await.map_err(map_err)?;
+            let wifi = self.proxy(path.as_str(), WIRELESS_IFACE).await?;
+            let ap: OwnedObjectPath = wifi
+                .get_property("ActiveAccessPoint")
+                .await
+                .map_err(map_err)?;
+            if ap.as_str() == "/" {
+                continue;
+            }
+            let ap = self.proxy(ap.as_str(), AP_IFACE).await?;
+            // The AP can vanish between the two reads (roaming); skip it then.
+            if let Ok(freq) = ap.get_property::<u32>("Frequency").await {
+                out.push((iface, freq));
+            }
+        }
+        Ok(out)
     }
 
     async fn peer(&self, path: &str) -> Result<NmPeer, P2pError> {
