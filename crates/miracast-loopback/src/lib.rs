@@ -181,7 +181,14 @@ pub fn run_sink_logged(
                 inner: sink,
                 need_idr: &mut want_idr,
             };
-            rx.push(&dgram[..n], &mut flagged);
+            rx.push(&dgram[..n], Instant::now(), &mut flagged);
+        }
+        if media {
+            let mut flagged = FlagSink {
+                inner: sink,
+                need_idr: &mut want_idr,
+            };
+            rx.poll(Instant::now(), &mut flagged);
         }
         if let Some(d) = watchdog.poll(Instant::now()) {
             let d = d.with_interface(opts.interface.clone(), None);
