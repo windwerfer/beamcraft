@@ -205,3 +205,33 @@ fn streaming_session_has_no_firewall_diagnostic() {
     let (report, _) = sink.join().unwrap();
     assert_eq!(report.no_rtp, None);
 }
+
+#[test]
+fn media_that_stops_is_reported_as_a_stall() {
+    let listener = TestSource::listen();
+    let addr = listener.addr();
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let sink = std::thread::spawn(move || {
+        let mut rec = Rec::default();
+        run_sink_logged(
+            addr,
+            udp,
+            &mut rec,
+            &RunOptions {
+                no_rtp_after: Duration::from_millis(300),
+                ..RunOptions::new(Duration::from_secs(20))
+            },
+            &mut |_| {},
+        )
+    });
+    let mut src = listener.accept();
+    src.negotiate();
+    let (d, _) = src.next_frame();
+    src.send_datagrams(&d);
+    // Like a dropped Wi-Fi Direct link: the stream just stops.
+    std::thread::sleep(Duration::from_millis(700));
+    src.teardown();
+    let report = sink.join().unwrap();
+    assert_eq!(report.stalls, 1, "{report:?}");
+    assert_eq!(report.no_rtp, None);
+}

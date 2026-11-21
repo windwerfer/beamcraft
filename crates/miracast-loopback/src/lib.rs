@@ -35,6 +35,8 @@ pub struct SinkReport {
     pub bad_datagrams: u64,
     /// RTSP reached PLAY but no datagram arrived in time (likely the firewall).
     pub no_rtp: Option<NoRtp>,
+    /// Times media stopped for at least the no-RTP timeout after it had flowed.
+    pub stalls: u32,
 }
 
 /// The sink's offer: the default video formats plus LPCM audio (48 kHz, 16 bit, stereo:
@@ -172,7 +174,7 @@ pub fn run_sink_logged(
         // Until PLAY is acknowledged leave datagrams in the socket buffer: a source may start
         // sending right after it receives the M7 reply, before the sink has processed it.
         while let Some(n) = media.then(|| udp.recv(&mut dgram).ok()).flatten() {
-            watchdog.on_datagram();
+            watchdog.on_datagram_at(Instant::now());
             let mut flagged = FlagSink {
                 inner: sink,
                 need_idr: &mut want_idr,
@@ -183,6 +185,10 @@ pub fn run_sink_logged(
             let d = d.with_interface(opts.interface.clone(), None);
             log(format!("diagnostic: {d}"));
             report.no_rtp = Some(d);
+        }
+        if let Some(st) = watchdog.poll_stall(Instant::now()) {
+            log(format!("diagnostic: {st}"));
+            report.stalls += 1;
         }
         if want_idr {
             want_idr = false;

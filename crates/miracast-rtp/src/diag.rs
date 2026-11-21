@@ -83,7 +83,33 @@ impl fmt::Display for NoRtp {
 
 impl std::error::Error for NoRtp {}
 
-/// Fires [`NoRtp`] once if no datagram arrives within the timeout after media started.
+/// Media flowed and then stopped: the usual sign of a lost Wi-Fi Direct link (hardware run 4:
+/// the laptop's station dropped out of the source's group mid-stream and the sink sat silent
+/// until the RTSP keepalive timeout, about a minute later).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RtpStalled {
+    pub rtp_port: u16,
+    /// Time since the last datagram when reported.
+    pub silent_for: Duration,
+}
+
+impl fmt::Display for RtpStalled {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Video stopped: nothing arrived on UDP port {} for {} s. The Wi-Fi Direct link to \
+             the source was probably lost (weak signal, or the laptop's Wi-Fi sharing the radio \
+             on another channel); the session ends if the source does not come back.",
+            self.rtp_port,
+            self.silent_for.as_secs()
+        )
+    }
+}
+
+impl std::error::Error for RtpStalled {}
+
+/// Fires [`NoRtp`] once if no datagram arrives within the timeout after media started, and
+/// [`RtpStalled`] once per silence of the same length after datagrams had arrived.
 #[derive(Debug, Clone)]
 pub struct NoRtpWatchdog {
     timeout: Duration,
@@ -91,6 +117,8 @@ pub struct NoRtpWatchdog {
     started: Option<Instant>,
     got_datagram: bool,
     fired: bool,
+    last_datagram: Option<Instant>,
+    stall_reported: bool,
 }
 
 impl NoRtpWatchdog {
@@ -101,6 +129,8 @@ impl NoRtpWatchdog {
             started: None,
             got_datagram: false,
             fired: false,
+            last_datagram: None,
+            stall_reported: false,
         }
     }
 
@@ -112,6 +142,28 @@ impl NoRtpWatchdog {
     /// Any datagram counts (even a malformed one proves the firewall lets UDP through).
     pub fn on_datagram(&mut self) {
         self.got_datagram = true;
+    }
+
+    /// Like [`on_datagram`](Self::on_datagram), and remembers the time for stall detection.
+    pub fn on_datagram_at(&mut self, now: Instant) {
+        self.got_datagram = true;
+        self.last_datagram = Some(now);
+        self.stall_reported = false;
+    }
+
+    /// `Some` once per silence of at least the timeout after datagrams had arrived (re-armed
+    /// by the next datagram).
+    pub fn poll_stall(&mut self, now: Instant) -> Option<RtpStalled> {
+        let last = self.last_datagram?;
+        let silent_for = now.saturating_duration_since(last);
+        if self.stall_reported || silent_for < self.timeout {
+            return None;
+        }
+        self.stall_reported = true;
+        Some(RtpStalled {
+            rtp_port: self.rtp_port,
+            silent_for,
+        })
     }
 
     /// `Some` exactly once, when the timeout passed without a datagram.
@@ -155,6 +207,29 @@ mod tests {
         w.start(t0);
         w.on_datagram();
         assert_eq!(w.poll(t0 + Duration::from_secs(30)), None);
+    }
+
+    #[test]
+    fn stall_after_flowing_media_fires_once_per_silence() {
+        let t0 = Instant::now();
+        let s = |n| t0 + Duration::from_secs(n);
+        let mut w = NoRtpWatchdog::new(19000, Duration::from_secs(5));
+        w.start(t0);
+        assert_eq!(
+            w.poll_stall(s(30)),
+            None,
+            "never flowed: that is NoRtp's case"
+        );
+        w.on_datagram_at(s(1));
+        assert_eq!(w.poll_stall(s(5)), None);
+        let e = w.poll_stall(s(6)).unwrap();
+        assert_eq!((e.rtp_port, e.silent_for), (19000, Duration::from_secs(5)));
+        assert!(e.to_string().contains("UDP port 19000"), "{e}");
+        assert_eq!(w.poll_stall(s(20)), None, "once per silence");
+        assert_eq!(w.poll(s(20)), None, "not a firewall case");
+        w.on_datagram_at(s(21));
+        assert_eq!(w.poll_stall(s(25)), None);
+        assert!(w.poll_stall(s(26)).is_some(), "re-armed");
     }
 
     #[test]
