@@ -16,18 +16,35 @@ Miracast sink spike (Android tablet TB336FU = source, Fedora KDE laptop = sink),
 
 - Step 6: crate `miracast-loopback` (real-socket sink driver, `TestSource` speaking M1-M7 + RTP/TS, 3 e2e tests incl. loss -> M13 IDR request -> recovery, hardware test binary `miracast-sink-demo`). `cargo xtask ci --no-loopback` green, clippy -D warnings green, no unsafe, no new dependency. Decoder example NOT done (kept spike crates free of mirrorwire-* deps; `ffplay` on the dumped stream instead). Details: miracast.md "Loopback end-to-end (step 6)".
 
+- Step 7 (after hardware runs 1-3, 2026-11-21; details in miracast.md section 11):
+  - `468a665` LPCM audio offer (`sink_config`, `LPCM 00000002 00`) + accept lower H.264 levels (`c.level <= o.level`), both hardware-confirmed, with unit tests.
+  - `1e2651f` miracast-nm R1/R2 flow: `Sink::connect_source` -> `NmP2pProvider::connect` = `AddAndActivateConnection2` (volatile profile with our WFD IEs, PBC, ipv4 auto), poll `State` until ACTIVATED (120 s for the user's tap), read `IpInterface` + `Ip4Config` -> `GroupInfo` (gateway = GO = source = `peer_ip`), deactivate on failure. `wfd_source_port` picks sources. Mock tests only.
+  - `ecad42c` sink connects to the source's RTSP server (`run_sink(source, ..)`, retry 500 ms); `miracast-sink-demo --source 192.168.49.1:7236` replaces the socat bridge; `TestSource` listens like the tablet.
+  - `d3d2899` `miracast_rtp::h264` SPS parser (profile, level, cropped size), test with the first SPS of `stream-run3.h264` (High 4.0 1920x1080); all 34 SPS of that dump parse the same. Demo logs the stream SPS.
+  - `1d3873a` `miracast_rtp::diag::NoRtp` ("RTSP ok, no RTP in 5 s": port, zone `public` or the looked-up one, runtime-only `firewall-cmd` fix text); in `SinkReport::no_rtp`. Not wired to a GUI.
+
 ## Decisions
-See miracast.md section 7 (sink first, sans-IO parsers, no HDCP/UIBC, audio demuxed not played, rejected: root helpers, direct wpa_supplicant D-Bus, GStreamer/FFmpeg demux, GPL code).
+- ipv4.method `auto` (tablet is GO and serves DHCP), `persist: volatile`; no `bind-activation` yet (untried on hardware).
+- `NmApi` is fine-grained (activate/state/ip4/deactivate/sleep) so the wait logic is mock-tested; the provider polls instead of subscribing to signals.
+- `tokio` became a direct Linux dependency of miracast-nm (already in the tree via zbus; sleep only).
+- Diagnostic suggests a command, never changes the firewall itself.
+- See also miracast.md section 7 (sink first, sans-IO parsers, no HDCP/UIBC, audio demuxed not played, rejected: root helpers, direct wpa_supplicant D-Bus, GStreamer/FFmpeg demux, GPL code).
 
 ## Open questions
-- zbus backend stubs (Unsupported): publishing WFD IEs via NM (R2), reading group addresses after activation, PeerAdded/GroupFormed signals. Need hardware to settle (R1/R2).
+- The new zbus calls (`AddAndActivateConnection2`, `State`, `Ip4Config`, `IpInterface`) are untested against a real NM (none in the container); the flow was proven with busctl only.
+- Should `bind-activation: dbus-client` be used so a crashed sink leaves no active group? Needs one hardware try.
+- Where the GUI shows `NoRtp` and whether it looks the zone up through the Flatpak's existing FirewallD1 permission (no new permission needed for a read).
+- Tapping "Connect" on the tablet's prompt forms a group but no RTSP; only tapping us in the Cast list works. UX text for that is in the `P2pError` messages; a GUI hint is still open.
 - The research box is a VM without Wi-Fi/iw/NM: nothing about the Intel 8265 was measured; the doc lists what to run on the T480s (section 9). Facts marked [verify] in miracast.md (WFD IE bits, wfd_* masks, NM incoming GO negotiation = risk R1) come from memory of the specs and are unconfirmed.
 
 ## Verify
-`git log miracast-spike`; `cargo test -p miracast-nm -p miracast-rtsp -p miracast-rtp`; `cargo clippy -p miracast-nm -p miracast-rtsp -p miracast-rtp --all-targets -- -D warnings`; `cargo xtask layers`.
+`git log --oneline 767ed3c..miracast-spike`; `cargo test -p miracast-nm -p miracast-rtsp -p miracast-rtp -p miracast-loopback` (78 tests); `cargo clippy -p miracast-nm -p miracast-rtsp -p miracast-rtp -p miracast-loopback --all-targets -- -D warnings`; `cargo fmt --all --check`; `cargo xtask layers`. `cargo xtask ci` cannot build in the research container (no libpipewire-0.3 dev package), unrelated to the spike.
 
 ## Next step
-Spike code is done; what remains needs the owner's hardware: run the HARDWARE TEST CHECKLIST below and send the logs back. Then settle R1/R2 (miracast.md section 10), wire `miracast-nm` to `miracast-loopback`'s sink loop, and optionally feed access units to MirrorWire's decoder.
+A small binary (or a `--nm` mode of `miracast-sink-demo`, async) that chains it all: `ZbusNm` find -> `Sink::sources()` -> `connect_source` -> `run_sink(peer_ip:7236)` -> `NoRtp` with the interface name. Then one hardware run to check the zbus calls (run 4 below). Then feed access units to MirrorWire's decoder sized from `h264::find_sps`.
+
+## HARDWARE RUN 4 (short, after the steps above)
+`./target/release/miracast-sink-demo --source 192.168.49.1:7236 --out stream.h264 --secs 300 2> sink-trace.log` replaces socat (start it after the group is up; it retries). Expect `RTSP connected to 192.168.49.1:7236`, `stream SPS: 1920x1080 profile 100 level 4.0`, and with the firewall closed a `diagnostic: ... zone "public" ...` line after 5 s. The original checklist below is kept for reference; its step 1 (sink listens on 7236) is superseded.
 
 ## HARDWARE TEST CHECKLIST (T480s Fedora KDE Wayland + Lenovo TB336FU)
 Facts marked [verify] come from memory of the specs/NM docs, not measured. Nothing here needs root for the spike code itself; stop at any step that asks for sudo and report it instead (the spike must stay rootless).
@@ -81,4 +98,4 @@ ffprobe -hide_banner stream.h264
 **What a good result looks like:** `sink-trace.log` shows M1..M7 in order, "start media on UDP 19000", rising video AU counts, no `close:` until you disconnect. Also useful: which `wfd_video_formats`/`wfd_audio_codecs` the tablet's M4 picked, and whether it rejected `wfd_audio_codecs: none` (then an LPCM offer is needed: miracast.md section 5).
 
 ## Commit
-see `git log -1` on miracast-spike
+Step 7 commits: 468a665, 1e2651f, ecad42c, d3d2899, 1d3873a, plus this HANDOFF commit (see `git log -1`). Not pushed (container has no GitHub access).
