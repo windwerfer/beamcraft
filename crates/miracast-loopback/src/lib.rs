@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use miracast_rtp::diag::{NoRtp, NoRtpWatchdog, DEFAULT_NO_RTP_AFTER};
 use miracast_rtp::ts::synth::{packetize, pes, psi_packets, rtp_packets, PID_AUDIO, PID_VIDEO};
-use miracast_rtp::{MediaSink, Receiver};
+use miracast_rtp::{MediaSink, Receiver, RxStats};
 use miracast_rtsp::message::{parse_message, Message, Request, Response};
 use miracast_rtsp::params::AudioCodec;
 use miracast_rtsp::{Action, Negotiated, SinkConfig, SinkSession, State};
@@ -39,6 +39,12 @@ pub struct SinkReport {
     pub no_rtp: Option<NoRtp>,
     /// Times media stopped for at least the no-RTP timeout after it had flowed.
     pub stalls: u32,
+    /// The session was ended because media stopped (see [`RunOptions::close_on_silence`]).
+    pub link_lost: bool,
+    /// Receive counters at the end.
+    pub rx: RxStats,
+    /// How long media flowed (PLAY to the end).
+    pub media_secs: u64,
 }
 
 /// The sink's offer: the default video formats plus LPCM audio (48 kHz, 16 bit, stereo:
@@ -102,6 +108,23 @@ pub struct RunOptions {
     pub no_rtp_after: Duration,
     /// The Wi-Fi Direct group interface, named in the [`NoRtp`] text.
     pub interface: Option<String>,
+    /// End the session (TEARDOWN, `link_lost`) when media that had flowed stops this long;
+    /// `None` waits for the RTSP keepalive timeout (about a minute on the TB336FU).
+    pub close_on_silence: Option<Duration>,
+    /// Log a stats line this often (`None`: never).
+    pub stats_every: Option<Duration>,
+}
+
+impl SinkReport {
+    /// True when the session ended because the link or the source went away (not a teardown
+    /// by the user or the source): worth joining the group again.
+    pub fn wants_reconnect(&self) -> bool {
+        self.link_lost
+            || self
+                .close_reason
+                .as_deref()
+                .is_some_and(|r| r.contains("keepalive timeout"))
+    }
 }
 
 impl RunOptions {
@@ -110,8 +133,30 @@ impl RunOptions {
             deadline,
             no_rtp_after: DEFAULT_NO_RTP_AFTER,
             interface: None,
+            close_on_silence: None,
+            stats_every: None,
         }
     }
+}
+
+/// One stats line for the trace: totals since the session started.
+pub fn stats_line(rx: &RxStats, idr_sent: u32, idr_suppressed: u64, elapsed: Duration) -> String {
+    let lost_pct = if rx.packets + rx.lost_packets == 0 {
+        0.0
+    } else {
+        rx.lost_packets as f64 * 100.0 / (rx.packets + rx.lost_packets) as f64
+    };
+    format!(
+        "stats: {}s packets {} lost {} ({lost_pct:.2}%) gaps {} reordered {} late {} bad {} \
+         idr sent {idr_sent} suppressed {idr_suppressed}",
+        elapsed.as_secs(),
+        rx.packets,
+        rx.lost_packets,
+        rx.gaps,
+        rx.reordered,
+        rx.late,
+        rx.bad_datagrams
+    )
 }
 
 /// Like [`run_sink`], and calls `log` with the RTSP trace (both directions) and state events.
@@ -153,6 +198,8 @@ pub fn run_sink_logged(
     let mut buf = [0u8; 4096];
     let mut dgram = vec![0u8; 2048];
     let mut want_idr = false;
+    let mut media_since: Option<Instant> = None;
+    let mut last_stats = Instant::now();
     let mut pending: Vec<Action> = Vec::new();
 
     'outer: while start.elapsed() < deadline {
@@ -199,6 +246,30 @@ pub fn run_sink_logged(
             log(format!("diagnostic: {st}"));
             report.stalls += 1;
         }
+        if let (Some(every), Some(since)) = (opts.stats_every, media_since) {
+            if last_stats.elapsed() >= every {
+                last_stats = Instant::now();
+                log(stats_line(
+                    &rx.stats(),
+                    report.idr_requests_sent,
+                    session.idr_suppressed,
+                    since.elapsed(),
+                ));
+            }
+        }
+        if let (Some(limit), Some(silent)) =
+            (opts.close_on_silence, watchdog.silence(Instant::now()))
+        {
+            if media && silent >= limit && !report.link_lost {
+                report.link_lost = true;
+                log(format!(
+                    "link lost: no media for {} s, ending the session",
+                    silent.as_secs()
+                ));
+                // The source may be gone; the TEARDOWN is best effort.
+                pending.extend(session.teardown());
+            }
+        }
         if want_idr {
             want_idr = false;
             let req = session.request_idr(Instant::now());
@@ -211,7 +282,13 @@ pub fn run_sink_logged(
             match a {
                 Action::Send(b) => {
                     log(format!(">>> sink\n{}", String::from_utf8_lossy(&b)));
-                    tcp.write_all(&b).unwrap();
+                    if let Err(e) = tcp.write_all(&b) {
+                        // A lost link must end the session, not the program.
+                        let reason = format!("RTSP connection to the source failed: {e}");
+                        log(format!("close: {reason}"));
+                        report.close_reason.get_or_insert(reason);
+                        break 'outer;
+                    }
                 }
                 Action::Negotiated(n) => {
                     log(format!("negotiated: {n:?}"));
@@ -220,6 +297,7 @@ pub fn run_sink_logged(
                 Action::StartMedia { rtp_port } => {
                     log(format!("start media on UDP {rtp_port}"));
                     media = true;
+                    media_since.get_or_insert_with(Instant::now);
                     watchdog.start(Instant::now());
                 }
                 Action::StopMedia => {
@@ -238,6 +316,16 @@ pub fn run_sink_logged(
         }
     }
     report.idr_suppressed = session.idr_suppressed;
+    report.rx = rx.stats();
+    report.media_secs = media_since.map_or(0, |t| t.elapsed().as_secs());
+    if opts.stats_every.is_some() && media_since.is_some() {
+        log(stats_line(
+            &report.rx,
+            report.idr_requests_sent,
+            report.idr_suppressed,
+            Duration::from_secs(report.media_secs),
+        ));
+    }
     report.lost_packets = rx.lost_packets;
     report.bad_datagrams = rx.bad_datagrams;
     report

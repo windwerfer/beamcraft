@@ -151,6 +151,11 @@ impl NoRtpWatchdog {
         self.stall_reported = false;
     }
 
+    /// Time since the last datagram, once media has flowed.
+    pub fn silence(&self, now: Instant) -> Option<Duration> {
+        self.last_datagram.map(|t| now.saturating_duration_since(t))
+    }
+
     /// `Some` once per silence of at least the timeout after datagrams had arrived (re-armed
     /// by the next datagram).
     pub fn poll_stall(&mut self, now: Instant) -> Option<RtpStalled> {
@@ -230,6 +235,8 @@ mod tests {
         w.on_datagram_at(s(21));
         assert_eq!(w.poll_stall(s(25)), None);
         assert!(w.poll_stall(s(26)).is_some(), "re-armed");
+        assert_eq!(w.silence(s(26)), Some(Duration::from_secs(5)));
+        assert_eq!(NoRtpWatchdog::new(1, Duration::ZERO).silence(s(1)), None);
     }
 
     #[test]

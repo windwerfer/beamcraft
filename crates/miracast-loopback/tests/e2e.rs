@@ -238,3 +238,54 @@ fn media_that_stops_is_reported_as_a_stall() {
     assert_eq!(report.stalls, 1, "{report:?}");
     assert_eq!(report.no_rtp, None);
 }
+
+#[test]
+fn silence_after_media_ends_the_session_as_link_lost() {
+    let listener = TestSource::listen();
+    let addr = listener.addr();
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let mut lines = Vec::new();
+    let sink = std::thread::spawn(move || {
+        let mut rec = Rec::default();
+        let r = run_sink_logged(
+            addr,
+            udp,
+            &mut rec,
+            &RunOptions {
+                no_rtp_after: Duration::from_millis(200),
+                close_on_silence: Some(Duration::from_millis(400)),
+                stats_every: Some(Duration::from_millis(100)),
+                ..RunOptions::new(Duration::from_secs(20))
+            },
+            &mut |l| lines.push(l),
+        );
+        (r, lines)
+    });
+    let mut src = listener.accept();
+    src.negotiate();
+    let (d, _) = src.next_frame();
+    src.send_datagrams(&d);
+    // The sink gives up on the silent link and tears down by itself.
+    let td = src.read_message();
+    let (report, lines) = sink.join().unwrap();
+    assert!(
+        matches!(td, miracast_rtsp::message::Message::Request(ref r) if r.method == "TEARDOWN"),
+        "{td:?}"
+    );
+    assert!(report.link_lost && report.wants_reconnect(), "{report:?}");
+    assert!(report.rx.packets >= 1);
+    assert!(lines.iter().any(|l| l.starts_with("stats: ")), "{lines:?}");
+    assert!(
+        lines.iter().any(|l| l.starts_with("link lost")),
+        "{lines:?}"
+    );
+}
+
+#[test]
+fn a_teardown_by_the_source_does_not_ask_for_a_reconnect() {
+    let (mut src, sink) = start();
+    src.negotiate();
+    src.teardown();
+    let (report, _) = sink.join().unwrap();
+    assert!(!report.wants_reconnect(), "{report:?}");
+}
