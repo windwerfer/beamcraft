@@ -1,15 +1,17 @@
-//! Hardware test sink: listens for one Miracast source, prints the RTSP trace and media
-//! stats, and writes the received H.264 (Annex B) to a file playable with `ffplay`/`mpv`.
-//! No P2P handling: bring the Wi-Fi Direct link up first (see HANDOFF.md checklist).
+//! Hardware test sink: connects to one Miracast source's RTSP server (retrying until the
+//! source listens), prints the RTSP trace and media stats, and writes the received H.264
+//! (Annex B) to a file playable with `ffplay`/`mpv`. No P2P handling: bring the Wi-Fi
+//! Direct link up first (see HANDOFF.md). The source is the group owner, on Android
+//! `192.168.49.1`.
 //!
-//! Usage: `miracast-sink-demo [--rtsp-port 7236] [--rtp-port 19000] [--out stream.h264]
-//!         [--secs 600]`
+//! Usage: `miracast-sink-demo [--source 192.168.49.1:7236] [--rtp-port 19000]
+//!         [--out stream.h264] [--secs 600]`
 #![forbid(unsafe_code)]
 #![allow(clippy::print_stderr)]
 
 use std::fs::File;
 use std::io::Write;
-use std::net::{TcpListener, UdpSocket};
+use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
 use miracast_loopback::run_sink_logged;
@@ -68,13 +70,13 @@ fn arg(name: &str, default: &str) -> String {
 }
 
 fn main() {
-    let rtsp = arg("--rtsp-port", "7236");
+    let source = arg("--source", "192.168.49.1:7236");
     let rtp = arg("--rtp-port", "19000");
     let out = arg("--out", "stream.h264");
     let secs: u64 = arg("--secs", "600").parse().unwrap_or(600);
-    let listener = match TcpListener::bind(format!("0.0.0.0:{rtsp}")) {
-        Ok(l) => l,
-        Err(e) => return eprintln!("cannot listen on TCP {rtsp}: {e}"),
+    let source: SocketAddr = match source.parse() {
+        Ok(a) => a,
+        Err(e) => return eprintln!("--source {source}: not an IP:port ({e})"),
     };
     let udp = match UdpSocket::bind(format!("0.0.0.0:{rtp}")) {
         Ok(u) => u,
@@ -94,9 +96,9 @@ fn main() {
         idr: 0,
         last_report: now,
     };
-    eprintln!("waiting for a source on TCP {rtsp}, RTP on UDP {rtp}, writing {out}");
+    eprintln!("connecting to the source at {source}, RTP on UDP {rtp}, writing {out}");
     let report = run_sink_logged(
-        listener,
+        source,
         udp,
         &mut sink,
         Duration::from_secs(secs),

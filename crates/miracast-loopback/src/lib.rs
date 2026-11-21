@@ -1,7 +1,9 @@
 #![forbid(unsafe_code)]
 //! Test support for the Miracast spike: a real-socket sink driver ([`run_sink`]) and a minimal
 //! test source ([`TestSource`]) that speaks RTSP M1-M7 and sends MPEG-TS over RTP, all on
-//! localhost, no Wi-Fi. This is test code: it panics on I/O errors instead of reporting them.
+//! localhost, no Wi-Fi. As on hardware, the source is the RTSP server (port 7236) and the sink
+//! connects to it. This is test code: apart from the connect, which reports a readable
+//! reason, it panics on I/O errors instead of reporting them.
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
@@ -48,20 +50,43 @@ pub fn sink_config(rtp_port: u16) -> SinkConfig {
     }
 }
 
+/// Pause between connection attempts to the source's RTSP server.
+const CONNECT_RETRY: Duration = Duration::from_millis(500);
+
+/// Connects to the source's RTSP server, retrying until `within` has passed: right after the
+/// P2P group forms the source may not listen yet (hardware runs needed a retry loop).
+pub fn connect_to_source(addr: SocketAddr, within: Duration) -> std::io::Result<TcpStream> {
+    let start = Instant::now();
+    loop {
+        let left = within.saturating_sub(start.elapsed());
+        let attempt = TcpStream::connect_timeout(
+            &addr,
+            left.clamp(Duration::from_millis(1), Duration::from_secs(1)),
+        );
+        match attempt {
+            Ok(s) => return Ok(s),
+            Err(e) if start.elapsed() + CONNECT_RETRY >= within => return Err(e),
+            Err(_) => std::thread::sleep(CONNECT_RETRY),
+        }
+    }
+}
+
 /// Drives a [`SinkSession`] and a [`Receiver`] over real sockets until the session closes
-/// (or `deadline` passes). `udp` must be bound already; its port is announced as the RTP port.
+/// (or `deadline` passes). Connects to the source's RTSP server at `source` (on hardware
+/// `192.168.49.1:7236`, the group owner). `udp` must be bound already; its port is announced
+/// as the RTP port.
 pub fn run_sink(
-    listener: TcpListener,
+    source: SocketAddr,
     udp: UdpSocket,
     sink: &mut dyn MediaSink,
     deadline: Duration,
 ) -> SinkReport {
-    run_sink_logged(listener, udp, sink, deadline, &mut |_| {})
+    run_sink_logged(source, udp, sink, deadline, &mut |_| {})
 }
 
 /// Like [`run_sink`], and calls `log` with the RTSP trace (both directions) and state events.
 pub fn run_sink_logged(
-    listener: TcpListener,
+    source: SocketAddr,
     udp: UdpSocket,
     sink: &mut dyn MediaSink,
     deadline: Duration,
@@ -72,8 +97,19 @@ pub fn run_sink_logged(
     let mut report = SinkReport::default();
     let start = Instant::now();
 
-    let (mut tcp, peer) = listener.accept().unwrap();
-    log(format!("RTSP connection from {peer}"));
+    let mut tcp = match connect_to_source(source, deadline) {
+        Ok(t) => t,
+        Err(e) => {
+            let reason = format!(
+                "cannot reach the source's RTSP server at {source}: {e} (is the Wi-Fi Direct \
+                 group up and wireless display enabled on the source?)"
+            );
+            log(format!("close: {reason}"));
+            report.close_reason = Some(reason);
+            return report;
+        }
+    };
+    log(format!("RTSP connected to {source}"));
     tcp.set_read_timeout(Some(Duration::from_millis(2)))
         .unwrap();
     udp.set_nonblocking(true).unwrap();
@@ -176,7 +212,25 @@ pub fn access_unit(idr: bool, len: usize) -> Vec<u8> {
     v
 }
 
-/// Minimal Miracast source: RTSP client side of M1-M7 plus an RTP/TS sender.
+/// The listening side of a [`TestSource`] (the source is the RTSP server, like the tablet).
+pub struct SourceListener {
+    listener: TcpListener,
+}
+
+impl SourceListener {
+    pub fn addr(&self) -> SocketAddr {
+        self.listener.local_addr().unwrap()
+    }
+
+    /// Waits for the sink to connect.
+    pub fn accept(self) -> TestSource {
+        let (tcp, _) = self.listener.accept().unwrap();
+        TestSource::from_stream(tcp)
+    }
+}
+
+/// Minimal Miracast source: RTSP server on TCP that runs M1-M7 (it sends M1/M3/M4/M5 and
+/// answers M2/M6/M7) plus an RTP/TS sender.
 pub struct TestSource {
     tcp: TcpStream,
     buf: Vec<u8>,
@@ -192,8 +246,18 @@ pub struct TestSource {
 }
 
 impl TestSource {
-    pub fn connect(rtsp: SocketAddr) -> Self {
-        let tcp = TcpStream::connect(rtsp).unwrap();
+    /// Listens on `127.0.0.1` at an ephemeral port.
+    pub fn listen() -> SourceListener {
+        Self::listen_on(SocketAddr::from(([127, 0, 0, 1], 0)))
+    }
+
+    pub fn listen_on(addr: SocketAddr) -> SourceListener {
+        SourceListener {
+            listener: TcpListener::bind(addr).unwrap(),
+        }
+    }
+
+    fn from_stream(tcp: TcpStream) -> Self {
         tcp.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
         Self {
             tcp,

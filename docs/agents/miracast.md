@@ -393,3 +393,13 @@ with level 4.0; the P2P interface lands in firewalld zone `public`, which drops 
   themselves are untested here (no NM in the container); value parsing is unit tested.
 - [verify] `bind-activation: dbus-client` (tear down if our process dies) is not used: the
   hardware runs used busctl, so it was never tried.
+
+### Sink connects to the source (replaces the socat bridge)
+
+`run_sink(source, udp, ..)` connects to the source's RTSP server (`connect_to_source`: 1 s
+connect timeout, retry every 500 ms until the deadline, because the source may not listen yet
+right after the group forms). An unreachable source ends with a readable `close_reason`.
+`TestSource` is now the RTSP server too (`TestSource::listen()` -> `SourceListener::accept()`),
+like the tablet. `miracast-sink-demo --source 192.168.49.1:7236` (default) replaces
+`--rtsp-port` and the socat relay; the source address comes from `GroupInfo::peer_ip`
+(group owner) once the demo is wired to `miracast-nm`.

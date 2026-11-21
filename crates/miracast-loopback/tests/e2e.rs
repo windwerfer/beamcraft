@@ -3,8 +3,8 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
-use std::net::{TcpListener, UdpSocket};
-use std::time::Duration;
+use std::net::{SocketAddr, TcpListener, UdpSocket};
+use std::time::{Duration, Instant};
 
 use miracast_loopback::{run_sink, SinkReport, TestSource};
 use miracast_rtp::{AudioFrame, MediaSink, VideoAccessUnit};
@@ -28,26 +28,29 @@ impl MediaSink for Rec {
     }
 }
 
-/// Starts the sink thread; returns the RTSP address and a handle yielding its results.
-fn start_sink() -> (
-    std::net::SocketAddr,
-    std::thread::JoinHandle<(SinkReport, Rec)>,
-) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
+/// Starts the sink thread connecting to the source's RTSP server at `source`.
+fn spawn_sink(
+    source: SocketAddr,
+    deadline: Duration,
+) -> std::thread::JoinHandle<(SinkReport, Rec)> {
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
-    let h = std::thread::spawn(move || {
+    std::thread::spawn(move || {
         let mut rec = Rec::default();
-        let report = run_sink(listener, udp, &mut rec, Duration::from_secs(20));
+        let report = run_sink(source, udp, &mut rec, deadline);
         (report, rec)
-    });
-    (addr, h)
+    })
+}
+
+/// A listening test source and a sink connected to it.
+fn start() -> (TestSource, std::thread::JoinHandle<(SinkReport, Rec)>) {
+    let listener = TestSource::listen();
+    let sink = spawn_sink(listener.addr(), Duration::from_secs(20));
+    (listener.accept(), sink)
 }
 
 #[test]
 fn negotiates_and_streams_every_access_unit() {
-    let (addr, sink) = start_sink();
-    let mut src = TestSource::connect(addr);
+    let (mut src, sink) = start();
     let caps = src.negotiate();
     assert!(caps.contains("wfd_video_formats"), "M3 answer: {caps}");
     assert!(
@@ -81,8 +84,7 @@ fn negotiates_and_streams_every_access_unit() {
 
 #[test]
 fn loss_triggers_idr_request_and_recovery() {
-    let (addr, sink) = start_sink();
-    let mut src = TestSource::connect(addr);
+    let (mut src, sink) = start();
     src.negotiate();
 
     let mut sent = Vec::new();
@@ -112,8 +114,7 @@ fn loss_triggers_idr_request_and_recovery() {
 
 #[test]
 fn bad_datagrams_are_counted_not_fatal() {
-    let (addr, sink) = start_sink();
-    let mut src = TestSource::connect(addr);
+    let (mut src, sink) = start();
     src.negotiate();
     src.send_datagrams(&[vec![1, 2, 3], vec![0x80, 33, 0, 0], vec![0xFF; 300]]);
     let (d, _) = src.next_frame();
@@ -122,4 +123,39 @@ fn bad_datagrams_are_counted_not_fatal() {
     src.teardown();
     let (report, _) = sink.join().unwrap();
     assert_eq!(report.bad_datagrams, 3);
+}
+
+#[test]
+fn sink_retries_until_the_source_listens() {
+    // Reserve a free port, release it, and only listen on it after the sink started trying.
+    let addr = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let sink = spawn_sink(addr, Duration::from_secs(20));
+    std::thread::sleep(Duration::from_millis(700));
+    let mut src = TestSource::listen_on(addr).accept();
+    src.negotiate();
+    src.teardown();
+    let (report, _) = sink.join().unwrap();
+    assert!(report.negotiated.is_some(), "{report:?}");
+}
+
+#[test]
+fn unreachable_source_is_a_readable_close_reason() {
+    let addr = TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap();
+    let t = Instant::now();
+    let (report, _) = spawn_sink(addr, Duration::from_millis(1200))
+        .join()
+        .unwrap();
+    assert!(t.elapsed() < Duration::from_secs(5));
+    let reason = report.close_reason.expect("close reason");
+    assert!(
+        reason.contains("cannot reach the source's RTSP server"),
+        "{reason}"
+    );
+    assert!(reason.contains(&addr.to_string()), "{reason}");
 }
