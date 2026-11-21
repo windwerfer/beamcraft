@@ -1,13 +1,16 @@
 //! NetworkManager over the system D-Bus (zbus). No root: every call goes through NM, which
-//! asks polkit (miracast.md section 1). This is a spike stub: discovery, peer listing, profile
-//! activation and deactivation are real calls; publishing WFD IEs, reading the group's
-//! addresses and the change signals are explicit `Unsupported` until checked on hardware
-//! (risks R1/R2 in miracast.md). Everything NM-independent is tested through [`crate::MockNm`].
+//! asks polkit (miracast.md section 1). Discovery, peer listing, `AddAndActivateConnection2`
+//! of a volatile profile, state and IPv4 reads and deactivation are real calls (the flow of
+//! hardware runs 1-3, R1/R2 in miracast.md); change signals are not subscribed yet (the
+//! provider polls). Everything NM-independent is tested through [`crate::MockNm`]; the
+//! value parsing here is pure and unit tested.
 
-use crate::{BoxFuture, GroupInfo, NmApi, NmPeer, P2pConnectionSpec, P2pError, P2pEvent};
+use crate::nm::{ActiveState, GroupIp4};
+use crate::{BoxFuture, NmApi, NmPeer, P2pConnectionSpec, P2pError, P2pEvent};
 use std::collections::HashMap;
+use std::net::Ipv4Addr;
 use std::time::Duration;
-use zbus::{ObjectPath, OwnedObjectPath, Variant as Value};
+use zbus::{ObjectPath, OwnedObjectPath, OwnedVariant, Variant as Value};
 
 const NM_DEST: &str = "org.freedesktop.NetworkManager";
 const NM_PATH: &str = "/org/freedesktop/NetworkManager";
@@ -15,6 +18,10 @@ const NM_IFACE: &str = "org.freedesktop.NetworkManager";
 const DEVICE_IFACE: &str = "org.freedesktop.NetworkManager.Device";
 const P2P_DEVICE_IFACE: &str = "org.freedesktop.NetworkManager.Device.WifiP2P";
 const PEER_IFACE: &str = "org.freedesktop.NetworkManager.WifiP2PPeer";
+const ACTIVE_IFACE: &str = "org.freedesktop.NetworkManager.Connection.Active";
+const IP4_IFACE: &str = "org.freedesktop.NetworkManager.IP4Config";
+/// Bound on what we read from NM (AGENTS.md 1.9; NM is trusted, but cheap to bound).
+const MAX_ADDRESSES: usize = 16;
 /// `NM_DEVICE_TYPE_WIFI_P2P`.
 const DEVICE_TYPE_WIFI_P2P: u32 = 30;
 
@@ -35,15 +42,49 @@ pub fn connection_settings(spec: &P2pConnectionSpec) -> ConnectionSettings {
         p2p.insert("wfd-ies", Value::from(spec.wfd_ies.clone()));
     }
 
-    // Shared addressing: if we end up as group owner NM serves DHCP; as client it is ignored.
+    // The source becomes group owner and serves DHCP (hardware runs 1-3: we got
+    // 192.168.49.74 by DHCP from the tablet at 192.168.49.1), so we are a DHCP client.
     let mut ipv4 = HashMap::new();
-    ipv4.insert("method", Value::from("shared"));
+    ipv4.insert("method", Value::from("auto"));
 
     let mut out = HashMap::new();
     out.insert("connection", connection);
     out.insert("wifi-p2p", p2p);
     out.insert("ipv4", ipv4);
     out
+}
+
+/// Options of `AddAndActivateConnection2`: the profile lives only while it is active.
+pub fn activation_options() -> HashMap<&'static str, Value<'static>> {
+    let mut o = HashMap::new();
+    o.insert("persist", Value::from("volatile"));
+    o
+}
+
+/// `IP4Config.AddressData` entries (`address` s, `prefix` u) to addresses; malformed entries
+/// are skipped.
+pub fn parse_address_data(data: &[HashMap<String, OwnedVariant>]) -> Vec<(Ipv4Addr, u8)> {
+    data.iter()
+        .take(MAX_ADDRESSES)
+        .filter_map(|e| {
+            let addr: &str = e.get("address").and_then(|v| <&str>::try_from(&**v).ok())?;
+            let prefix = e.get("prefix").and_then(|v| u32::try_from(&**v).ok())?;
+            Some((
+                addr.parse().ok()?,
+                u8::try_from(prefix).ok().filter(|p| *p <= 32)?,
+            ))
+        })
+        .collect()
+}
+
+/// `IP4Config.Gateway` (empty when there is none).
+pub fn parse_gateway(s: &str) -> Option<Ipv4Addr> {
+    s.parse().ok().filter(|g: &Ipv4Addr| !g.is_unspecified())
+}
+
+fn is_unknown_object(e: &zbus::Error) -> bool {
+    let t = e.to_string();
+    t.contains("UnknownObject") || t.contains("UnknownMethod") || t.contains("does not exist")
 }
 
 fn map_err(e: zbus::Error) -> P2pError {
@@ -155,56 +196,92 @@ impl NmApi for ZbusNm {
         })
     }
 
-    fn set_wfd_ies<'a>(
-        &'a self,
-        _device: &'a str,
-        _ies: &'a [u8],
-    ) -> BoxFuture<'a, Result<(), P2pError>> {
-        Box::pin(async {
-            Err(P2pError::Unsupported(
-                "publishing WFD IEs through NetworkManager (miracast.md risk R2)".into(),
-            ))
-        })
-    }
-
-    fn connect<'a>(
+    fn activate<'a>(
         &'a self,
         device: &'a str,
         spec: &'a P2pConnectionSpec,
-    ) -> BoxFuture<'a, Result<GroupInfo, P2pError>> {
+    ) -> BoxFuture<'a, Result<String, P2pError>> {
         Box::pin(async move {
             let nm = self.proxy(NM_PATH, NM_IFACE).await?;
             let dev = ObjectPath::try_from(device)
                 .map_err(|e| P2pError::Backend(format!("bad device path: {e}")))?;
             let any = ObjectPath::from_static_str_unchecked("/");
-            let (_conn, _active): (OwnedObjectPath, OwnedObjectPath) = nm
+            let (_conn, active, _result): (
+                OwnedObjectPath,
+                OwnedObjectPath,
+                HashMap<String, OwnedVariant>,
+            ) = nm
                 .call(
-                    "AddAndActivateConnection",
-                    &(connection_settings(spec), dev, any),
+                    "AddAndActivateConnection2",
+                    &(connection_settings(spec), dev, any, activation_options()),
                 )
                 .await
                 .map_err(map_err)?;
-            Err(P2pError::Unsupported(
-                "reading the group interface and addresses after activation (Ip4Config)".into(),
-            ))
+            Ok(active.to_string())
         })
     }
 
-    fn disconnect<'a>(&'a self, device: &'a str) -> BoxFuture<'a, Result<(), P2pError>> {
+    fn active_state<'a>(&'a self, active: &'a str) -> BoxFuture<'a, Result<ActiveState, P2pError>> {
         Box::pin(async move {
-            let dev = self.proxy(device, DEVICE_IFACE).await?;
-            let active: OwnedObjectPath = dev
-                .get_property("ActiveConnection")
-                .await
-                .map_err(map_err)?;
-            if active.as_str() == "/" {
-                return Ok(());
+            let ac = self.proxy(active, ACTIVE_IFACE).await?;
+            match ac.get_property::<u32>("State").await {
+                Ok(v) => Ok(ActiveState::from_nm(v)),
+                // A failed volatile connection is removed at once (hardware run 1).
+                Err(e) if is_unknown_object(&e) => Ok(ActiveState::Gone),
+                Err(e) => Err(map_err(e)),
             }
-            let nm = self.proxy(NM_PATH, NM_IFACE).await?;
-            nm.call::<_, _, ()>("DeactivateConnection", &(active,))
-                .await
-                .map_err(map_err)
         })
+    }
+
+    fn group_ip4<'a>(
+        &'a self,
+        active: &'a str,
+    ) -> BoxFuture<'a, Result<Option<GroupIp4>, P2pError>> {
+        Box::pin(async move {
+            let ac = self.proxy(active, ACTIVE_IFACE).await?;
+            let ip4: OwnedObjectPath = ac.get_property("Ip4Config").await.map_err(map_err)?;
+            let devices: Vec<OwnedObjectPath> =
+                ac.get_property("Devices").await.map_err(map_err)?;
+            let Some(dev) = devices.first() else {
+                return Ok(None);
+            };
+            if ip4.as_str() == "/" {
+                return Ok(None);
+            }
+            let dev = self.proxy(dev.as_str(), DEVICE_IFACE).await?;
+            let interface: String = dev.get_property("IpInterface").await.map_err(map_err)?;
+            let cfg = self.proxy(ip4.as_str(), IP4_IFACE).await?;
+            let data: Vec<HashMap<String, OwnedVariant>> =
+                cfg.get_property("AddressData").await.map_err(map_err)?;
+            let gateway: String = cfg.get_property("Gateway").await.unwrap_or_default();
+            Ok(Some(GroupIp4 {
+                interface,
+                addresses: parse_address_data(&data),
+                gateway: parse_gateway(&gateway),
+            }))
+        })
+    }
+
+    fn deactivate<'a>(&'a self, active: &'a str) -> BoxFuture<'a, Result<(), P2pError>> {
+        Box::pin(async move {
+            let nm = self.proxy(NM_PATH, NM_IFACE).await?;
+            let path = ObjectPath::try_from(active)
+                .map_err(|e| P2pError::Backend(format!("bad connection path: {e}")))?;
+            match nm.call::<_, _, ()>("DeactivateConnection", &(path,)).await {
+                Ok(()) => Ok(()),
+                // Already gone (volatile profiles vanish when they fail).
+                Err(e)
+                    if is_unknown_object(&e) || e.to_string().contains("ConnectionNotActive") =>
+                {
+                    Ok(())
+                }
+                Err(e) => Err(map_err(e)),
+            }
+        })
+    }
+
+    fn sleep(&self, d: Duration) -> BoxFuture<'_, ()> {
+        Box::pin(tokio::time::sleep(d))
     }
 
     fn next_event(&self) -> BoxFuture<'_, Option<P2pEvent>> {
@@ -243,6 +320,51 @@ mod tests {
             wfd_ies: vec![],
         };
         assert!(!connection_settings(&spec)["wifi-p2p"].contains_key("wfd-ies"));
+    }
+
+    #[test]
+    fn ipv4_is_auto_and_activation_is_volatile() {
+        let spec = P2pConnectionSpec {
+            id: "x".into(),
+            peer: "p".into(),
+            wps: WpsMethod::Pbc,
+            wfd_ies: vec![],
+        };
+        assert_eq!(
+            connection_settings(&spec)["ipv4"]["method"],
+            Value::from("auto")
+        );
+        assert_eq!(activation_options()["persist"], Value::from("volatile"));
+    }
+
+    #[test]
+    fn address_data_and_gateway_parse_hostile_values() {
+        let entry = |addr: Value<'static>, prefix: Value<'static>| {
+            let mut m = HashMap::new();
+            m.insert("address".to_string(), OwnedVariant::try_from(addr).unwrap());
+            m.insert(
+                "prefix".to_string(),
+                OwnedVariant::try_from(prefix).unwrap(),
+            );
+            m
+        };
+        let data = vec![
+            entry(Value::from("192.168.49.74"), Value::from(24u32)),
+            entry(Value::from("not an ip"), Value::from(24u32)),
+            entry(Value::from("10.0.0.1"), Value::from(99u32)),
+            entry(Value::from(5u32), Value::from(24u32)),
+            HashMap::new(),
+        ];
+        assert_eq!(
+            parse_address_data(&data),
+            [(Ipv4Addr::new(192, 168, 49, 74), 24)]
+        );
+        assert_eq!(
+            parse_gateway("192.168.49.1"),
+            Some(Ipv4Addr::new(192, 168, 49, 1))
+        );
+        assert_eq!(parse_gateway(""), None);
+        assert_eq!(parse_gateway("0.0.0.0"), None);
     }
 
     #[test]

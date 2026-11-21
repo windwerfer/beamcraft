@@ -1,4 +1,4 @@
-use crate::{wfd, GroupInfo, P2pError, P2pEvent, P2pProvider};
+use crate::{wfd, GroupInfo, P2pError, P2pEvent, P2pProvider, PeerInfo, WpsMethod};
 
 /// What the sink announces.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -30,6 +30,17 @@ impl SinkConfig {
     }
 }
 
+/// The RTSP port of a peer that advertises itself as a Miracast source (WFD device type
+/// source or dual role, session available); `None` for anything else.
+pub fn wfd_source_port(peer: &PeerInfo) -> Option<u16> {
+    let info = wfd::parse_device_info(&peer.wfd_ies)?;
+    let source = matches!(
+        info.device_type,
+        wfd::DeviceType::Source | wfd::DeviceType::DualRole
+    );
+    (source && info.session_available && info.rtsp_port != 0).then_some(info.rtsp_port)
+}
+
 /// Sink-side P2P lifecycle: advertise, wait for a group, tear down. The RTSP/RTP crates take
 /// over from the returned [`GroupInfo`].
 pub struct Sink<P: P2pProvider> {
@@ -50,6 +61,28 @@ impl<P: P2pProvider> Sink<P> {
     pub async fn start(&self) -> Result<(), P2pError> {
         self.provider.set_wfd_ies(&self.config.wfd_ies()).await?;
         self.provider.start_find().await
+    }
+
+    /// Discovered peers that are Miracast sources, with their RTSP port.
+    pub async fn sources(&self) -> Result<Vec<(PeerInfo, u16)>, P2pError> {
+        Ok(self
+            .provider
+            .peers()
+            .await?
+            .into_iter()
+            .filter_map(|p| wfd_source_port(&p).map(|port| (p, port)))
+            .collect())
+    }
+
+    /// R1 flow (hardware runs 1-3): NM does not answer a source's own connection request
+    /// unless a profile for it is pending, so the sink activates one (which also publishes
+    /// our WFD IE, R2) and waits until the user taps us in the source's Cast list.
+    pub async fn connect_source(&self, peer_id: &str) -> Result<GroupInfo, P2pError> {
+        self.provider.set_wfd_ies(&self.config.wfd_ies()).await?;
+        let g = self.provider.connect(peer_id, WpsMethod::Pbc).await?;
+        // Discovery is not needed while the group is up and costs airtime.
+        self.provider.stop_find().await?;
+        Ok(g)
     }
 
     /// Wait until a P2P group exists (formed by the source or by us). `Ok(None)` if the
@@ -110,6 +143,54 @@ mod tests {
         let sink = Sink::new(mock, SinkConfig::default());
         assert_eq!(sink.wait_for_group().await.unwrap(), Some(group()));
         assert!(sink.provider.calls().contains(&MockCall::StopFind));
+    }
+
+    fn tablet() -> PeerInfo {
+        PeerInfo {
+            id: "/p/3".into(),
+            name: "Android_qqQ0".into(),
+            hw_address: "7A:1B:85:73:E1:76".into(),
+            // As NM reported it on hardware: source, session available, port 7236.
+            wfd_ies: vec![0, 0, 6, 0, 0x10, 0x1c, 0x44, 0, 0x32],
+            strength: 97,
+        }
+    }
+
+    #[tokio::test]
+    async fn sources_are_peers_with_a_source_wfd_ie() {
+        let mock = MockP2pProvider::new();
+        mock.add_peer(tablet());
+        mock.add_peer(PeerInfo {
+            id: "/p/4".into(),
+            wfd_ies: wfd::sink_device_info(7236, 50),
+            ..tablet()
+        });
+        mock.add_peer(PeerInfo {
+            id: "/p/5".into(),
+            wfd_ies: vec![],
+            ..tablet()
+        });
+        let sink = Sink::new(mock, SinkConfig::default());
+        let s = sink.sources().await.unwrap();
+        assert_eq!(s.len(), 1);
+        assert_eq!((s[0].0.id.as_str(), s[0].1), ("/p/3", 7236));
+    }
+
+    #[tokio::test]
+    async fn connect_source_sets_ies_connects_pbc_and_stops_find() {
+        let mock = MockP2pProvider::new();
+        mock.add_peer(tablet());
+        mock.set_group(group());
+        let sink = Sink::new(mock, SinkConfig::default());
+        assert_eq!(sink.connect_source("/p/3").await.unwrap(), group());
+        assert_eq!(
+            sink.provider.calls(),
+            [
+                MockCall::SetWfdIes(sink.config().wfd_ies()),
+                MockCall::Connect("/p/3".into(), WpsMethod::Pbc),
+                MockCall::StopFind,
+            ]
+        );
     }
 
     #[tokio::test]

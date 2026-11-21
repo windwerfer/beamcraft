@@ -363,3 +363,33 @@ no unsafe; test code may panic, the crate allows unwrap/indexing locally).
   The spike crates stay free of mirrorwire-* dependencies; use `ffplay stream.h264` instead.
   The sink/NM glue (P2P group -> listen on 7236) is also not wired: group setup is manual in
   the hardware checklist until R1/R2 are settled.
+
+## 11. After the hardware runs (2026-11-21, T480s + TB336FU)
+
+Measured facts (runs 1-3, `~/tmp/mc-hw/` on the owner's box): the tablet is a WFD **source**
+(IE `00 0006 0010 1c44 0032`), becomes **group owner** at `192.168.49.1` and serves DHCP
+(we got `192.168.49.74/24` on `p2p-wlp58s0-N`); the tablet is the **RTSP server** on
+`192.168.49.1:7236` and the sink connects to it (not the other way round, as section 2
+assumed); it refuses `wfd_audio_codecs: none`; it negotiated CHP level 3.2 but sent an SPS
+with level 4.0; the P2P interface lands in firewalld zone `public`, which drops RTP on 19000.
+
+### R1/R2 flow in `miracast-nm` (settled)
+
+- **R2:** NM has no device-level WFD IE property. The IE is published only while a
+  `wifi-p2p` profile carrying `wifi-p2p.wfd-ies` is activating or active.
+  `NmP2pProvider::set_wfd_ies` therefore only stores the IEs; `connect` puts them in the profile.
+- **R1:** NM does not answer the source's own connection request without a pending profile.
+  `Sink::connect_source(peer)` activates a volatile profile (`AddAndActivateConnection2`,
+  options `persist: volatile`, `ipv4.method auto`, WPS PBC), the provider polls the active
+  connection's `State` (250 ms) until `ACTIVATED` (default timeout 120 s: the user taps us in
+  the tablet's Cast list; tapping "Connect" on the tablet's prompt forms a group without RTSP),
+  then reads `Ip4Config.AddressData`/`Gateway` and the device's `IpInterface`.
+  `group_from_ip4`: gateway != own address -> we are client and the gateway is the source
+  (`peer_ip`); no gateway -> we are GO, source address unknown. A vanished/deactivated
+  connection or a timeout gives a readable `P2pError` and the connection is deactivated.
+- `wfd_source_port(peer)` picks Miracast sources from the peer list (device type source/dual,
+  session available) and returns their RTSP port.
+- Tests: `MockNm` scripts the state sequence and IPv4 delay (no hardware). The zbus calls
+  themselves are untested here (no NM in the container); value parsing is unit tested.
+- [verify] `bind-activation: dbus-client` (tear down if our process dies) is not used: the
+  hardware runs used busctl, so it was never tried.

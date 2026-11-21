@@ -16,6 +16,8 @@ tracing.workspace = true
 # Linux-only: NetworkManager is on the system bus. Same feature set as mirrorwire-net.
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = { version = "6", default-features = false, features = ["tokio", "proxy", "tracing"] }
+# Already in the tree through zbus's tokio feature; used only for the poll sleep.
+tokio.workspace = true
 
 [dev-dependencies]
 tokio.workspace = true

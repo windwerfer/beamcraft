@@ -17,6 +17,9 @@ pub mod zbus_backend;
 
 pub use error::P2pError;
 pub use mock::{MockCall, MockP2pProvider};
-pub use nm::{MockNm, NmApi, NmP2pProvider, NmPeer, P2pConnectionSpec};
+pub use nm::{
+    group_from_ip4, ActiveState, GroupIp4, MockNm, NmApi, NmP2pProvider, NmPeer, P2pConnectionSpec,
+    DEFAULT_GROUP_TIMEOUT,
+};
 pub use provider::{BoxFuture, GroupInfo, GroupRole, P2pEvent, P2pProvider, PeerInfo, WpsMethod};
-pub use sink::{Sink, SinkConfig};
+pub use sink::{wfd_source_port, Sink, SinkConfig};
