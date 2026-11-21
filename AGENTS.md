@@ -105,6 +105,11 @@ reason to crash; if it can't be read, start fresh and say so. See
 - **Keep the docs in sync.** A change to behaviour, CLI flags, defaults, protocol, packaging or
   a fixed decision updates `README.md` and the matching file in `docs/agents/` in the same
   commit.
+- **Clean-room only (owner rule, permanent).** Implement from public specs, standards and
+  official API docs. Never read, copy, translate or paraphrase code from projects whose licence
+  is not compatible (GPL/LGPL/AGPL or unknown), e.g. MiracleCast, gnome-network-displays.
+  Permissive (MIT/Apache) Cargo dependencies are fine if `deny.toml` allows them. If unsure,
+  stop with `NEED_MANAGER`. See [decisions.md](docs/agents/decisions.md) D20.
 - **Report only what ran.** Say what you tested, on what machine, and what you could not test
   (no GPU, no Mac, no portal on the build box). Never mark hardware paths "working" from a VM.
 
