@@ -289,3 +289,24 @@ fn a_teardown_by_the_source_does_not_ask_for_a_reconnect() {
     let (report, _) = sink.join().unwrap();
     assert!(!report.wants_reconnect(), "{report:?}");
 }
+
+#[test]
+fn deadline_ends_the_session_with_a_teardown() {
+    let listener = TestSource::listen();
+    let addr = listener.addr();
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let sink = std::thread::spawn(move || {
+        let mut rec = Rec::default();
+        run_sink(addr, udp, &mut rec, Duration::from_millis(800))
+    });
+    let mut src = listener.accept();
+    src.negotiate();
+    let td = src.read_message();
+    let report = sink.join().unwrap();
+    assert!(
+        matches!(td, miracast_rtsp::message::Message::Request(ref r) if r.method == "TEARDOWN"),
+        "{td:?}"
+    );
+    assert_eq!(report.close_reason.as_deref(), Some("deadline reached"));
+    assert!(!report.wants_reconnect());
+}

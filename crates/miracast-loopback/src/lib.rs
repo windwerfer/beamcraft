@@ -315,6 +315,19 @@ pub fn run_sink_logged(
             break;
         }
     }
+    if session.state() != State::Closed && report.close_reason.is_none() {
+        // Deadline reached: end the session properly (hardware run 5 left it open, the source
+        // only noticed when the group went away).
+        let reason = "deadline reached".to_string();
+        log(format!("close: {reason}, sending TEARDOWN"));
+        for a in session.teardown() {
+            if let Action::Send(b) = a {
+                log(format!(">>> sink\n{}", String::from_utf8_lossy(&b)));
+                let _ = tcp.write_all(&b);
+            }
+        }
+        report.close_reason = Some(reason);
+    }
     report.idr_suppressed = session.idr_suppressed;
     report.rx = rx.stats();
     report.media_secs = media_since.map_or(0, |t| t.elapsed().as_secs());
