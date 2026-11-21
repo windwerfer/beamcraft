@@ -15,6 +15,7 @@ use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
 use miracast_loopback::run_sink_logged;
+use miracast_rtp::diag::DEFAULT_NO_RTP_AFTER;
 use miracast_rtp::h264::{find_sps, Sps};
 use miracast_rtp::{AudioFrame, MediaSink, VideoAccessUnit};
 
@@ -119,6 +120,7 @@ fn main() {
         udp,
         &mut sink,
         Duration::from_secs(secs),
+        DEFAULT_NO_RTP_AFTER,
         &mut |l| {
             eprintln!("[{:6.1}s] {l}", now.elapsed().as_secs_f32());
         },

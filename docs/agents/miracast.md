@@ -412,3 +412,14 @@ input gives `None`. Size the decoder from this, never from M4: in run 3 the TB33
 CHP level 3.2 and every one of its 34 SPS said High (100) level 4.0, 1920x1080. Rotation kept
 1920x1080 in run 3; a future source that changes size mid-stream shows up as a new SPS.
 `miracast-sink-demo` logs `stream SPS: WxH profile P level L` when the SPS changes.
+
+### "RTSP ok, no RTP" diagnostic (`miracast_rtp::diag`)
+
+`NoRtpWatchdog` (sans-IO) starts at PLAY; if no datagram (even a malformed one) arrives within
+`DEFAULT_NO_RTP_AFTER` (5 s) it yields `NoRtp { rtp_port, waited, interface, zone }` once.
+`Display` is the GUI text: it names the port, the zone (`zone` if the caller looked it up via
+firewalld, else the likely `public`, measured in run 1) and the runtime-only fix
+`firewall-cmd --zone=public --add-port=19000/udp`; `title()` is a headline. MirrorWire never
+runs the command itself. `run_sink_logged` logs it and keeps it in `SinkReport::no_rtp`; the
+session stays up. Not wired into the GUI yet (no Miracast GUI exists); the caller that owns the
+`GroupInfo` fills in `interface` (and `zone`, through the Flatpak's existing FirewallD1 access).

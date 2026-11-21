@@ -6,7 +6,7 @@
 use std::net::{SocketAddr, TcpListener, UdpSocket};
 use std::time::{Duration, Instant};
 
-use miracast_loopback::{run_sink, SinkReport, TestSource};
+use miracast_loopback::{run_sink, run_sink_logged, SinkReport, TestSource};
 use miracast_rtp::{AudioFrame, MediaSink, VideoAccessUnit};
 
 #[derive(Default)]
@@ -158,4 +158,47 @@ fn unreachable_source_is_a_readable_close_reason() {
         "{reason}"
     );
     assert!(reason.contains(&addr.to_string()), "{reason}");
+}
+
+#[test]
+fn rtsp_ok_but_no_rtp_gives_the_firewall_diagnostic() {
+    let listener = TestSource::listen();
+    let addr = listener.addr();
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let port = udp.local_addr().unwrap().port();
+    let sink = std::thread::spawn(move || {
+        let mut rec = Rec::default();
+        run_sink_logged(
+            addr,
+            udp,
+            &mut rec,
+            Duration::from_secs(20),
+            Duration::from_millis(300),
+            &mut |_| {},
+        )
+    });
+    let mut src = listener.accept();
+    src.negotiate();
+    // Like a firewall dropping everything: send nothing.
+    std::thread::sleep(Duration::from_millis(700));
+    src.teardown();
+    let report = sink.join().unwrap();
+    let d = report.no_rtp.expect("diagnostic");
+    assert_eq!(d.rtp_port, port);
+    let m = d.to_string();
+    assert!(
+        m.contains("public") && m.contains(&format!("UDP port {port}")),
+        "{m}"
+    );
+}
+
+#[test]
+fn streaming_session_has_no_firewall_diagnostic() {
+    let (mut src, sink) = start();
+    src.negotiate();
+    let (d, _) = src.next_frame();
+    src.send_datagrams(&d);
+    src.teardown();
+    let (report, _) = sink.join().unwrap();
+    assert_eq!(report.no_rtp, None);
 }

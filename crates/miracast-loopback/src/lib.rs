@@ -15,6 +15,7 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::time::{Duration, Instant};
 
+use miracast_rtp::diag::{NoRtp, NoRtpWatchdog, DEFAULT_NO_RTP_AFTER};
 use miracast_rtp::ts::synth::{packetize, pes, psi_packets, rtp_packets, PID_AUDIO, PID_VIDEO};
 use miracast_rtp::{MediaSink, Receiver};
 use miracast_rtsp::message::{parse_message, Message, Request, Response};
@@ -32,6 +33,8 @@ pub struct SinkReport {
     pub idr_requests_sent: u32,
     pub lost_packets: u64,
     pub bad_datagrams: u64,
+    /// RTSP reached PLAY but no datagram arrived in time (likely the firewall).
+    pub no_rtp: Option<NoRtp>,
 }
 
 /// The sink's offer: the default video formats plus LPCM audio (48 kHz, 16 bit, stereo:
@@ -81,18 +84,30 @@ pub fn run_sink(
     sink: &mut dyn MediaSink,
     deadline: Duration,
 ) -> SinkReport {
-    run_sink_logged(source, udp, sink, deadline, &mut |_| {})
+    run_sink_logged(
+        source,
+        udp,
+        sink,
+        deadline,
+        DEFAULT_NO_RTP_AFTER,
+        &mut |_| {},
+    )
 }
 
 /// Like [`run_sink`], and calls `log` with the RTSP trace (both directions) and state events.
+/// If no datagram arrives within `no_rtp_after` of PLAY, the [`NoRtp`] diagnostic is logged
+/// and kept in [`SinkReport::no_rtp`]; the session stays up (the user may open the port).
 pub fn run_sink_logged(
     source: SocketAddr,
     udp: UdpSocket,
     sink: &mut dyn MediaSink,
     deadline: Duration,
+    no_rtp_after: Duration,
     log: &mut dyn FnMut(String),
 ) -> SinkReport {
-    let mut session = SinkSession::new(sink_config(udp.local_addr().unwrap().port()));
+    let rtp_port = udp.local_addr().unwrap().port();
+    let mut session = SinkSession::new(sink_config(rtp_port));
+    let mut watchdog = NoRtpWatchdog::new(rtp_port, no_rtp_after);
     let mut rx = Receiver::new();
     let mut report = SinkReport::default();
     let start = Instant::now();
@@ -140,11 +155,16 @@ pub fn run_sink_logged(
         // Until PLAY is acknowledged leave datagrams in the socket buffer: a source may start
         // sending right after it receives the M7 reply, before the sink has processed it.
         while let Some(n) = media.then(|| udp.recv(&mut dgram).ok()).flatten() {
+            watchdog.on_datagram();
             let mut flagged = FlagSink {
                 inner: sink,
                 need_idr: &mut want_idr,
             };
             rx.push(&dgram[..n], &mut flagged);
+        }
+        if let Some(d) = watchdog.poll(Instant::now()) {
+            log(format!("diagnostic: {d}"));
+            report.no_rtp = Some(d);
         }
         if want_idr {
             want_idr = false;
@@ -164,6 +184,7 @@ pub fn run_sink_logged(
                 Action::StartMedia { rtp_port } => {
                     log(format!("start media on UDP {rtp_port}"));
                     media = true;
+                    watchdog.start(Instant::now());
                 }
                 Action::StopMedia => {
                     log("stop media".into());
