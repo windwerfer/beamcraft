@@ -484,3 +484,34 @@ check.
   `AccessPoint.Frequency`); NM exposes no group frequency, so the hardware runs take it from
   the source's log. Retry formation, close a session quickly when the link is gone and
   reconnect, rate-limit IDR requests, and bound the reorder delay (sections below).
+
+### Stability work and hardware run 5 (2026-11-21)
+
+Code (all rootless, spike crates):
+- IDR requests on loss (already there) are rate-limited to one per second (`MIN_IDR_INTERVAL`,
+  `idr_suppressed`).
+- The reorder buffer is also time-bounded (`JITTER_WAIT` 40 ms, `Receiver::poll`) and counts
+  gaps, reordered and late packets (`RxStats`).
+- `RunOptions::close_on_silence` ends a session whose media stopped (`link_lost`, best-effort
+  TEARDOWN); `--nm` uses 8 s and `--reconnect N` joins again when `wants_reconnect()`. Group
+  formation is retried (`--attempts`, default 3). A deadline ends with a TEARDOWN.
+- Trace: STA band/channel before and after each session (`ZbusNm::sta_frequencies`,
+  `freq::describe`), a stats line every 5 s.
+
+Run 5 (5 `--nm` attempts, T480s + TB336FU, logs `~/tmp/mc-hw/*run5*`, laptop STA untouched):
+
+| # | retries | group up | media | lost (%) | gaps | IDR sent/suppr. | end |
+|---|---|---|---|---|---|---|---|
+| 1 | 0 | 21.6 s | 398 s | 84 (0.07) | 16 | 14/1 | deadline (no TEARDOWN then, fixed since) |
+| 2 | 0 | 13.5 s | 406 s | 500 (0.43) | 15 | 10/0 | deadline (same) |
+| 3 | 1 | 60.9 s | 306 s | 4 (0.00) | 1 | 1/0 | DISCONNECT on the tablet, clean TEARDOWN |
+| 4 | 1 | 61.8 s | 313 s | 87 (0.10) | 16 | 13/1 | same |
+| 5 | 0 | 13.0 s | 315 s | 40 (0.04) | 10 | 7/0 | same |
+
+- 5/5 attempts streamed at least 5 minutes; 0 link losses; ~290 packets/s (1080p30).
+- Group formation failed once in attempts 3 and 4 (tablet: `P2P-GROUP-FORMATION-FAILURE`);
+  the automatic retry formed the group each time (7 activations, 5 groups).
+- Group frequency (tablet log `P2P-GROUP-STARTED`): 2462 MHz in all 5; laptop STA: 2462 MHz
+  (ch 11) before and after every session. Same channel, which fits the run-4 link loss having
+  been caused by the 5300/2462 MHz split (run 4: one loss in 4 sessions; run 5: none in 5).
+- No polkit or password prompt appeared; no firewall change (UDP 19000 reachable).

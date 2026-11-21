@@ -29,7 +29,13 @@ Miracast sink spike (Android tablet TB336FU = source, Fedora KDE laptop = sink),
   - `658cb8c` hardware fix: `RtpStalled` diagnostic when media stops for 5 s after flowing (attempt c lost the link after 37 s and sat silent 57 s until the keepalive timeout); `SinkReport::stalls`.
   - Hardware results: `--nm` works without socat. Attempts c, run4 and d connected; the RTSP connect, SPS line `1920x1080 profile 100 level 4.0`, ~30 fps video, M13 answered, and a clean TEARDOWN all happened (run4: 10 SPS/10 PPS/10 IDR/826 non-IDR, 144 lost packets, 3 IDR requests in 30 s; 4d: 1 lost packet). UDP 19000 reachable, so NoRtp did not fire (not verified on hardware). Cleanup was verified: no profile, no p2p interface, wlp58s0 activated, wireless display off, rotation 1/1 unchanged.
 
+- Step 9 (stability, hardware run 5, 2026-11-21, `~/tmp/mc-hw/*run5*`):
+  - `1942535` research (miracast.md section 12): the GO (tablet, intent 14 vs our 7) picks the channel and uses its own STA channel (2462); NM offers no GO-intent or frequency knob (live API), wpa_supplicant D-Bus is root-only, so steering or becoming GO is not possible rootlessly. Official NM and wpa_supplicant doc pages could not be fetched (permission denied), so those points are marked [docs].
+  - `6ad2e1c` IDR requests rate-limited (1/s); `e66a624` time-bounded jitter buffer (40 ms) + RxStats; `96c0e13` close on silence (link lost), stats lines, no panic on a dead TCP write; `8ab16e0` demo `--reconnect N`, STA channel logged around each session; `03258f8` TEARDOWN at the deadline (found in run 5).
+  - Run 5 result: 5/5 attempts streamed at least 5 min (306-406 s), 0 link losses, loss 0.00-0.43 %, groups on 2462 MHz = STA 2462 MHz every time. Group formation failed once in 2 attempts and the retry fixed it. The table is in miracast.md.
+
 ## Decisions
+- Do not try to steer the P2P channel; log the STA channel and rely on the source picking its STA channel (same AP, same band as the laptop works).
 - Retry only `P2pError::Backend` (formation) failures; permission/availability/peer errors stop at once.
 - ipv4.method `auto` (tablet is GO and serves DHCP), `persist: volatile`; no `bind-activation` yet (untried on hardware).
 - `NmApi` is fine-grained (activate/state/ip4/deactivate/sleep) so the wait logic is mock-tested; the provider polls instead of subscribing to signals.
@@ -38,6 +44,9 @@ Miracast sink spike (Android tablet TB336FU = source, Fedora KDE laptop = sink),
 - See also miracast.md section 7 (sink first, sans-IO parsers, no HDCP/UIBC, audio demuxed not played, rejected: root helpers, direct wpa_supplicant D-Bus, GStreamer/FFmpeg demux, GPL code).
 
 ## Open questions
+- Confirm against the official nm-settings-dbus / wpa_supplicant D-Bus pages that `wifi-p2p` has no GO intent or frequency property (the box could not fetch them).
+- When the laptop STA is on 5 GHz (run 4: 5300 MHz DFS) and the tablet on 2.4 GHz, a link loss is likely; the GUI could warn when the STA is on 5 GHz. Not measured beyond run 4's one loss.
+- `--reconnect` has unit/e2e coverage only; no link loss happened in run 5 to exercise it.
 - Why group formation fails now and then (GROUP-FORMATION-FAILURE / GO-NEG status 10). Without the NM and wpa_supplicant journals (not readable from the container) the cause on our side is unknown.
 - Mid-stream link loss in attempt c: does the 5 GHz station (5300 MHz) vs the 2.4 GHz group (2462 MHz) on the single 8265 radio cause it? Test idea: the same run with the laptop's Wi-Fi on 2.4 GHz ch 11 (needs the owner, and it touches wlp58s0).
 - NoRtp has still not been seen on hardware with the new code (the port was open).
@@ -48,12 +57,12 @@ Miracast sink spike (Android tablet TB336FU = source, Fedora KDE laptop = sink),
 - The research box is a VM without Wi-Fi/iw/NM: nothing about the Intel 8265 was measured; the doc lists what to run on the T480s (section 9). Facts marked [verify] in miracast.md (WFD IE bits, wfd_* masks, NM incoming GO negotiation = risk R1) come from memory of the specs and are unconfirmed.
 
 ## Verify
-`git log --oneline 767ed3c..miracast-spike`; `cargo test -p miracast-nm -p miracast-rtsp -p miracast-rtp -p miracast-loopback` (86 tests); `cargo clippy -p miracast-nm -p miracast-rtsp -p miracast-rtp -p miracast-loopback --all-targets -- -D warnings`; `cargo fmt --all --check`; `cargo xtask layers`. `cargo xtask ci` cannot build in the research container (no libpipewire-0.3 dev package), unrelated to the spike.
+`git log --oneline 767ed3c..miracast-spike`; `cargo test -p miracast-nm -p miracast-rtsp -p miracast-rtp -p miracast-loopback` (94 tests); `cargo clippy -p miracast-nm -p miracast-rtsp -p miracast-rtp -p miracast-loopback --all-targets -- -D warnings`; `cargo fmt --all --check`; `cargo xtask layers`. `cargo xtask ci` cannot build in the research container (no libpipewire-0.3 dev package), unrelated to the spike.
 
 ## Next step
 Feed access units to MirrorWire's decoder sized from `h264::find_sps` (a viewer path for Miracast), and show `NoRtp`/`RtpStalled`/`P2pError` in the GUI. Optionally `bind-activation: dbus-client` so a killed sink leaves no group (Ctrl-C today leaves the volatile profile active until NM drops it).
 
-## HARDWARE RUN 5 (when convenient)
+## HARDWARE RUN 5 (done 2026-11-21; driver script `~/tmp/mc-hw/driver-run5.sh`)
 `./target/release/miracast-sink-demo --nm --out stream.h264 --secs 300 2> sink-trace.log`; on the tablet: Settings -> Cast -> Enable wireless display, cancel the "wants to connect" prompt, tap "Wireless display". Watch for `attempt n/3 failed` (retry) and `diagnostic:` lines.
 
 ## HARDWARE RUN 4 (done 2026-11-21, kept for reference)
@@ -111,4 +120,4 @@ ffprobe -hide_banner stream.h264
 **What a good result looks like:** `sink-trace.log` shows M1..M7 in order, "start media on UDP 19000", rising video AU counts, no `close:` until you disconnect. Also useful: which `wfd_video_formats`/`wfd_audio_codecs` the tablet's M4 picked, and whether it rejected `wfd_audio_codecs: none` (then an LPCM offer is needed: miracast.md section 5).
 
 ## Commit
-Step 7: 468a665, 1e2651f, ecad42c, d3d2899, 1d3873a, 91987c4. Step 8: e4309af, 651f0f6, 658cb8c, plus this docs commit (see `git log -1`). Not pushed (container has no GitHub access).
+Step 7: 468a665, 1e2651f, ecad42c, d3d2899, 1d3873a, 91987c4. Step 8: e4309af, 651f0f6, 658cb8c, df3ab68. Step 9: 1942535, 6ad2e1c, e66a624, 96c0e13, 8ab16e0, 03258f8, plus this docs commit (see `git log -1`). Not pushed (container has no GitHub access).
