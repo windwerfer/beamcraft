@@ -16,6 +16,9 @@ pub struct FlowOptions {
     pub find_timeout: Duration,
     /// Pause between peer list reads.
     pub poll: Duration,
+    /// Group activations to try. Formation fails now and then on real hardware (run 4: 2 of
+    /// 4 tries, run 1 several); each new try makes the source ask again.
+    pub attempts: u32,
 }
 
 impl Default for FlowOptions {
@@ -24,6 +27,7 @@ impl Default for FlowOptions {
             peer_name: None,
             find_timeout: Duration::from_secs(60),
             poll: Duration::from_secs(1),
+            attempts: 3,
         }
     }
 }
@@ -83,11 +87,24 @@ pub async fn join_source<P: P2pProvider>(
          device (do not answer its connect prompt)",
         peer.name, peer.hw_address
     ));
-    let group = match sink.connect_source(&peer.id).await {
-        Ok(g) => g,
-        Err(e) => {
-            let _ = sink.stop().await;
-            return Err(e);
+    let attempts = opts.attempts.max(1);
+    let mut attempt = 1;
+    let group = loop {
+        match sink.connect_source(&peer.id).await {
+            Ok(g) => break g,
+            // Only a failed formation is worth another try; permissions, a missing device or
+            // a vanished peer are not going to change.
+            Err(P2pError::Backend(e)) if attempt < attempts => {
+                log(format!(
+                    "attempt {attempt}/{attempts} failed: {e}; trying again (the source will \
+                     ask again: tap this device in its Cast list)"
+                ));
+                attempt += 1;
+            }
+            Err(e) => {
+                let _ = sink.stop().await;
+                return Err(e);
+            }
         }
     };
     log(format!("group: {group:?}"));
@@ -167,6 +184,51 @@ mod tests {
             lines.iter().any(|l| l.contains("tap this device")),
             "{lines:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn failed_formation_is_retried_then_succeeds() {
+        let mock = MockP2pProvider::new();
+        mock.add_peer(tablet("/p/3", "Android_qqQ0", 97));
+        mock.set_group(client_group());
+        mock.fail_connects(2);
+        let sink = Sink::new(mock, SinkConfig::default());
+        let mut lines = Vec::new();
+        let j = join_source(&sink, &fast(), &mut |l| lines.push(l))
+            .await
+            .unwrap();
+        assert_eq!(j.rtsp, "192.168.49.1:7236".parse().unwrap());
+        let connects = sink
+            .provider()
+            .calls()
+            .iter()
+            .filter(|c| matches!(c, MockCall::Connect(..)))
+            .count();
+        assert_eq!(connects, 3);
+        assert!(
+            lines.iter().any(|l| l.contains("attempt 2/3 failed")),
+            "{lines:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn retries_are_bounded() {
+        let mock = MockP2pProvider::new();
+        mock.add_peer(tablet("/p/3", "Android_qqQ0", 97));
+        mock.set_group(client_group());
+        mock.fail_connects(5);
+        let sink = Sink::new(mock, SinkConfig::default());
+        let err = join_source(&sink, &fast(), &mut |_| {}).await.unwrap_err();
+        assert!(matches!(err, P2pError::Backend(_)), "{err}");
+        let calls = sink.provider().calls();
+        assert_eq!(
+            calls
+                .iter()
+                .filter(|c| matches!(c, MockCall::Connect(..)))
+                .count(),
+            3
+        );
+        assert_eq!(calls.last(), Some(&MockCall::Disconnect));
     }
 
     #[tokio::test]

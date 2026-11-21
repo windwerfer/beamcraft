@@ -8,7 +8,7 @@
 //! source, join its group with our WFD IEs (the user taps this device in the source's Cast
 //! list), connect to the group owner's RTSP port, and leave the group at the end.
 //!
-//! Usage: `miracast-sink-demo [--nm [--peer NAME] [--find-secs 60]]
+//! Usage: `miracast-sink-demo [--nm [--peer NAME] [--find-secs 60] [--attempts 3]]
 //!         [--source 192.168.49.1:7236] [--rtp-port 19000] [--out stream.h264] [--secs 600]`
 #![forbid(unsafe_code)]
 #![allow(clippy::print_stderr)]
@@ -113,6 +113,7 @@ fn join_with_nm(
             .any(|a| a == "--peer")
             .then(|| arg("--peer", "")),
         find_timeout: Duration::from_secs(arg("--find-secs", "60").parse().unwrap_or(60)),
+        attempts: arg("--attempts", "3").parse().unwrap_or(3),
         ..FlowOptions::default()
     };
     rt.block_on(async {

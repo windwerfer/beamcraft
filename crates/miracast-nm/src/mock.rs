@@ -18,6 +18,8 @@ struct State {
     peers: Vec<PeerInfo>,
     events: VecDeque<P2pEvent>,
     group: Option<GroupInfo>,
+    /// Number of upcoming `connect` calls that fail like a group formation failure.
+    failing_connects: usize,
 }
 
 /// Scriptable in-memory provider. `connect` returns the configured group; events queued with
@@ -44,6 +46,11 @@ impl MockP2pProvider {
 
     pub fn set_group(&self, group: GroupInfo) {
         self.with(|s| s.group = Some(group));
+    }
+
+    /// The next `n` connects fail with a backend error (group formation failed).
+    pub fn fail_connects(&self, n: usize) {
+        self.with(|s| s.failing_connects = n);
     }
 
     pub fn push_event(&self, event: P2pEvent) {
@@ -85,6 +92,10 @@ impl P2pProvider for MockP2pProvider {
             s.calls.push(MockCall::Connect(peer_id.to_string(), wps));
             if !s.peers.iter().any(|p| p.id == peer_id) {
                 return Err(P2pError::PeerNotFound(peer_id.to_string()));
+            }
+            if s.failing_connects > 0 {
+                s.failing_connects -= 1;
+                return Err(P2pError::Backend("mock: group formation failed".into()));
             }
             s.group
                 .clone()

@@ -221,9 +221,9 @@ impl<A: NmApi> NmP2pProvider<A> {
                 ActiveState::Unknown | ActiveState::Activating => {}
                 ActiveState::Deactivating | ActiveState::Deactivated | ActiveState::Gone => {
                     return Err(P2pError::Backend(format!(
-                        "the Wi-Fi Direct connection to {} failed (the source declined or \
-                         stopped answering); on the source, open Cast and tap this device \
-                         instead of answering the connect prompt",
+                        "the Wi-Fi Direct group with {} did not form (this happens every few \
+                         attempts on real hardware, or the source declined); try again: on the \
+                         source, open Cast and tap this device, not the connect prompt",
                         peer.name
                     )));
                 }
@@ -578,6 +578,7 @@ mod tests {
         let err = p.connect(&peer().path, WpsMethod::Pbc).await.unwrap_err();
         assert!(matches!(err, P2pError::Backend(_)), "{err}");
         assert!(err.to_string().contains("Android_qqQ0"), "{err}");
+        assert!(err.to_string().contains("did not form"), "{err}");
         assert!(p.api.calls().contains(&format!("Deactivate {MOCK_ACTIVE}")));
         // Nothing left to disconnect.
         let n = p.api.calls().len();
