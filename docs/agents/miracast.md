@@ -423,3 +423,27 @@ firewalld, else the likely `public`, measured in run 1) and the runtime-only fix
 runs the command itself. `run_sink_logged` logs it and keeps it in `SinkReport::no_rtp`; the
 session stays up. Not wired into the GUI yet (no Miracast GUI exists); the caller that owns the
 `GroupInfo` fills in `interface` (and `zone`, through the Flatpak's existing FirewallD1 access).
+
+### `--nm` mode and hardware run 4 (2026-11-21)
+
+`miracast-sink-demo --nm [--peer NAME] [--find-secs 60] [--attempts 3]` runs the whole chain:
+`ZbusNm` find -> `Sink::sources` -> `connect_source` (retried up to `attempts` on a formation
+failure) -> `run_sink(peer_ip:port-from-WFD-IE)` with the group interface in `RunOptions`
+-> leave the group. `nm_flow::join_source` is mock-tested.
+
+Run 4 on the T480s + TB336FU (logs `~/tmp/mc-hw/*run4*`), no sudo, firewall untouched:
+- The zbus calls work as written: discovery found the tablet in 7-13 s, NM activated the
+  volatile profile, `group_ip4` gave `p2p-wlp58s0-N`, 192.168.49.74, gateway 192.168.49.1;
+  the sink connected to 192.168.49.1:7236 itself (no socat); the profile was gone afterwards.
+- Group formation failed in 2 of 5 activations on the source side (GO negotiation OK then
+  `P2P-GROUP-FORMATION-FAILURE`; once `P2P-GO-NEG-FAILURE status=10`), with the same taps as
+  the good ones. Hence the retry. NM/wpa_supplicant journals are not readable from the
+  container, so the cause on our side is unknown.
+- `stream SPS: 1920x1080 profile 100 level 4.0` within 0.5 s of PLAY (M4: CHP level 3.2).
+  UDP 19000 was reachable (RTP flowed), so `NoRtp` did not fire; firewalld's default zone is
+  `public` here, and querying its ports needs polkit `config.info` (refused, no prompt).
+- One attempt lost the link after 37 s (tablet: `AP-STA-DISCONNECTED`; the laptop's Wi-Fi is
+  on 5300 MHz while the group is on 2462 MHz, so the 8265 time-shares channels, which fits
+  but is not proven). That gap led to `RtpStalled`.
+- Teardown from the tablet's DISCONNECT: `wfd_trigger_method: TEARDOWN` -> our M8 -> "stopped
+  by the user" -> group left.
