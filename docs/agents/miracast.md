@@ -447,3 +447,40 @@ Run 4 on the T480s + TB336FU (logs `~/tmp/mc-hw/*run4*`), no sudo, firewall unto
   but is not proven). That gap led to `RtpStalled`.
 - Teardown from the tablet's DISCONNECT: `wfd_trigger_method: TEARDOWN` -> our M8 -> "stopped
   by the user" -> group left.
+
+## 12. P2P operating channel and GO role (stability research, run 5)
+
+Question: can the sink steer the group onto the laptop's STA channel (one radio, so two
+channels mean time-sharing, see run 4), or become GO itself?
+
+Sources: Wi-Fi P2P Technical Specification (GO Negotiation, Operating Channel and Channel List
+attributes, Invitation), the live NetworkManager D-Bus API on the T480s (introspection), the
+tablet's logcat. The official NM settings reference and wpa_supplicant D-Bus docs could not be
+fetched from the research box (fetch permission denied); the points marked [docs] need that
+check.
+
+- **Who picks the channel.** In GO Negotiation each side sends a GO Intent (0-15) and its
+  Channel List; the winner (GO) picks the Operating Channel from the intersection. In
+  Invitation the inviting GO names the Operating Channel. So the GO decides.
+- **Who is GO.** The TB336FU asks with `groupOwnerIntent: 14` (logcat, MtkWifiDisplayController);
+  our NM/wpa_supplicant sends `go_intent=7` (tablet: `P2P-GO-NEG-REQUEST ... go_intent=7`). To
+  become GO we would need intent 15. NM's API on this machine offers no GO intent: the
+  `Device.WifiP2P` interface has only `StartFind(a{sv})`, `StopFind`, `Peers`, `HwAddress`;
+  the `wifi-p2p` setting is known to carry `peer`, `wps-method`, `wfd-ies` [docs: confirm no
+  intent/frequency property]. wpa_supplicant's own D-Bus API (which has GO intent and frequency
+  on its P2P Connect [docs]) is root-only by policy and fights NM (rejected, section 7). Being
+  GO would also mean `ipv4.method shared` and learning the source's address from the DHCP lease.
+  **Result: not possible rootlessly through NM; not pursued.**
+- **Which channel the tablet picks.** Every group so far was on 2462 MHz, which is the tablet's
+  own STA channel (`cmd wifi status`: Frequency 2462MHz, AP 24:65:11:66:7e:69). A GO that is
+  also a station prefers its STA channel to avoid its own channel switching.
+- **What we can influence.** Nothing in the P2P request through NM. What makes the channels
+  match is the laptop's STA being on the same channel as the tablet's STA (same AP, same
+  band). In run 4 the laptop STA was on 5300 MHz (DFS) while the group was on 2462; at the start
+  of run 5 it was on 2462 (same AP as the tablet), with no change by us. Note: a GO generally
+  cannot start a group on a DFS channel such as 5300 MHz (no initiating radiation without
+  radar detection), so even as GO we could not have followed a 5300 MHz STA.
+- **What we do instead (rootless):** log the STA frequency next to every session (NM
+  `AccessPoint.Frequency`); NM exposes no group frequency, so the hardware runs take it from
+  the source's log. Retry formation, close a session quickly when the link is gone and
+  reconnect, rate-limit IDR requests, and bound the reorder delay (sections below).
