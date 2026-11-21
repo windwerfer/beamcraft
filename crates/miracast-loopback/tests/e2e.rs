@@ -6,7 +6,7 @@
 use std::net::{SocketAddr, TcpListener, UdpSocket};
 use std::time::{Duration, Instant};
 
-use miracast_loopback::{run_sink, run_sink_logged, SinkReport, TestSource};
+use miracast_loopback::{run_sink, run_sink_logged, RunOptions, SinkReport, TestSource};
 use miracast_rtp::{AudioFrame, MediaSink, VideoAccessUnit};
 
 #[derive(Default)]
@@ -172,8 +172,11 @@ fn rtsp_ok_but_no_rtp_gives_the_firewall_diagnostic() {
             addr,
             udp,
             &mut rec,
-            Duration::from_secs(20),
-            Duration::from_millis(300),
+            &RunOptions {
+                no_rtp_after: Duration::from_millis(300),
+                interface: Some("p2p-wlp58s0-3".into()),
+                ..RunOptions::new(Duration::from_secs(20))
+            },
             &mut |_| {},
         )
     });

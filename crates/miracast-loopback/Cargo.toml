@@ -13,3 +13,6 @@ workspace = true
 [dependencies]
 miracast-rtsp = { path = "../miracast-rtsp" }
 miracast-rtp = { path = "../miracast-rtp" }
+miracast-nm = { path = "../miracast-nm" }
+# Runs the async miracast-nm calls in miracast-sink-demo --nm (already a workspace dependency).
+tokio.workspace = true

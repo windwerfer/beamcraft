@@ -2138,8 +2138,10 @@ dependencies = [
 name = "miracast-loopback"
 version = "0.1.0"
 dependencies = [
+ "miracast-nm",
  "miracast-rtp",
  "miracast-rtsp",
+ "tokio",
 ]
 
 [[package]]

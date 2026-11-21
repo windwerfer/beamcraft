@@ -53,6 +53,8 @@ pub fn sink_config(rtp_port: u16) -> SinkConfig {
     }
 }
 
+pub mod nm_flow;
+
 /// Pause between connection attempts to the source's RTSP server.
 const CONNECT_RETRY: Duration = Duration::from_millis(500);
 
@@ -84,30 +86,45 @@ pub fn run_sink(
     sink: &mut dyn MediaSink,
     deadline: Duration,
 ) -> SinkReport {
-    run_sink_logged(
-        source,
-        udp,
-        sink,
-        deadline,
-        DEFAULT_NO_RTP_AFTER,
-        &mut |_| {},
-    )
+    run_sink_logged(source, udp, sink, &RunOptions::new(deadline), &mut |_| {})
+}
+
+/// Settings of one sink run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RunOptions {
+    /// Give up (connect and session) after this long.
+    pub deadline: Duration,
+    /// Report [`NoRtp`] if no datagram arrives this long after PLAY.
+    pub no_rtp_after: Duration,
+    /// The Wi-Fi Direct group interface, named in the [`NoRtp`] text.
+    pub interface: Option<String>,
+}
+
+impl RunOptions {
+    pub fn new(deadline: Duration) -> Self {
+        Self {
+            deadline,
+            no_rtp_after: DEFAULT_NO_RTP_AFTER,
+            interface: None,
+        }
+    }
 }
 
 /// Like [`run_sink`], and calls `log` with the RTSP trace (both directions) and state events.
-/// If no datagram arrives within `no_rtp_after` of PLAY, the [`NoRtp`] diagnostic is logged
-/// and kept in [`SinkReport::no_rtp`]; the session stays up (the user may open the port).
+/// If no datagram arrives within `opts.no_rtp_after` of PLAY, the [`NoRtp`] diagnostic is
+/// logged and kept in [`SinkReport::no_rtp`]; the session stays up (the user may open the
+/// port).
 pub fn run_sink_logged(
     source: SocketAddr,
     udp: UdpSocket,
     sink: &mut dyn MediaSink,
-    deadline: Duration,
-    no_rtp_after: Duration,
+    opts: &RunOptions,
     log: &mut dyn FnMut(String),
 ) -> SinkReport {
+    let deadline = opts.deadline;
     let rtp_port = udp.local_addr().unwrap().port();
     let mut session = SinkSession::new(sink_config(rtp_port));
-    let mut watchdog = NoRtpWatchdog::new(rtp_port, no_rtp_after);
+    let mut watchdog = NoRtpWatchdog::new(rtp_port, opts.no_rtp_after);
     let mut rx = Receiver::new();
     let mut report = SinkReport::default();
     let start = Instant::now();
@@ -163,6 +180,7 @@ pub fn run_sink_logged(
             rx.push(&dgram[..n], &mut flagged);
         }
         if let Some(d) = watchdog.poll(Instant::now()) {
+            let d = d.with_interface(opts.interface.clone(), None);
             log(format!("diagnostic: {d}"));
             report.no_rtp = Some(d);
         }

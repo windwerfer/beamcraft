@@ -53,6 +53,10 @@ impl<P: P2pProvider> Sink<P> {
         Self { provider, config }
     }
 
+    pub fn provider(&self) -> &P {
+        &self.provider
+    }
+
     pub fn config(&self) -> &SinkConfig {
         &self.config
     }
