@@ -32,6 +32,17 @@ without new information.
 | D19 | **Viewer display size in `hello` (protocol 8, owner 2026-11-18).** `hello.display = {width, height, scale_milli}` is required (physical pixels, scale ×1000); both viewers fill it from the egui screen rect × pixels-per-point. The presenter sanitises it (1..=16384 px, scale 0.25–8) and exposes the last viewer's value as `Presenter::viewer_display`. Rejected: a separate `display` control message after `hello` (an extra round trip and a state where Extend has no size yet); optional field (D6). Not wired into capture yet: `org.freedesktop.portal.ScreenCast` `SelectSources` has no size option, so a matching virtual monitor needs KDE/GNOME-specific work (open). Breaks: `PROTOCOL_VERSION` 7 → 8; older viewers get the version-mismatch rejection. | The owner (2026-11-18). |
 | D20 | **Clean-room only (owner rule, permanent, 2026-11-21).** Implement from public specs, standards and official API docs. Never read, copy, translate or paraphrase code from other projects whose licence is not compatible (GPL/LGPL/AGPL or unknown), e.g. MiracleCast, gnome-network-displays. Permissive (MIT/Apache) dependencies via Cargo are fine if `deny.toml` allows them. Strict copyright compliance; if unsure, stop and report `NEED_MANAGER`. | The owner (2026-11-21). Keeps the `MIT OR Apache-2.0` source (D8, rule 1.11) free of derivative-work claims. |
 
+## Pending owner decision (not decided, no D number)
+
+**AirPlay FairPlay component vs D20, needs an owner exception.** Owner 2026-11-21: PARKED
+roadmap item, AirPlay receiver (audio + video + screen mirroring), DO NOT START. The preferred
+design (option B) keeps FairPlay as a small separate LGPL component, which conflicts with D20
+(clean room, no reading or using GPL/LGPL code) and the permissive-only `deny.toml` list. It
+needs an explicit, documented exception scoped to the FairPlay component only; until then
+nobody reads LGPL FairPlay code, and FairPlay is never described as clean-room. Details:
+[roadmap.md](roadmap.md), "AirPlay receiver". The "Not goals" line below (AirPlay
+receiver/sender) would need revisiting if adopted.
+
 ## Not goals (decided)
 
 - WebAssembly *presenter*: capture is native. A browser *viewer* (WebTransport + WebCodecs) is

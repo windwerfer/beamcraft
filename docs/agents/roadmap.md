@@ -351,6 +351,34 @@ target), **planned**, **idea**. Update this file when an item moves.
     receive path, hardware validation with the owner.
   - Open check: whether the TB336FU still offers a Miracast source ("Cast"/"Wireless
     display"); stock Android dropped it, only some vendors ship it.
+- **AirPlay receiver (audio + video + screen mirroring)** — status: idea/parked, owner decides
+  (owner 2026-11-21). **DO NOT START.**
+  Goal: MirrorWire as an AirPlay receiver; a reusable crate; MIT/Apache where possible.
+  - Hard part: FairPlay SAP (`/fp-setup` challenge-response) uses white-box crypto recovered
+    from Apple binaries; all working implementations are LGPL/GPL because of that derivation.
+    Black-box recovery is impractical; extracting it ourselves would still be a derivative
+    work. Never claim clean-room for the FairPlay tables.
+  - Clean-roomable from public notes and traces: mDNS discovery, RTSP, pairing (public
+    primitives), RTP, video packet headers, framing.
+  - Size: FairPlay tables + logic ~200-500 KB; the whole stack stays under ~1.5 MB stripped
+    (typically 400-900 KB).
+  - Existing work: the `shairplay` crate (LGPL-3.0-or-later, complete pure-Rust receiver);
+    `tvpipe` keeps FairPlay (LGPL) separate; UxPlay and RPiPlay are mature C/C++ receivers.
+  - Option A: use all of `shairplay` (fastest, but the whole AirPlay stack becomes LGPL).
+  - Option B (preferred): FairPlay as a small separate LGPL component, dynamically linked or
+    with a clear relink path, inside the same Flatpak if needed; everything else clean-room
+    MIT/Apache. Decode H.264/AAC with the existing pipelines (FFmpeg), no own codecs. Scope
+    comparable to the Miracast protocol work; mostly doable with traces and mocks.
+  - Compliance: LGPL source offer, the user can replace the component, notices. Patents on
+    FairPlay are a separate risk.
+  - **OWNER DECISION NEEDED BEFORE ANY WORK:** option B conflicts with D20 (clean room, no
+    reading or using GPL/LGPL code) and the `deny.toml` allow-list (permissive only). It needs
+    an explicit, documented exception scoped to the FairPlay component only. Nobody reads LGPL
+    FairPlay code until the owner grants that exception. See the pending note in
+    [decisions.md](decisions.md).
+  - Note: the earlier line "AirPlay is not viable" (Miracast entry) meant macOS as a Wi-Fi
+    Direct platform, not an AirPlay receiver. (The "Not goals" line in decisions.md also covers
+    AirPlay receiver/sender; it would need revisiting if this is adopted.)
 - **Android viewer polish:** zero-copy MediaCodec → `SurfaceTexture`/`AHardwareBuffer` → GL
   texture instead of the CPU YUV→RGBA copy; soft keyboard for the link field (today: QR via
   the camera app, or the keypad + mDNS list); a stable release keystore so updates install
