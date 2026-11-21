@@ -7,6 +7,7 @@
 //! (PAT/PMT, PES, continuity), [`Receiver`] (glue). Loss makes the sink drop video until the
 //! next IDR and calls [`MediaSink::need_keyframe`] once per loss episode.
 
+pub mod h264;
 pub mod rtp;
 pub mod ts;
 

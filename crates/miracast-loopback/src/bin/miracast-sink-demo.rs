@@ -15,6 +15,7 @@ use std::net::{SocketAddr, UdpSocket};
 use std::time::{Duration, Instant};
 
 use miracast_loopback::run_sink_logged;
+use miracast_rtp::h264::{find_sps, Sps};
 use miracast_rtp::{AudioFrame, MediaSink, VideoAccessUnit};
 
 struct Out {
@@ -25,6 +26,8 @@ struct Out {
     bytes: u64,
     idr: u64,
     last_report: Instant,
+    /// Size the decoder from this, not from M4 (run 3: M4 level 3.2, SPS level 4.0).
+    sps: Option<Sps>,
 }
 
 impl Out {
@@ -47,6 +50,19 @@ impl MediaSink for Out {
     fn video(&mut self, u: VideoAccessUnit) {
         self.video += 1;
         self.bytes += u.data.len() as u64;
+        if let Some(sps) = u.keyframe.then(|| find_sps(&u.data)).flatten() {
+            if self.sps != Some(sps) {
+                let (major, minor) = sps.level();
+                eprintln!(
+                    "[{:6.1}s] stream SPS: {}x{} profile {} level {major}.{minor}",
+                    self.start.elapsed().as_secs_f32(),
+                    sps.width,
+                    sps.height,
+                    sps.profile_idc
+                );
+                self.sps = Some(sps);
+            }
+        }
         if let Err(e) = self.file.write_all(&u.data) {
             eprintln!("cannot write output: {e}");
         }
@@ -95,6 +111,7 @@ fn main() {
         bytes: 0,
         idr: 0,
         last_report: now,
+        sps: None,
     };
     eprintln!("connecting to the source at {source}, RTP on UDP {rtp}, writing {out}");
     let report = run_sink_logged(

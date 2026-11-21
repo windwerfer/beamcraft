@@ -403,3 +403,12 @@ right after the group forms). An unreachable source ends with a readable `close_
 like the tablet. `miracast-sink-demo --source 192.168.49.1:7236` (default) replaces
 `--rtsp-port` and the socat relay; the source address comes from `GroupInfo::peer_ip`
 (group owner) once the demo is wired to `miracast-nm`.
+
+### Decoder size from the SPS (`miracast_rtp::h264`)
+
+`Sps::parse(nal)` / `find_sps(access_unit)` read profile, level and the cropped width/height
+(ITU-T H.264 7.3.2.1.1, incl. scaling lists, POC types, interlaced and crop units); hostile
+input gives `None`. Size the decoder from this, never from M4: in run 3 the TB336FU's M4 said
+CHP level 3.2 and every one of its 34 SPS said High (100) level 4.0, 1920x1080. Rotation kept
+1920x1080 in run 3; a future source that changes size mid-stream shows up as a new SPS.
+`miracast-sink-demo` logs `stream SPS: WxH profile P level L` when the SPS changes.
